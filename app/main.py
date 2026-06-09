@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api import projects, workbooks, regulatory_cases
+from app.api import projects, workbooks, regulatory_cases, reports
 
 
 @asynccontextmanager
@@ -70,6 +70,7 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(workbooks.router)
     app.include_router(regulatory_cases.router)
+    app.include_router(reports.router)
 
     # Health check endpoint
     @app.get("/health", tags=["系统"])
