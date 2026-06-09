@@ -1,0 +1,274 @@
+"""API routes for project management."""
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from typing import List, Optional
+
+from app.core.database import get_db
+from app.models.db_models import Project, AccountBalance, ChronologicalAccount, BankStatement
+from app.models.audit import (
+    ProjectCreate, ProjectUpdate, ProjectResponse,
+    AccountBalanceCreate, AccountBalanceResponse,
+    ChronologicalAccountCreate, ChronologicalAccountResponse,
+    BankStatementCreate, BankStatementResponse,
+)
+from app.services.excel_parser import ExcelParser
+
+router = APIRouter(prefix="/api/projects", tags=["项目管理"])
+
+
+@router.post("/", response_model=ProjectResponse)
+async def create_project(
+    project: ProjectCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new audit project."""
+    db_project = Project(**project.model_dump())
+    db.add(db_project)
+    await db.commit()
+    await db.refresh(db_project)
+    return db_project
+
+
+@router.get("/", response_model=List[ProjectResponse])
+async def list_projects(
+    skip: int = 0,
+    limit: int = 100,
+    status: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all audit projects."""
+    query = select(Project)
+    if status:
+        query = query.where(Project.status == status)
+    query = query.offset(skip).limit(limit)
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.get("/{project_id}", response_model=ProjectResponse)
+async def get_project(
+    project_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get project by ID."""
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    return project
+
+
+@router.put("/{project_id}", response_model=ProjectResponse)
+async def update_project(
+    project_id: int,
+    project_update: ProjectUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update project information."""
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    for key, value in project_update.model_dump(exclude_unset=True).items():
+        setattr(project, key, value)
+
+    await db.commit()
+    await db.refresh(project)
+    return project
+
+
+@router.delete("/{project_id}")
+async def delete_project(
+    project_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a project."""
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    await db.delete(project)
+    await db.commit()
+    return {"message": "项目已删除"}
+
+
+# ============ 科目余额表导入 ============
+@router.post("/{project_id}/account-balances")
+async def upload_account_balances(
+    project_id: int,
+    file: UploadFile = File(...),
+    erp_type: str = Query("标准模板", description="ERP系统类型: 金蝶K3 Cloud, 金蝶云星空, 用友NC, 用友U8, 用友YonBIP, SAP, SAP ECC, 标准模板"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload and parse account balance Excel file with ERP type auto-detection.
+
+    Args:
+        project_id: Project ID
+        file: Excel file to upload
+        erp_type: ERP system type (auto-detected if not specified)
+    """
+    from app.services.erp_adapters import ERPAdapterFactory, ERPType
+
+    # Verify project exists
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    # Get ERP adapter
+    try:
+        # Map erp_type string to ERPType enum
+        erp_type_enum = None
+        for et in ERPType:
+            if et.value == erp_type or et.name == erp_type:
+                erp_type_enum = et
+                break
+
+        if erp_type_enum is None:
+            # Try to detect from file content
+            pass
+
+        # Parse Excel with adapter
+        temp_path = settings.UPLOAD_DIR / f"temp_{file.filename}"
+        content = await file.read()
+        with open(temp_path, "wb") as f:
+            f.write(content)
+
+        try:
+            raw_df = pd.read_excel(temp_path)
+
+            # Auto-detect ERP type if not specified
+            if erp_type_enum is None:
+                erp_type_enum = ERPAdapterFactory.detect_erp_type(raw_df)
+
+            adapter = ERPAdapterFactory.get_adapter(erp_type_enum)
+            df = adapter.parse_account_balance(raw_df)
+
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+
+    # Save to database
+    balances = []
+    for _, row in df.iterrows():
+        balance = AccountBalance(
+            project_id=project_id,
+            account_code=str(row.get("account_code", "")),
+            account_name=str(row.get("account_name", "")),
+            balance_direction=str(row.get("balance_direction", "借")),
+            beginning_balance=float(row.get("beginning_balance", 0)),
+            debit_amount=float(row.get("debit_amount", 0)),
+            credit_amount=float(row.get("credit_amount", 0)),
+            ending_balance=float(row.get("ending_balance", 0)),
+        )
+        db.add(balance)
+        balances.append(balance)
+
+    await db.commit()
+    return {"message": f"成功导入 {len(balances)} 条科目余额记录"}
+
+
+@router.get("/{project_id}/account-balances", response_model=List[AccountBalanceResponse])
+async def get_account_balances(
+    project_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get account balances for a project."""
+    result = await db.execute(
+        select(AccountBalance).where(AccountBalance.project_id == project_id)
+    )
+    return result.scalars().all()
+
+
+# ============ 序时账导入 ============
+@router.post("/{project_id}/chronological-accounts")
+async def upload_chronological_accounts(
+    project_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload and parse chronological account Excel file."""
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    df = await ExcelParser.parse_chronological_account(file)
+
+    accounts = []
+    for _, row in df.iterrows():
+        account = ChronologicalAccount(
+            project_id=project_id,
+            voucher_date=str(row.get("voucher_date", "")),
+            voucher_no=str(row.get("voucher_no", "")),
+            account_code=str(row.get("account_code", "")),
+            account_name=str(row.get("account_name", "")),
+            debit_amount=float(row.get("debit_amount", 0)),
+            credit_amount=float(row.get("credit_amount", 0)),
+            summary=str(row.get("summary", "")) if row.get("summary") else None,
+            auxiliary_accounting=str(row.get("auxiliary_accounting", "")) if row.get("auxiliary_accounting") else None,
+        )
+        db.add(account)
+        accounts.append(account)
+
+    await db.commit()
+    return {"message": f"成功导入 {len(accounts)} 条序时账记录"}
+
+
+@router.get("/{project_id}/chronological-accounts", response_model=List[ChronologicalAccountResponse])
+async def get_chronological_accounts(
+    project_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get chronological accounts for a project."""
+    result = await db.execute(
+        select(ChronologicalAccount).where(ChronologicalAccount.project_id == project_id)
+    )
+    return result.scalars().all()
+
+
+# ============ 银行对账单导入 ============
+@router.post("/{project_id}/bank-statements")
+async def upload_bank_statements(
+    project_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload and parse bank statement Excel file."""
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    df = await ExcelParser.parse_bank_statement(file)
+
+    statements = []
+    for _, row in df.iterrows():
+        statement = BankStatement(
+            project_id=project_id,
+            statement_date=str(row.get("statement_date", "")),
+            voucher_no=str(row.get("voucher_no", "")),
+            description=str(row.get("description", "")),
+            debit_amount=float(row.get("debit_amount", 0)),
+            credit_amount=float(row.get("credit_amount", 0)),
+            balance=float(row.get("balance", 0)),
+            bank_account=str(row.get("bank_account", "")) if row.get("bank_account") else None,
+        )
+        db.add(statement)
+        statements.append(statement)
+
+    await db.commit()
+    return {"message": f"成功导入 {len(statements)} 条银行对账单记录"}
+
+
+@router.get("/{project_id}/bank-statements", response_model=List[BankStatementResponse])
+async def get_bank_statements(
+    project_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get bank statements for a project."""
+    result = await db.execute(
+        select(BankStatement).where(BankStatement.project_id == project_id)
+    )
+    return result.scalars().all()
