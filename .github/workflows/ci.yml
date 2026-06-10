@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+# Avoid piling up concurrent runs on the same PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.4.x"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Cache uv environment
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            uv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Install dependencies (without paddleocr, easyocr, tesseract — heavy)
+        run: |
+          uv venv
+          # Install the project but skip the three optional heavy OCR deps.
+          # They're still listed in pyproject.toml — we override at install time.
+          uv pip install \
+            "fastapi>=0.109.0" \
+            "uvicorn[standard]>=0.27.0" \
+            "pandas>=2.1.0" \
+            "openpyxl>=3.1.2" \
+            "python-multipart>=0.0.6" \
+            "pydantic>=2.5.0" \
+            "pydantic-settings>=2.1.0" \
+            "sqlalchemy>=2.0.25" \
+            "aiosqlite>=0.19.0" \
+            "httpx>=0.26.0" \
+            "beautifulsoup4>=4.12.2" \
+            "lxml>=4.9.3" \
+            "selenium>=4.15.0" \
+            "python-docx>=1.1.0" \
+            "reportlab>=4.0.0" \
+            "pdfplumber>=0.10.0" \
+            "tabulate>=0.9.0" \
+            "altair>=5.1.0" \
+            "streamlit>=1.30.0"
+
+      - name: Smoke import — confirm the app module loads
+        run: |
+          . .venv/bin/activate
+          python -c "from app.main import app; print('app import OK')"
+          python -c "from app.services.sales_ledger import DeepSeekClient, DocumentParser, SalesLedgerSynthesizer, RevenueAnalyzer; print('sales_ledger OK')"
+          python -c "from app.services.contract_analysis import ContractOCR, ContractAnalyzer; print('contract_analysis OK')"
+
+      - name: Run pytest
+        run: |
+          . .venv/bin/activate
+          pip install pytest pytest-asyncio pytest-cov
+          python -m pytest tests/ -v --tb=short
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Ruff check
+        run: ruff check app/ frontend/ tests/
+        continue-on-error: true   # Don't fail the build on style; warn only

@@ -4,6 +4,8 @@
 
 **专业的 IPO 审计底稿生成与数据分析工具集** — 把 AI 直接搬上审计师的桌面，让"找底稿、做分析、出报告"从小时级压缩到分钟级。
 
+> 📖 完整使用教程（含截图位 + 故障排查 FAQ）见 [docs/usage.md](docs/usage.md)
+
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Streamlit](https://img.shields.io/badge/Frontend-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
