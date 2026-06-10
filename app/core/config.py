@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     MINIMAX_API_KEY: str = ""
     MINIMAX_API_BASE: str = "https://api.minimaxi.com/v1"
 
+    # AI settings (DeepSeek API) — used by the sales-ledger module
+    # The API key MUST be supplied via .env; never commit a real key.
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_API_BASE: str = "https://api.deepseek.com/v1"
+    DEEPSEEK_MODEL: str = "deepseek-chat"
+
     # Regulatory case scraping
     CSRC_URL: str = "http://www.csrc.gov.cn"
     SseUrl: str = "http://www.sse.com.cn"

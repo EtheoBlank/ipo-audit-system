@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api import projects, workbooks, regulatory_cases, reports
+from app.api import projects, workbooks, regulatory_cases, reports, sales_ledger, contracts
 
 
 @asynccontextmanager
@@ -39,6 +39,8 @@ def create_app() -> FastAPI:
 - **试算平衡**: 验证资产负债表平衡和报表勾稽关系
 - **监管案例**: 抓取和检索证监会、交易所的监管案例
 - **AI 分析**: 利用 AI识别风险点和生成审计建议
+- **销售清单整理 (Sales Ledger)**: 上传散乱文档 → AI 合成结构化销售清单 →
+  毛利率/截止性/单价波动/收发存对账/同行业参考分析，并导出多 Sheet Excel
 
 ### 支持的模板类型
 
@@ -71,6 +73,8 @@ def create_app() -> FastAPI:
     app.include_router(workbooks.router)
     app.include_router(regulatory_cases.router)
     app.include_router(reports.router)
+    app.include_router(sales_ledger.router)
+    app.include_router(contracts.router)
 
     # Health check endpoint
     @app.get("/health", tags=["系统"])

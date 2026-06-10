@@ -81,6 +81,8 @@ def main():
             "🤖 AI风险分析",
             "📋异常检测",
             "📄 综合报告",
+            "📦 销售清单整理",
+            "📄 收入合同分析",
         ]
     )
 
@@ -102,6 +104,23 @@ def main():
         show_anomaly_detection()
     elif page == "📄 综合报告":
         show_comprehensive_report()
+    elif page == "📦 销售清单整理":
+        # Imported lazily so the rest of the app remains usable even if the
+        # new module's optional deps (e.g. pdfplumber) aren't installed yet.
+        try:
+            from frontend.pages_sales_ledger import show_sales_ledger
+            show_sales_ledger()
+        except ImportError as exc:
+            st.error(
+                f"销售清单模块加载失败：{exc}。"
+                "请确认已安装 pdfplumber (`uv add pdfplumber`)。"
+            )
+    elif page == "📄 收入合同分析":
+        try:
+            from frontend.pages_contracts import show_contracts
+            show_contracts()
+        except ImportError as exc:
+            st.error(f"合同分析模块加载失败：{exc}。")
 
 
 def show_homepage():

@@ -1,5 +1,6 @@
 """SQLAlchemy database models for IPO Audit System."""
 from datetime import datetime
+from typing import Optional
 from sqlalchemy import String, Text, Float, Integer, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
@@ -22,6 +23,9 @@ class Project(Base):
     account_balances: Mapped[list["AccountBalance"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     chronological_accounts: Mapped[list["ChronologicalAccount"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     bank_statements: Mapped[list["BankStatement"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    sales_documents: Mapped[list["SalesDocument"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    sales_records: Mapped[list["SalesRecord"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    contracts: Mapped[list["ContractDocument"]] = relationship(back_populates="project", cascade="all, delete-orphan")
 
 
 class AccountBalance(Base):
@@ -119,3 +123,109 @@ class AuditRisk(Base):
     # 关联关系
     project: Mapped["Project"] = relationship(back_populates=None)
     related_case: Mapped["RegulatoryCase"] = relationship(back_populates=None)
+
+
+class SalesDocument(Base):
+    """用户上传的原始销售文档（销售合同/发票/发货单/报关单等）。
+    解析后的纯文本/表格内容存于 raw_text，供 AI 抽取。
+    """
+    __tablename__ = "sales_documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    doc_type: Mapped[str] = mapped_column(String(20), nullable=False)  # docx / pdf / xlsx
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    project: Mapped["Project"] = relationship(back_populates="sales_documents")
+    records: Mapped[list["SalesRecord"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+
+
+class SalesRecord(Base):
+    """销售清单行（AI 合成后入库，可由审计师在前端核对修改）。
+    字段对应"销售清单"底稿要求：金额、发货/确认时间、数量/单价、产品编号、成本、可直接对应销售费用。
+    """
+    __tablename__ = "sales_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    document_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("sales_documents.id"), nullable=True)
+
+    # 业务主标识
+    contract_no: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    customer_name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    product_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    product_name: Mapped[str] = mapped_column(String(200), nullable=False)
+
+    # 销售发票与税务 (新增 — 增值税底稿闭环)
+    invoice_no: Mapped[Optional[str]] = mapped_column(String(100), index=True, nullable=True)
+    currency: Mapped[Optional[str]] = mapped_column(String(10), default="CNY", nullable=True)
+    tax_rate: Mapped[float] = mapped_column(Float, default=0.0)         # 税率，如 0.13
+    tax_amount: Mapped[float] = mapped_column(Float, default=0.0)       # 税额
+    gross_amount: Mapped[float] = mapped_column(Float, default=0.0)     # 价税合计 (revenue + tax)
+
+    # 数量与金额
+    quantity: Mapped[float] = mapped_column(Float, default=0)
+    unit_price: Mapped[float] = mapped_column(Float, default=0)         # 不含税单价
+    revenue_amount: Mapped[float] = mapped_column(Float, default=0)     # 不含税收入金额
+    cost_amount: Mapped[float] = mapped_column(Float, default=0)        # 对应成本（用于毛利率分析）
+
+    # 与销售直接对应的费用
+    shipping_fee: Mapped[float] = mapped_column(Float, default=0)       # 运费
+    customs_fee: Mapped[float] = mapped_column(Float, default=0)        # 报关费
+    other_direct_fee: Mapped[float] = mapped_column(Float, default=0)   # 其他直接费用
+
+    # 退换货 / 折扣 / 返利 (新增 — 毛利真实性)
+    return_amount: Mapped[float] = mapped_column(Float, default=0.0)    # 退货冲减金额
+    discount_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 折扣折让
+    rebate_amount: Mapped[float] = mapped_column(Float, default=0.0)    # 销售返利
+
+    # 时间
+    ship_date: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
+    receipt_date: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True, nullable=True)  # 新增: 签收/验收日
+    revenue_confirm_date: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
+
+    # 函证状态 (新增 — 审计轨迹闭环)
+    confirmation_status: Mapped[Optional[str]] = mapped_column(String(20), default="未发函", nullable=True)  # 未发函/已发函/已回函/未回函/作废
+    confirmation_ref: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    confirmation_diff: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # 溯源
+    source: Mapped[str] = mapped_column(String(255), nullable=True)     # 来源文档名 / 备注
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)       # AI 合成置信度（0-1）
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)   # 人工核对标志
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project: Mapped["Project"] = relationship(back_populates="sales_records")
+    document: Mapped[Optional["SalesDocument"]] = relationship(back_populates="records")
+
+
+class ContractDocument(Base):
+    """收入合同（图片/PDF/扫描件）+ OCR 文本 + 要点 / CAS 14 五步法分析。"""
+    __tablename__ = "contracts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+
+    # 原始信息
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    media_type: Mapped[str] = mapped_column(String(20), nullable=False)  # image/jpeg, image/png, application/pdf
+    ocr_engine: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # paddleocr / easyocr / tesseract / manual
+    ocr_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # AI 抽取：基础 7 字段 (JSON 字符串)
+    key_points: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # AI 抽取：CAS 14 五步法 (JSON 字符串)
+    five_step_analysis: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # 风险扫描结论
+    risk_flags: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    analyzed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    project: Mapped["Project"] = relationship(back_populates="contracts")
