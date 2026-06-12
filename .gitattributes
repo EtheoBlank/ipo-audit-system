@@ -1,0 +1,31 @@
+# Git 行尾规则 — 防止 Windows checkout 把 shell 脚本改成 CRLF,
+# 导致 Linux 容器里 bash 报 `$'\r': command not found`。
+#
+# 规则:
+#   * shell 脚本 (.sh) 强制 LF
+#   * Python 源码允许 LF/CRLF (Windows 开发者常见)
+#   * 文本文件 (Dockerfile / YAML / TOML / Markdown) 默认 LF
+#
+# HF Space Docker 镜像在 Linux 跑, 任何 .sh / Dockerfile 必须是 LF。
+
+# shell 脚本 — 强制 LF
+*.sh        text eol=lf
+*.bash      text eol=lf
+Dockerfile  text eol=lf
+.dockerignore text eol=lf
+.gitignore  text eol=lf
+.gitattributes text eol=lf
+
+# 配置文件 — 强制 LF
+*.toml      text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.json      text eol=lf
+*.env       text eol=lf
+*.env.example text eol=lf
+
+# 文档
+*.md        text eol=lf
+
+# Python — Windows 开发者常见 CRLF, 不强制
+*.py        text eol=lf
