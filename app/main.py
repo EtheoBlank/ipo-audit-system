@@ -30,6 +30,8 @@ from app.api import (
     report_templates as report_templates_api,
     # Pack B — 关联方专项
     related_parties as related_parties_api,
+    # Pack C — 10 个审计循环
+    audit_cycles as audit_cycles_api,
 )
 
 logger = logging.getLogger(__name__)
@@ -258,6 +260,8 @@ def create_app() -> FastAPI:
     app.include_router(report_templates_api.router)
     # Pack B — 关联方专项
     app.include_router(related_parties_api.router)
+    # Pack C — 10 个审计循环
+    app.include_router(audit_cycles_api.router)
 
     # Health check endpoint
     @app.get("/health", tags=["系统"])

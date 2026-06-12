@@ -23,6 +23,7 @@ from app.core.database import Base  # noqa: F401  re-export 给子文件用
 
 # 各子模块按字母序汇总, 任何新增模块在这里追加一行即可
 from .account_audit import *  # noqa: F401, F403
+from .audit_cycles import *  # noqa: F401, F403
 from .auth import *  # noqa: F401, F403
 from .notification import *  # noqa: F401, F403
 from .related_parties import *  # noqa: F401, F403

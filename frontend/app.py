@@ -234,6 +234,7 @@ def main():
             "🎨 报告模板",            # Pack A
             "🔔 通知中心",            # Pack A
             "🤝 关联方专项",          # Pack B
+            "🔄 审计循环 (Pack C)",    # Pack C
             "🔐 系统管理",            # Pack A
         ]
     )
@@ -339,6 +340,12 @@ def main():
             show_related_parties()
         except ImportError as exc:
             st.error(f"关联方专项模块加载失败：{exc}")
+    elif page == "🔄 审计循环 (Pack C)":
+        try:
+            from frontend.pages_audit_cycles import show_audit_cycles
+            show_audit_cycles()
+        except ImportError as exc:
+            st.error(f"审计循环模块加载失败：{exc}")
     elif page == "🔐 系统管理":
         try:
             from frontend.pages_auth import show_auth
