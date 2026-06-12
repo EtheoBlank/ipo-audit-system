@@ -21,15 +21,50 @@ st.markdown("""
     .warning-box {padding:1rem;border-radius:0.5rem;background-color:#FFF3CD;border:1px solid #FFEAA7;color:#856404;}
     .error-box {padding:1rem;border-radius:0.5rem;background-color:#F8D7DA;border:1px solid #F5C6CB;color:#721C24;}
     .metric-card {padding:1rem;border-radius:0.5rem;background-color:#E9ECEF;border:1px solid #DEE2E6;}
+    .sentiment-badge {position: fixed; top: 0.5rem; right: 1rem; z-index: 999;
+        background: #dc3545; color: white; border-radius: 999px;
+        padding: 0.3rem 0.8rem; font-weight: bold; font-size: 0.85rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);}
+    .sentiment-badge-zero {position: fixed; top: 0.5rem; right: 1rem; z-index: 999;
+        background: #6c757d; color: white; border-radius: 999px;
+        padding: 0.3rem 0.8rem; font-weight: bold; font-size: 0.85rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);}
 </style>
 """, unsafe_allow_html=True)
+
+
+@st.cache_data(ttl=30)
+def get_sentiment_unread_count() -> int:
+    """全局红点: 30 秒缓存, 调一次 /notifications/unread."""
+    try:
+        r = requests.get(f"{API_BASE_URL}/api/sentiment/notifications/unread?limit=1", timeout=2)
+        if r.status_code == 200:
+            return int((r.json() or {}).get("count", 0))
+    except requests.exceptions.RequestException:
+        pass
+    return 0
+
+
+def render_sentiment_global_badge() -> None:
+    """在主页 main() 顶部渲染右上角红点 (全局)."""
+    count = get_sentiment_unread_count()
+    if count > 0:
+        st.markdown(
+            f'<div class="sentiment-badge">🔴 舆情 {count}</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            f'<div class="sentiment-badge-zero">⚪ 舆情 0</div>',
+            unsafe_allow_html=True,
+        )
 
 
 def check_api_health() -> bool:
     try:
         response = requests.get(f"{API_BASE_URL}/health", timeout=2)
         return response.status_code == 200
-    except:
+    except requests.exceptions.RequestException:
         return False
 
 
@@ -54,6 +89,9 @@ def get_projects():
 
 def main():
     st.markdown('<p class="main-header">📊 IPO 审计系统 (专业版)</p>', unsafe_allow_html=True)
+
+    # 全局红点 — 舆情未读 (右上角 fixed)
+    render_sentiment_global_badge()
 
     # Sidebar
     st.sidebar.title("功能菜单")
@@ -83,6 +121,13 @@ def main():
             "📄 综合报告",
             "📦 销售清单整理",
             "📄 收入合同分析",
+            "🏷️ 收发存盘点&减值",
+            "📬 函证管理",
+            "⚖️ 法律法规库",
+            "📚 自助知识库",
+            "📑 综合底稿自动生成",
+            "👥 项目组管理",
+            "📡 舆情跟踪",
         ]
     )
 
@@ -121,10 +166,52 @@ def main():
             show_contracts()
         except ImportError as exc:
             st.error(f"合同分析模块加载失败：{exc}。")
+    elif page == "🏷️ 收发存盘点&减值":
+        try:
+            from frontend.pages_inventory import show_inventory
+            show_inventory()
+        except ImportError as exc:
+            st.error(f"收发存盘点&减值模块加载失败：{exc}。")
+    elif page == "📬 函证管理":
+        try:
+            from frontend.pages_confirmations import show_confirmations
+            show_confirmations()
+        except ImportError as exc:
+            st.error(f"函证管理模块加载失败：{exc}。")
+    elif page == "⚖️ 法律法规库":
+        try:
+            from frontend.pages_regulations import show_regulations
+            show_regulations()
+        except ImportError as exc:
+            st.error(f"法律法规库模块加载失败：{exc}。")
+    elif page == "📚 自助知识库":
+        try:
+            from frontend.pages_knowledge_base import show_knowledge_base
+            show_knowledge_base()
+        except ImportError as exc:
+            st.error(f"自助知识库模块加载失败：{exc}。")
+    elif page == "📑 综合底稿自动生成":
+        try:
+            from frontend.pages_comprehensive import show_comprehensive_workpaper
+            show_comprehensive_workpaper()
+        except ImportError as exc:
+            st.error(f"综合底稿模块加载失败：{exc}。")
+    elif page == "👥 项目组管理":
+        try:
+            from frontend.pages_team_management import show_team_management
+            show_team_management()
+        except ImportError as exc:
+            st.error(f"项目组管理模块加载失败：{exc}。")
+    elif page == "📡 舆情跟踪":
+        try:
+            from frontend.pages_sentiment import show_sentiment
+            show_sentiment()
+        except ImportError as exc:
+            st.error(f"舆情跟踪模块加载失败：{exc}。")
 
 
 def show_homepage():
-    st.markdown("##📊 系统概览")
+    st.markdown("## 📊 系统概览")
 
     col1, col2, col3, col4 = st.columns(4)
     projects = get_projects() or []
@@ -141,10 +228,10 @@ def show_homepage():
 
     st.markdown("---")
 
-    st.markdown("###⚡ 快速操作")
+    st.markdown("### ⚡ 快速操作")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        ifst.button("➕ 新建项目", use_container_width=True, type="primary"):
+        if st.button("➕ 新建项目", use_container_width=True, type="primary"):
             st.session_state["page"] = "📁 项目管理"
             st.rerun()
     with col2:
@@ -156,12 +243,12 @@ def show_homepage():
             st.session_state["page"] = "📊 底稿生成"
             st.rerun()
     with col4:
-        ifst.button("📄 生成报告", use_container_width=True):
+        if st.button("📄 生成报告", use_container_width=True):
             st.session_state["page"] = "📄 综合报告"
             st.rerun()
 
     st.markdown("---")
-    st.markdown("###📋 最近项目")
+    st.markdown("### 📋 最近项目")
     if projects:
         df = pd.DataFrame(projects[:5])
         st.dataframe(df[["name", "company_name", "fiscal_year", "status"]], use_container_width=True)
@@ -320,7 +407,7 @@ def show_regulatory_cases():
     tab1, tab2, tab3 = st.tabs(["📥 抓取案例", "📋 案例列表", "🔎 关键词搜索"])
 
     with tab1:
-        st.markdown("####抓取监管案例")
+        st.markdown("#### 抓取监管案例")
         st.info("从证监会、上交所、深交所自动抓取问询函和处罚案例")
         if st.button("开始抓取", type="primary"):
             with st.spinner("抓取中，请稍候..."):
@@ -360,7 +447,7 @@ def show_ai_analysis():
 
     st.info("🤖 AI分析功能需要配置MINIMAX_API_KEY后使用")
 
-    st.markdown("###📊仪表盘数据")
+    st.markdown("### 📊 仪表盘数据")
     if st.button("获取仪表盘数据"):
         result = api_request("GET", f"/api/reports/dashboard?project_id={project_id}")
         if result:
@@ -396,7 +483,7 @@ def show_anomaly_detection():
                     df = pd.DataFrame(anomalies)
                     st.dataframe(df, use_container_width=True)
 
-                    #风险汇总
+                    # 风险汇总
                     risk_counts = df.groupby("risk_level").size() if "risk_level" in df.columns else pd.Series()
                     if not risk_counts.empty:
                         st.markdown("### 风险分布")
@@ -421,7 +508,7 @@ def show_comprehensive_report():
     col1, col2 = st.columns(2)
 
     with col1:
-        ifst.button("📄 生成Word报告", use_container_width=True):
+        if st.button("📄 生成Word报告", use_container_width=True):
             with st.spinner("生成中..."):
                 result = api_request("POST", f"/api/reports/generate/word?project_id={project_id}")
                 if result:

@@ -39,6 +39,14 @@ dependencies = [
     "paddleocr>=2.7.0",
     "altair>=5.1.0",
     "streamlit>=1.30.0",
+    # 知识库 — EPUB 解析 (PDF / DOCX / TXT 已由 pdfplumber / python-docx 覆盖)
+    "ebooklib>=0.18",
+    # 综合底稿 — 审计手册规则库使用 YAML 维护
+    "pyyaml>=6.0.1",
+    # 舆情跟踪 (Sentiment Tracking) — v0.2 新增
+    "apscheduler>=3.10.4",     # 内嵌调度器
+    "feedparser>=6.0.11",      # RSS 解析
+    "tenacity>=8.2.3",         # 通用重试装饰器
 ]
 
 [project.optional-dependencies]

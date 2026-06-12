@@ -1,4 +1,6 @@
 """综合报告API - 第六阶段."""
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +17,9 @@ from app.services.report_generator import (
 )
 from app.services.trial_balance_engine import TrialBalanceEngine
 from app.services.ai_analysis_engine import RiskIdentifier, AnomalyDetector
+from app.utils.db_helpers import account_balances_to_df
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/reports", tags=["综合报告"])
 
@@ -40,16 +45,7 @@ async def generate_word_report(
     if not balances:
         raise HTTPException(status_code=400, detail="请先导入科目余额数据")
 
-    import pandas as pd
-    df_balances = pd.DataFrame([{
-        "account_code": ab.account_code,
-        "account_name": ab.account_name,
-        "balance_direction": ab.balance_direction,
-        "beginning_balance": ab.beginning_balance,
-        "debit_amount": ab.debit_amount,
-        "credit_amount": ab.credit_amount,
-        "ending_balance": ab.ending_balance,
-    } for ab in balances])
+    df_balances = account_balances_to_df(balances)
 
     # 生成报告
     generator = ComprehensiveReportGenerator()
@@ -101,16 +97,7 @@ async def generate_pdf_report(
     if not balances:
         raise HTTPException(status_code=400, detail="请先导入科目余额数据")
 
-    import pandas as pd
-    df_balances = pd.DataFrame([{
-        "account_code": ab.account_code,
-        "account_name": ab.account_name,
-        "balance_direction": ab.balance_direction,
-        "beginning_balance": ab.beginning_balance,
-        "debit_amount": ab.debit_amount,
-        "credit_amount": ab.credit_amount,
-        "ending_balance": ab.ending_balance,
-    } for ab in balances])
+    df_balances = account_balances_to_df(balances)
 
     generator = PDFReportGenerator()
     project_info = {
@@ -155,16 +142,7 @@ async def get_dashboard_data(
     )
     balances = result.scalars().all()
 
-    import pandas as pd
-    df_balances = pd.DataFrame([{
-        "account_code": ab.account_code,
-        "account_name": ab.account_name,
-        "balance_direction": ab.balance_direction,
-        "beginning_balance": ab.beginning_balance,
-        "debit_amount": ab.debit_amount,
-        "credit_amount": ab.credit_amount,
-        "ending_balance": ab.ending_balance,
-    } for ab in balances])
+    df_balances = account_balances_to_df(balances)
 
     # 检测异常
     anomalies = []
@@ -220,16 +198,7 @@ async def get_anomalies(
     )
     balances = result.scalars().all()
 
-    import pandas as pd
-    df_balances = pd.DataFrame([{
-        "account_code": ab.account_code,
-        "account_name": ab.account_name,
-        "balance_direction": ab.balance_direction,
-        "beginning_balance": ab.beginning_balance,
-        "debit_amount": ab.debit_amount,
-        "credit_amount": ab.credit_amount,
-        "ending_balance": ab.ending_balance,
-    } for ab in balances])
+    df_balances = account_balances_to_df(balances)
 
     anomalies = []
 

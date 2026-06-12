@@ -1,9 +1,21 @@
-"""Regulatory case scraping service for IPO Audit System."""
+"""Regulatory case scraping service for IPO Audit System.
+
+NOTE: The official CSRC / SSE / SZSE websites are heavily JS-rendered and
+frequently change their HTML structure. The URL templates below are
+representative; in production these would need to be updated to match the
+current site layout, or replaced with a proper API / RSS feed if available.
+"""
+
+import logging
+
 import httpx
 from bs4 import BeautifulSoup
 from typing import List, Dict, Optional
 from datetime import datetime
+
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class RegulatoryCaseScraper:
@@ -29,7 +41,8 @@ class RegulatoryCaseScraper:
         Returns:
             List of inquiry letter records
         """
-        url = f"{settings.CSRC_URL}/cortacts/ses/search公告？page={page}"
+        url = f"{settings.CSRC_URL}/pub/newsite/sycyjgshjscxgshj/" \
+              f"shjshjwxshjwxindex_{page}.shtml"
         cases = []
 
         try:
@@ -52,8 +65,10 @@ class RegulatoryCaseScraper:
                     }
                     cases.append(case)
 
-        except Exception as e:
-            print(f"Error scraping CSRC: {e}")
+        except httpx.HTTPStatusError as e:
+            logger.warning("CSRC 返回 %s — 跳过: %s", e.response.status_code, url)
+        except httpx.HTTPError as e:
+            logger.warning("抓取 CSRC 失败: %s", e)
 
         return cases
 
@@ -66,7 +81,8 @@ class RegulatoryCaseScraper:
         Returns:
             List of inquiry letter records
         """
-        url = f"{settings.SseUrl}/_DISPATCH/ses/search/？page={page}"
+        url = f"{settings.SSE_URL}/lawandregulation/query/regulativerecord/" \
+              f"qaTypeNO%20IN%20(%27401%27)?page={page}"
         cases = []
 
         try:
@@ -88,8 +104,10 @@ class RegulatoryCaseScraper:
                     }
                     cases.append(case)
 
-        except Exception as e:
-            print(f"Error scraping SSE: {e}")
+        except httpx.HTTPStatusError as e:
+            logger.warning("SSE 返回 %s — 跳过: %s", e.response.status_code, url)
+        except httpx.HTTPError as e:
+            logger.warning("抓取 SSE 失败: %s", e)
 
         return cases
 
@@ -102,7 +120,8 @@ class RegulatoryCaseScraper:
         Returns:
             List of inquiry letter records
         """
-        url = f"{settings.SzseUrl}/cortacts/ses/search/？page={page}"
+        url = f"{settings.SZSE_URL}/api/report/ShowReport/data" \
+              f"?SHOWTYPE=JSON&CATALOGID=1839&CATEGORY=xxpl/tzzscx&page={page}"
         cases = []
 
         try:
@@ -124,8 +143,10 @@ class RegulatoryCaseScraper:
                     }
                     cases.append(case)
 
-        except Exception as e:
-            print(f"Error scraping SZSE: {e}")
+        except httpx.HTTPStatusError as e:
+            logger.warning("SZSE 返回 %s — 跳过: %s", e.response.status_code, url)
+        except httpx.HTTPError as e:
+            logger.warning("抓取 SZSE 失败: %s", e)
 
         return cases
 
@@ -138,7 +159,8 @@ class RegulatoryCaseScraper:
         Returns:
             List of penalty records
         """
-        url = f"{settings.CSRC_URL}/cortacts/ses/search/处罚？page={page}"
+        url = f"{settings.CSRC_URL}/pub/newsite/sycyjgshjscxgshj/" \
+              f"cfjdindex_{page}.shtml"
         cases = []
 
         try:
@@ -160,8 +182,10 @@ class RegulatoryCaseScraper:
                     }
                     cases.append(case)
 
-        except Exception as e:
-            print(f"Error scraping CSRC penalties: {e}")
+        except httpx.HTTPStatusError as e:
+            logger.warning("CSRC 处罚 返回 %s — 跳过: %s", e.response.status_code, url)
+        except httpx.HTTPError as e:
+            logger.warning("抓取 CSRC 处罚失败: %s", e)
 
         return cases
 
@@ -183,6 +207,15 @@ class RegulatoryCaseScraper:
         all_cases.extend(sse_inquiries)
         all_cases.extend(szse_inquiries)
         all_cases.extend(csrc_penalties)
+
+        logger.info(
+            "共抓取 %d 条监管案例 (CSRC问询=%d, SSE=%d, SZSE=%d, CSRC处罚=%d)",
+            len(all_cases),
+            len(csrc_inquiries),
+            len(sse_inquiries),
+            len(szse_inquiries),
+            len(csrc_penalties),
+        )
 
         return all_cases
 

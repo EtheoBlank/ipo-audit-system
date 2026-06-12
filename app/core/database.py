@@ -25,15 +25,25 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 async def get_db() -> AsyncSession:
-    """Get database session."""
+    """Get database session — auto-rollback on exception so a failing route
+    doesn't leak half-applied writes into the next request."""
     async with AsyncSessionLocal() as session:
         try:
             yield session
+        except Exception:
+            await session.rollback()
+            raise
         finally:
             await session.close()
 
 
 async def init_db() -> None:
-    """Initialize database tables."""
+    """Initialize database tables.
+
+    关键: 在 create_all 之前必须显式 import 所有 ORM 模块,
+    否则 Base.metadata 为空, 不会有任何表被建 (尤其新加表后忘记 import 会导致数据丢失).
+    """
+    # 显式 import 所有 ORM 模型 — SQLAlchemy 靠 import-time 注册
+    import app.models.db_models  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

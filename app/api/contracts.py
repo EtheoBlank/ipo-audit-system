@@ -250,13 +250,13 @@ async def analyze_contract(
     risk_flags = ContractAnalyzer.scan_risks(key_points, five_step, c.ocr_text)
 
     # Persist results
-    from datetime import datetime
+    from datetime import datetime, timezone
     if key_points is not None:
         c.key_points = json.dumps(key_points, ensure_ascii=False)
     if five_step is not None:
         c.five_step_analysis = json.dumps(five_step, ensure_ascii=False)
     c.risk_flags = json.dumps(risk_flags, ensure_ascii=False)
-    c.analyzed_at = datetime.utcnow()
+    c.analyzed_at = datetime.now(timezone.utc)
     await db.commit()
 
     return ContractAnalysisResponse(

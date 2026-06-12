@@ -402,4 +402,85 @@ class WorkbookGenerator:
         output_path = self.output_dir / f"试算平衡表_{self.fiscal_year}.xlsx"
         wb.save(output_path)
         return output_path
-        return output_path
+
+    # ============================================================
+    #  审计说明 (调用知识库 + 法规库 + AI)
+    # ============================================================
+
+    def write_audit_notes_sheet(
+        self,
+        workbook_path: Path,
+        notes: list[dict],
+        sheet_name: str = "审计说明",
+    ) -> Path:
+        """在已有底稿 Excel 末尾追加一个"审计说明" sheet。
+
+        Args:
+            workbook_path: 已生成的底稿文件 (会被覆盖)
+            notes: ``[{"account_code","account_name","note","references_kb","references_regulations"}]``
+            sheet_name: 新 sheet 名
+
+        Returns:
+            写入后的文件路径
+        """
+        from openpyxl import load_workbook
+
+        wb = load_workbook(workbook_path)
+        # 同名 sheet 重写
+        if sheet_name in wb.sheetnames:
+            del wb[sheet_name]
+        ws = wb.create_sheet(sheet_name)
+        styles = self._get_styles()
+
+        # 标题
+        ws.merge_cells("A1:E1")
+        title = ws["A1"]
+        title.value = f"{self.company_name} - 审计说明 ({self.fiscal_year}年度)"
+        title.font = styles["title_font"]
+        title.alignment = styles["center_align"]
+        ws.row_dimensions[1].height = 28
+
+        headers = ["科目编码", "科目名称", "审计说明", "知识库引用", "法规引用"]
+        for col, h in enumerate(headers, 1):
+            ws.cell(row=2, column=col, value=h)
+            self._apply_header_style(ws, 2, col)
+        ws.row_dimensions[2].height = 24
+
+        for r_idx, n in enumerate(notes, start=3):
+            ws.cell(row=r_idx, column=1, value=n.get("account_code", ""))
+            ws.cell(row=r_idx, column=2, value=n.get("account_name", ""))
+            ws.cell(row=r_idx, column=3, value=n.get("note", ""))
+
+            kb_refs = n.get("references_kb") or []
+            kb_text = "\n".join(
+                f"《{x.get('book_title','')}》"
+                + (f" / {x['chapter']}" if x.get("chapter") else "")
+                + (f" / 第{x['page']}页" if x.get("page") else "")
+                + f"  相似度 {x.get('score', 0):.2f}"
+                for x in kb_refs
+            )
+            ws.cell(row=r_idx, column=4, value=kb_text)
+
+            reg_refs = n.get("references_regulations") or []
+            reg_text = "\n".join(
+                f"《{x.get('title','')}》"
+                + (f" ({x['document_no']})" if x.get("document_no") else "")
+                + (f"  {x['publish_date']}" if x.get("publish_date") else "")
+                for x in reg_refs
+            )
+            ws.cell(row=r_idx, column=5, value=reg_text)
+
+            for col in range(1, 6):
+                cell = ws.cell(row=r_idx, column=col)
+                cell.alignment = styles["left_align"]
+                cell.border = styles["thin_border"]
+                cell.font = styles["normal_font"]
+            ws.row_dimensions[r_idx].height = max(40, min(220, len(str(n.get("note", ""))) // 3))
+
+        # 列宽
+        for col_idx, w in enumerate([14, 24, 70, 36, 36], 1):
+            ws.column_dimensions[chr(64 + col_idx)].width = w
+        ws.freeze_panes = "A3"
+
+        wb.save(workbook_path)
+        return workbook_path

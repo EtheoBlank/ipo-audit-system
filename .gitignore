@@ -137,5 +137,15 @@ templates/
 .DS_Store
 Thumbs.db
 
+# Linter / formatter caches
+.ruff_cache/
+
+# Local Claude Code session artefacts (skills are kept in git on purpose)
+.claude/projects/
+.claude/scheduled_tasks.json
+
 # Project specific
 ipo_audit.db
+*.bak
+logs/
+*.tmp

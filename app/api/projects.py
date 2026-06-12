@@ -1,11 +1,21 @@
 """API routes for project management."""
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional
+import pandas as pd
 
+from app.core.config import settings
 from app.core.database import get_db
-from app.models.db_models import Project, AccountBalance, ChronologicalAccount, BankStatement
+from app.models.db_models import (
+    Project,
+    AccountBalance,
+    ChronologicalAccount,
+    BankStatement,
+    IMPORT_KIND_ACCOUNT_BALANCES,
+    IMPORT_KIND_CHRONOLOGICAL,
+    IMPORT_KIND_BANK_STATEMENTS,
+)
 from app.models.audit import (
     ProjectCreate, ProjectUpdate, ProjectResponse,
     AccountBalanceCreate, AccountBalanceResponse,
@@ -15,6 +25,27 @@ from app.models.audit import (
 from app.services.excel_parser import ExcelParser
 
 router = APIRouter(prefix="/api/projects", tags=["项目管理"])
+
+
+async def _trigger_work_plan_on_import(
+    db: AsyncSession, project_id: int, import_kind: str, count: int
+) -> None:
+    """账套导入完成后异步触发 AI 生成工作计划。
+
+    失败 try/except 兜底 — 不阻塞主导入流程。
+    """
+    try:
+        from app.services.team_management import team_management_service
+
+        await team_management_service.on_accounts_imported(
+            db, project_id, import_kind, count
+        )
+    except Exception:  # noqa: BLE001
+        # 主流程不应被工作计划的失败拖垮
+        import logging
+        logging.getLogger(__name__).exception(
+            "账套导入钩子触发工作计划生成失败，不影响主流程"
+        )
 
 
 @router.post("/", response_model=ProjectResponse)
@@ -119,37 +150,34 @@ async def upload_account_balances(
         raise HTTPException(status_code=404, detail="项目不存在")
 
     # Get ERP adapter
+    # Map erp_type string to ERPType enum
+    erp_type_enum = None
+    for et in ERPType:
+        if et.value == erp_type or et.name == erp_type:
+            erp_type_enum = et
+            break
+
+    # Parse Excel with adapter
+    temp_path = settings.UPLOAD_DIR / f"temp_{file.filename}"
+    content = await file.read()
+    with open(temp_path, "wb") as f:
+        f.write(content)
+
     try:
-        # Map erp_type string to ERPType enum
-        erp_type_enum = None
-        for et in ERPType:
-            if et.value == erp_type or et.name == erp_type:
-                erp_type_enum = et
-                break
+        raw_df = pd.read_excel(temp_path)
 
+        # Auto-detect ERP type if not specified
         if erp_type_enum is None:
-            # Try to detect from file content
-            pass
+            erp_type_enum = ERPAdapterFactory.detect_erp_type(raw_df)
 
-        # Parse Excel with adapter
-        temp_path = settings.UPLOAD_DIR / f"temp_{file.filename}"
-        content = await file.read()
-        with open(temp_path, "wb") as f:
-            f.write(content)
+        adapter = ERPAdapterFactory.get_adapter(erp_type_enum)
+        df = adapter.parse_account_balance(raw_df)
 
-        try:
-            raw_df = pd.read_excel(temp_path)
-
-            # Auto-detect ERP type if not specified
-            if erp_type_enum is None:
-                erp_type_enum = ERPAdapterFactory.detect_erp_type(raw_df)
-
-            adapter = ERPAdapterFactory.get_adapter(erp_type_enum)
-            df = adapter.parse_account_balance(raw_df)
-
-        finally:
-            if temp_path.exists():
-                temp_path.unlink()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"解析科目余额表失败: {exc}") from exc
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
 
     # Save to database
     balances = []
@@ -168,6 +196,9 @@ async def upload_account_balances(
         balances.append(balance)
 
     await db.commit()
+    await _trigger_work_plan_on_import(
+        db, project_id, IMPORT_KIND_ACCOUNT_BALANCES, len(balances)
+    )
     return {"message": f"成功导入 {len(balances)} 条科目余额记录"}
 
 
@@ -214,6 +245,9 @@ async def upload_chronological_accounts(
         accounts.append(account)
 
     await db.commit()
+    await _trigger_work_plan_on_import(
+        db, project_id, IMPORT_KIND_CHRONOLOGICAL, len(accounts)
+    )
     return {"message": f"成功导入 {len(accounts)} 条序时账记录"}
 
 
@@ -259,6 +293,9 @@ async def upload_bank_statements(
         statements.append(statement)
 
     await db.commit()
+    await _trigger_work_plan_on_import(
+        db, project_id, IMPORT_KIND_BANK_STATEMENTS, len(statements)
+    )
     return {"message": f"成功导入 {len(statements)} 条银行对账单记录"}
 
 

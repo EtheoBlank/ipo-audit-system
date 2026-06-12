@@ -1,0 +1,541 @@
+"""Inventory aging / NRV impairment / reversal engine.
+
+库龄计算：FIFO 推算
+  - 把所有"入库批次"按入库日期升序排列；
+  - 依次扣减本期"出库数量"，剩下的就是期末仍在库的批次（含批次入库日期）；
+  - 用 报告期截止日 - 该批入库日期 = 该批库龄；
+  - 加权平均库龄 = Σ(批量 × 库龄) / 总数量。
+
+  实际数据中很多 ERP 没有逐批明细，只有汇总收发存。
+  本引擎做"折中近似"：把按 ``InventoryMovement`` 行聚合到 (material_code) 后，
+  用每行的 ``inbound_date`` 与 ``inbound_qty`` 构造合成批次，把上一期期末
+  当做"零日批次"。如果完全缺批次/日期，退化为周转率反推法。
+
+跌价（NRV）：
+  - NRV 单价 = max(0, 期末后销售清单加权平均单价 - 估计销售费用 - 估计销售税费)
+  - 若 NRV 单价 < 账面单价 → 计提跌价 = (账面 - NRV) × 数量；否则 0
+  - 行业默认跌价比例（按库龄分层）作为兜底（无销售清单时使用）
+
+跌价转回：
+  - 上年末已计提跌价 = ``opening_impairment``
+  - 本期末应保留跌价 = ``current_impairment``
+  - 若 current < opening → 转回 = opening - current（在原已计提范围内）
+  - 若 current > opening → 新增计提 = current - opening
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Iterable, Optional
+
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+
+# 行业默认跌价比例（按库龄分层；销售清单无价时兜底）
+DEFAULT_AGING_RATES: dict[str, dict[str, float]] = {
+    "默认":     {"le_90": 0.00, "91_180": 0.05, "181_365": 0.15, "366_730": 0.50, "gt_730": 1.00},
+    "制造业":    {"le_90": 0.00, "91_180": 0.05, "181_365": 0.20, "366_730": 0.60, "gt_730": 1.00},
+    "医药生物":   {"le_90": 0.00, "91_180": 0.10, "181_365": 0.40, "366_730": 0.80, "gt_730": 1.00},
+    "零售":     {"le_90": 0.00, "91_180": 0.10, "181_365": 0.30, "366_730": 0.80, "gt_730": 1.00},
+    "信息技术":   {"le_90": 0.00, "91_180": 0.10, "181_365": 0.30, "366_730": 0.70, "gt_730": 1.00},
+    "化工":     {"le_90": 0.00, "91_180": 0.05, "181_365": 0.15, "366_730": 0.50, "gt_730": 1.00},
+}
+
+
+# 行业默认估计销售费用率（销售费用 + 税金及附加 占含税收入的比例）。
+# 来源：参考主流上市公司年报近三年均值；用户应根据被审主体实际口径调整。
+DEFAULT_SELL_COST_RATES: dict[str, float] = {
+    "默认":      0.05,
+    "制造业":    0.06,
+    "医药生物":   0.07,
+    "零售":      0.05,
+    "信息技术":   0.06,
+    "化工":      0.08,
+    "建筑施工":   0.08,
+    "重型机械":   0.10,
+}
+
+
+def sell_cost_rate_for(industry: Optional[str]) -> float:
+    """按行业返回默认销售费用率；找不到时返回 0.05。"""
+    if not industry:
+        return DEFAULT_SELL_COST_RATES["默认"]
+    if industry in DEFAULT_SELL_COST_RATES:
+        return DEFAULT_SELL_COST_RATES[industry]
+    for k, v in DEFAULT_SELL_COST_RATES.items():
+        if k != "默认" and (k in industry or industry in k):
+            return v
+    return DEFAULT_SELL_COST_RATES["默认"]
+
+
+@dataclass
+class AgingBucket:
+    le_90: float = 0.0
+    age_91_180: float = 0.0
+    age_181_365: float = 0.0
+    age_366_730: float = 0.0
+    gt_730: float = 0.0
+    weighted_avg_age: float = 0.0
+
+
+@dataclass
+class ImpairmentRow:
+    material_code: str
+    material_name: str
+    category: str
+    period_end: str
+    ending_qty: float
+    book_unit_cost: float
+    book_amount: float
+    aging: AgingBucket
+    nrv_unit_price: Optional[float]
+    nrv_source: str
+    nrv_amount: float
+    estimated_sell_cost: float
+    impairment_current: float
+    impairment_opening: float
+    impairment_reversal: float
+    impairment_provision: float
+    net_impairment_change: float
+    method: str
+    note: str = ""
+    # 转回拆分（CAS 1 第 21 条）：已售出部分应"转销营业成本"，仍在库部分才"转回资产减值损失"
+    reversal_to_cogs: float = 0.0          # 已售出部分对应的跌价（随销售转出营业成本）
+    reversal_to_loss: float = 0.0          # 仍在库部分对应的跌价（转回资产减值损失）
+
+    def to_db_kwargs(self) -> dict[str, Any]:
+        return {
+            "material_code": self.material_code,
+            "material_name": self.material_name,
+            "category": self.category,
+            "period_end": self.period_end,
+            "ending_qty": self.ending_qty,
+            "book_unit_cost": self.book_unit_cost,
+            "book_amount": self.book_amount,
+            "age_le_90": self.aging.le_90,
+            "age_91_180": self.aging.age_91_180,
+            "age_181_365": self.aging.age_181_365,
+            "age_366_730": self.aging.age_366_730,
+            "age_gt_730": self.aging.gt_730,
+            "weighted_avg_age": self.aging.weighted_avg_age,
+            "nrv_unit_price": self.nrv_unit_price,
+            "nrv_source": self.nrv_source,
+            "nrv_amount": self.nrv_amount,
+            "estimated_sell_cost": self.estimated_sell_cost,
+            "impairment_current": self.impairment_current,
+            "impairment_opening": self.impairment_opening,
+            "impairment_reversal": self.impairment_reversal,
+            "impairment_provision": self.impairment_provision,
+            "net_impairment_change": self.net_impairment_change,
+            "method": self.method,
+            "note": self.note,
+            "reversal_to_cogs": self.reversal_to_cogs,
+            "reversal_to_loss": self.reversal_to_loss,
+        }
+
+
+@dataclass
+class ImpairmentResult:
+    rows: list[ImpairmentRow]
+    summary: dict[str, float] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rows": [r.to_db_kwargs() for r in self.rows],
+            "summary": self.summary,
+        }
+
+
+def _parse_dt(v: Any) -> Optional[datetime]:
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v
+    try:
+        ts = pd.to_datetime(v, errors="coerce")
+        if pd.isna(ts):
+            return None
+        return ts.to_pydatetime()
+    except Exception:
+        return None
+
+
+def _aging_bucket(days: float, qty: float) -> dict[str, float]:
+    if days <= 90:
+        return {"le_90": qty}
+    if days <= 180:
+        return {"age_91_180": qty}
+    if days <= 365:
+        return {"age_181_365": qty}
+    if days <= 730:
+        return {"age_366_730": qty}
+    return {"gt_730": qty}
+
+
+class InventoryAgingEngine:
+    """Compute aging / impairment / reversal per material."""
+
+    # 哪些 category 走"完工口径"：原材料/在产品/半成品（NRV 还需扣除至完工成本）
+    COMPLETION_CATEGORIES = ("原材料", "在产品", "半成品", "原料", "辅料", "包装物", "委外材料")
+
+    def __init__(
+        self,
+        industry: str = "默认",
+        sell_cost_rate: float = 0.05,
+        completion_cost_rate: float = 0.0,
+    ):
+        # ``sell_cost_rate`` = 估计销售费用 + 税费 占含税收入的比例（默认 5%）
+        # ``completion_cost_rate`` = 至完工成本占产成品售价的比例（原材料/在产品 NRV 用）
+        self.industry = industry
+        self.rates = DEFAULT_AGING_RATES.get(industry) or DEFAULT_AGING_RATES["默认"]
+        # 包含匹配
+        if industry and industry not in DEFAULT_AGING_RATES:
+            for k, v in DEFAULT_AGING_RATES.items():
+                if k != "默认" and (k in industry or industry in k):
+                    self.rates = v
+                    break
+        self.sell_cost_rate = sell_cost_rate
+        self.completion_cost_rate = completion_cost_rate
+
+    @classmethod
+    def is_completion_category(cls, category: Optional[str]) -> bool:
+        """判断该物料是否走"完工口径"（原材料/在产品类）"""
+        if not category:
+            return False
+        return any(k in category for k in cls.COMPLETION_CATEGORIES)
+
+    # ---- FIFO aging -----------------------------------------------------
+
+    @staticmethod
+    def fifo_aging(
+        movements: list[dict[str, Any]],
+        period_end: datetime,
+    ) -> AgingBucket:
+        """Recompute aging from per-batch movements of ONE material.
+
+        Each movement dict needs: opening_qty, opening_amount, inbound_qty,
+        inbound_date, outbound_qty, ending_qty.
+        """
+        # 构造合成批次列表 [(入库日期, 剩余数量)]
+        # - 上一期期末 = 零日批次（入库日期取得不知道时用 period_end - 365 当兜底）
+        batches: list[tuple[datetime, float]] = []
+        opening_qty_total = sum(float(m.get("opening_qty") or 0) for m in movements)
+        if opening_qty_total > 0:
+            # 期初统一当 "已经 365 天" 处理（保守）
+            batches.append((period_end - pd.Timedelta(days=365), opening_qty_total))
+
+        for m in movements:
+            qty = float(m.get("inbound_qty") or 0)
+            if qty <= 0:
+                continue
+            dt = _parse_dt(m.get("inbound_date")) or period_end
+            batches.append((dt, qty))
+
+        batches.sort(key=lambda x: x[0])  # FIFO: 最早入库的先出
+
+        total_outbound = sum(float(m.get("outbound_qty") or 0) for m in movements)
+        remaining_out = total_outbound
+        # 从头扣减
+        for i, (dt, qty) in enumerate(batches):
+            if remaining_out <= 0:
+                break
+            take = min(qty, remaining_out)
+            batches[i] = (dt, qty - take)
+            remaining_out -= take
+
+        # 剩下的就是期末
+        ending_qty_total = sum(float(m.get("ending_qty") or 0) for m in movements)
+        leftover_qty = sum(q for _, q in batches if q > 0)
+        # 校准：如果 leftover ≈ ending（小幅四舍五入差），按比例缩放；
+        # 若偏离 > 5%，**不静默校准**（审计场景下账实差异是核心信号，应留给审计师查），
+        # 标记给上层，库龄按 leftover 原值计算。
+        scale = 1.0
+        if leftover_qty > 0 and ending_qty_total > 0:
+            ratio = ending_qty_total / leftover_qty
+            if 0.95 <= ratio <= 1.05:
+                scale = ratio
+            else:
+                # 留下 scale=1，调用方在 compute() 里会在 note 标注差异
+                scale = 1.0
+
+        bucket = AgingBucket()
+        weighted_age_sum = 0.0
+        total_weight = 0.0
+        for dt, qty in batches:
+            if qty <= 0:
+                continue
+            adj_qty = qty * scale
+            days = max(0.0, (period_end - dt).days)
+            b = _aging_bucket(days, adj_qty)
+            bucket.le_90 += b.get("le_90", 0.0)
+            bucket.age_91_180 += b.get("age_91_180", 0.0)
+            bucket.age_181_365 += b.get("age_181_365", 0.0)
+            bucket.age_366_730 += b.get("age_366_730", 0.0)
+            bucket.gt_730 += b.get("gt_730", 0.0)
+            weighted_age_sum += days * adj_qty
+            total_weight += adj_qty
+
+        if total_weight > 0:
+            bucket.weighted_avg_age = round(weighted_age_sum / total_weight, 1)
+        else:
+            bucket.weighted_avg_age = 0.0
+
+        return bucket
+
+    # ---- NRV (期末后销售清单加权平均价) ---------------------------------
+
+    @staticmethod
+    def nrv_unit_price_from_sales(
+        sales_records: list[Any],
+        material_code: str,
+        period_end: datetime,
+    ) -> Optional[tuple[float, int]]:
+        """Return (weighted avg unit price, sample count) of post-period sales
+        for the given material. None if no qualifying sales found."""
+        total_amount = 0.0
+        total_qty = 0.0
+        count = 0
+        for r in sales_records:
+            code = getattr(r, "product_code", "") or (r.get("product_code", "") if isinstance(r, dict) else "")
+            if str(code) != str(material_code):
+                continue
+            confirm = getattr(r, "revenue_confirm_date", None) or (r.get("revenue_confirm_date") if isinstance(r, dict) else None)
+            ship = getattr(r, "ship_date", None) or (r.get("ship_date") if isinstance(r, dict) else None)
+            ref_dt = _parse_dt(confirm) or _parse_dt(ship)
+            if ref_dt is None or ref_dt <= period_end:
+                continue
+            qty = float(getattr(r, "quantity", 0) or (r.get("quantity", 0) if isinstance(r, dict) else 0))
+            rev = float(getattr(r, "revenue_amount", 0) or (r.get("revenue_amount", 0) if isinstance(r, dict) else 0))
+            if qty <= 0 or rev <= 0:
+                continue
+            total_amount += rev
+            total_qty += qty
+            count += 1
+        if total_qty <= 0:
+            return None
+        return total_amount / total_qty, count
+
+    # ---- Aging-rate impairment fallback ---------------------------------
+
+    def aging_impairment(self, book_amount: float, bucket: AgingBucket, qty: float) -> float:
+        """按行业默认比例，对每个库龄段单独计提。"""
+        if qty <= 0 or book_amount <= 0:
+            return 0.0
+        unit_cost = book_amount / qty
+        amt = (
+            bucket.le_90 * unit_cost * self.rates["le_90"]
+            + bucket.age_91_180 * unit_cost * self.rates["91_180"]
+            + bucket.age_181_365 * unit_cost * self.rates["181_365"]
+            + bucket.age_366_730 * unit_cost * self.rates["366_730"]
+            + bucket.gt_730 * unit_cost * self.rates["gt_730"]
+        )
+        return round(amt, 2)
+
+    # ---- main -----------------------------------------------------------
+
+    def compute(
+        self,
+        movements: list[Any],
+        period_end: datetime,
+        *,
+        sales_records: Optional[list[Any]] = None,
+        prior_impairments: Optional[dict[str, float]] = None,
+        prior_qty: Optional[dict[str, float]] = None,
+        manual_nrv: Optional[dict[str, float]] = None,
+    ) -> ImpairmentResult:
+        """
+        :param movements: 收发存行（ORM 对象或 dict）。
+        :param period_end: 报告期截止日（如 2024-12-31）。
+        :param sales_records: 销售清单（用于 NRV），可为空。
+        :param prior_impairments: {material_code: 期初已计提跌价}（可选）。
+        :param prior_qty: {material_code: 上年期末数量}（可选）— 用于把转回拆成
+            "已售出转销营业成本"和"仍在库转回资产减值损失"两部分。
+        :param manual_nrv: {material_code: 手工 NRV 单价}（覆盖销售清单结果）。
+        """
+        prior_impairments = prior_impairments or {}
+        prior_qty = prior_qty or {}
+        manual_nrv = manual_nrv or {}
+        sales_records = sales_records or []
+
+        # 仅取本期（is_prior_year=False）数据
+        def _is_current(m: Any) -> bool:
+            if isinstance(m, dict):
+                return not m.get("is_prior_year", False)
+            return not bool(getattr(m, "is_prior_year", False))
+
+        cur = [m for m in movements if _is_current(m)]
+        # 按 material_code 聚合
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for m in cur:
+            d = m if isinstance(m, dict) else {
+                "material_code": getattr(m, "material_code", ""),
+                "material_name": getattr(m, "material_name", ""),
+                "category": getattr(m, "category", ""),
+                "opening_qty": getattr(m, "opening_qty", 0),
+                "opening_amount": getattr(m, "opening_amount", 0),
+                "inbound_qty": getattr(m, "inbound_qty", 0),
+                "inbound_amount": getattr(m, "inbound_amount", 0),
+                "outbound_qty": getattr(m, "outbound_qty", 0),
+                "outbound_amount": getattr(m, "outbound_amount", 0),
+                "ending_qty": getattr(m, "ending_qty", 0),
+                "ending_amount": getattr(m, "ending_amount", 0),
+                "unit_cost": getattr(m, "unit_cost", 0),
+                "inbound_date": getattr(m, "inbound_date", None),
+            }
+            code = str(d.get("material_code") or "").strip()
+            if not code:
+                continue
+            groups.setdefault(code, []).append(d)
+
+        rows: list[ImpairmentRow] = []
+        for code, ms in groups.items():
+            name = next((str(m.get("material_name") or "") for m in ms if m.get("material_name")), "")
+            category = next((str(m.get("category") or "") for m in ms if m.get("category")), "")
+            ending_qty = sum(float(m.get("ending_qty") or 0) for m in ms)
+            ending_amount = sum(float(m.get("ending_amount") or 0) for m in ms)
+            book_unit_cost = (ending_amount / ending_qty) if ending_qty > 0 else 0.0
+
+            if ending_qty <= 0:
+                # 已无库存的物料：若上年有跌价 → 全额转回（全部走"已售/已耗用"路径，进营业成本）
+                opening = float(prior_impairments.get(code, 0.0))
+                if opening > 0:
+                    rows.append(ImpairmentRow(
+                        material_code=code,
+                        material_name=name,
+                        category=category,
+                        period_end=period_end.strftime("%Y-%m-%d"),
+                        ending_qty=0.0, book_unit_cost=0.0, book_amount=0.0,
+                        aging=AgingBucket(),
+                        nrv_unit_price=None, nrv_source="无", nrv_amount=0.0,
+                        estimated_sell_cost=0.0,
+                        impairment_current=0.0,
+                        impairment_opening=opening,
+                        impairment_reversal=opening,
+                        impairment_provision=0.0,
+                        net_impairment_change=-opening,
+                        method="reversal",
+                        note="期末已无库存，上年跌价全额转回",
+                        reversal_to_cogs=opening,
+                        reversal_to_loss=0.0,
+                    ))
+                continue
+
+            aging = self.fifo_aging(ms, period_end)
+
+            # 账实差异检测：FIFO 推算后剩余数量与账面期末数偏离 > 5% → 在 note 标注
+            opening_qty_total = sum(float(m.get("opening_qty") or 0) for m in ms)
+            inbound_qty_total = sum(float(m.get("inbound_qty") or 0) for m in ms)
+            outbound_qty_total = sum(float(m.get("outbound_qty") or 0) for m in ms)
+            implied_ending = opening_qty_total + inbound_qty_total - outbound_qty_total
+            recon_note = ""
+            if ending_qty > 0 and abs(implied_ending - ending_qty) / ending_qty > 0.05:
+                recon_note = (
+                    f"⚠️ 账实差异：期初+入库-出库={implied_ending:.2f}，"
+                    f"账面期末={ending_qty:.2f}，差异 {(implied_ending - ending_qty):.2f}。"
+                    "请审计师查明差异原因后再依赖本行库龄/跌价结果。"
+                )
+
+            # NRV
+            nrv_unit: Optional[float] = None
+            nrv_src = "无"
+            sample_n = 0
+            if code in manual_nrv:
+                nrv_unit = float(manual_nrv[code])
+                nrv_src = "手工/外部询价"
+            else:
+                result = self.nrv_unit_price_from_sales(sales_records, code, period_end)
+                if result:
+                    nrv_unit, sample_n = result
+                    nrv_src = f"销售清单({sample_n}笔)"
+
+            if nrv_unit is not None:
+                est_sell_cost_unit = nrv_unit * self.sell_cost_rate
+                # 完工口径：原材料/在产品 NRV 还要扣"至完工的加工成本"
+                if self.is_completion_category(category) and self.completion_cost_rate > 0:
+                    completion_cost_unit = nrv_unit * self.completion_cost_rate
+                    method_label = "nrv-完工口径"
+                else:
+                    completion_cost_unit = 0.0
+                    method_label = "nrv-出售口径"
+                nrv_net_unit = max(0.0, nrv_unit - est_sell_cost_unit - completion_cost_unit)
+                nrv_amount = nrv_net_unit * ending_qty
+                est_sell_cost = (est_sell_cost_unit + completion_cost_unit) * ending_qty
+                if nrv_net_unit < book_unit_cost:
+                    impairment_current = (book_unit_cost - nrv_net_unit) * ending_qty
+                else:
+                    impairment_current = 0.0
+                method = method_label
+            else:
+                # fallback: 用库龄表
+                est_sell_cost = 0.0
+                nrv_amount = ending_amount
+                impairment_current = self.aging_impairment(ending_amount, aging, ending_qty)
+                method = "aging"
+
+            impairment_current = round(impairment_current, 2)
+
+            opening = float(prior_impairments.get(code, 0.0))
+            if impairment_current >= opening:
+                provision = impairment_current - opening
+                reversal = 0.0
+            else:
+                provision = 0.0
+                reversal = opening - impairment_current
+
+            # 转回拆分：按"已售出数量占上年期末数量的比例"分摊
+            # 已售出部分应随销售转销营业成本；仍在库部分才转回资产减值损失
+            reversal_to_cogs = 0.0
+            reversal_to_loss = reversal
+            py_qty = float(prior_qty.get(code, 0.0))
+            if reversal > 0 and py_qty > 0:
+                sold_qty = max(0.0, py_qty - ending_qty)
+                sold_ratio = min(1.0, sold_qty / py_qty)
+                reversal_to_cogs = reversal * sold_ratio
+                reversal_to_loss = reversal - reversal_to_cogs
+
+            rows.append(ImpairmentRow(
+                material_code=code,
+                material_name=name,
+                category=category,
+                period_end=period_end.strftime("%Y-%m-%d"),
+                ending_qty=round(ending_qty, 4),
+                book_unit_cost=round(book_unit_cost, 4),
+                book_amount=round(ending_amount, 2),
+                aging=aging,
+                nrv_unit_price=round(nrv_unit, 4) if nrv_unit is not None else None,
+                nrv_source=nrv_src,
+                nrv_amount=round(nrv_amount, 2),
+                estimated_sell_cost=round(est_sell_cost, 2),
+                impairment_current=impairment_current,
+                impairment_opening=round(opening, 2),
+                impairment_reversal=round(reversal, 2),
+                impairment_provision=round(provision, 2),
+                net_impairment_change=round(provision - reversal, 2),
+                method=method,
+                note=(recon_note + ("；" if recon_note and nrv_unit is None else "") +
+                      ("无期末后销售样本，按库龄比例兜底" if nrv_unit is None else "")).strip("；").strip(),
+                reversal_to_cogs=round(reversal_to_cogs, 2),
+                reversal_to_loss=round(reversal_to_loss, 2),
+            ))
+
+        # 汇总
+        summary = {
+            "items": len(rows),
+            "book_amount": round(sum(r.book_amount for r in rows), 2),
+            "opening_impairment": round(sum(r.impairment_opening for r in rows), 2),
+            "ending_impairment": round(sum(r.impairment_current for r in rows), 2),
+            "current_provision": round(sum(r.impairment_provision for r in rows), 2),
+            "current_reversal": round(sum(r.impairment_reversal for r in rows), 2),
+            "net_change": round(sum(r.net_impairment_change for r in rows), 2),
+            "aging_le_90": round(sum(r.aging.le_90 * r.book_unit_cost for r in rows), 2),
+            "aging_91_180": round(sum(r.aging.age_91_180 * r.book_unit_cost for r in rows), 2),
+            "aging_181_365": round(sum(r.aging.age_181_365 * r.book_unit_cost for r in rows), 2),
+            "aging_366_730": round(sum(r.aging.age_366_730 * r.book_unit_cost for r in rows), 2),
+            "aging_gt_730": round(sum(r.aging.gt_730 * r.book_unit_cost for r in rows), 2),
+        }
+
+        return ImpairmentResult(rows=rows, summary=summary)

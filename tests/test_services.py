@@ -25,10 +25,13 @@ class TestTrialBalanceService:
 
         result = TrialBalanceService.check_balance(df)
 
+        # 新版返回结构: { is_balanced, standalone: { beginning, current_period, ending } }
         assert "is_balanced" in result
-        assert "beginning" in result
-        assert "current_period" in result
-        assert "ending" in result
+        assert "standalone" in result
+        standalone = result["standalone"]
+        assert "beginning" in standalone
+        assert "current_period" in standalone
+        assert "ending" in standalone
 
     def test_get_account_summary(self):
         """Test account summary generation."""
