@@ -25,4 +25,5 @@ from app.core.database import Base  # noqa: F401  re-export 给子文件用
 from .account_audit import *  # noqa: F401, F403
 from .auth import *  # noqa: F401, F403
 from .notification import *  # noqa: F401, F403
+from .related_parties import *  # noqa: F401, F403
 from .report_template import *  # noqa: F401, F403

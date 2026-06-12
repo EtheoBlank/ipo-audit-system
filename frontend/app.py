@@ -233,6 +233,7 @@ def main():
             "📡 舆情跟踪",
             "🎨 报告模板",            # Pack A
             "🔔 通知中心",            # Pack A
+            "🤝 关联方专项",          # Pack B
             "🔐 系统管理",            # Pack A
         ]
     )
@@ -332,6 +333,12 @@ def main():
             show_notifications()
         except ImportError as exc:
             st.error(f"通知中心模块加载失败：{exc}")
+    elif page == "🤝 关联方专项":
+        try:
+            from frontend.pages_related_parties import show_related_parties
+            show_related_parties()
+        except ImportError as exc:
+            st.error(f"关联方专项模块加载失败：{exc}")
     elif page == "🔐 系统管理":
         try:
             from frontend.pages_auth import show_auth

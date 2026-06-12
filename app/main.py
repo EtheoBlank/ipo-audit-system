@@ -28,6 +28,8 @@ from app.api import (
     notifications as notifications_api,
     account_audit as account_audit_api,
     report_templates as report_templates_api,
+    # Pack B — 关联方专项
+    related_parties as related_parties_api,
 )
 
 logger = logging.getLogger(__name__)
@@ -254,6 +256,8 @@ def create_app() -> FastAPI:
     app.include_router(notifications_api.router)
     app.include_router(account_audit_api.router)
     app.include_router(report_templates_api.router)
+    # Pack B — 关联方专项
+    app.include_router(related_parties_api.router)
 
     # Health check endpoint
     @app.get("/health", tags=["系统"])
