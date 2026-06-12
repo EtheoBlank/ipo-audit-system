@@ -29,10 +29,11 @@ WORKDIR /app
 # 先复制锁文件, 利用 Docker layer cache: pyproject.toml/uv.lock 不变时这一层不重建
 COPY pyproject.toml uv.lock ./
 
-# --frozen 严格按 uv.lock 装, --no-dev 不装 pytest/ruff 等开发依赖,
-# 不带 .[ocr] / .[scraper] 避免 paddlepaddle (4GB+) 与 chromium 二进制
-# (代码已是 lazy import + 降级, 启动不会爆, 对应功能在 README 标注不可用)
-RUN uv sync --frozen --no-dev
+# --no-install-project 让 uv 只装 runtime 依赖, 不构建 hatchling 项目本身 —
+# 源码由下一段 COPY 进来, 通过 PYTHONPATH 让 uvicorn 找到 app.main。
+# 这样绕开 hatchling wheel build 的环境问题, 同时保持 uv.lock 锁定的精确版本。
+# --no-dev 不装 pytest/ruff 等开发依赖, 不带 .[ocr] / .[scraper] 避免 paddlepaddle (4GB+) 与 chromium 二进制
+RUN uv sync --frozen --no-dev --no-install-project
 
 # ---------- 源码层 ----------
 # templates/ 仓库里只有 .gitkeep (空目录占位),COPY 不会失败;
@@ -57,8 +58,9 @@ RUN mkdir -p /data/uploads /data/outputs /data/templates /data/uploads/knowledge
 # 8000 = FastAPI    (容器内服务, 不外露)
 EXPOSE 7860 8000
 
-# 默认环境变量 — 可被 HF Space 的 Variables and secrets 覆盖
-ENV HOST=0.0.0.0 \
+# 让 uvicorn / streamlit 找到源码 (绕开 hatchling wheel build)
+ENV PYTHONPATH=/app \
+    HOST=0.0.0.0 \
     PORT=8000 \
     API_BASE_URL=http://localhost:8000 \
     DEBUG=false \
