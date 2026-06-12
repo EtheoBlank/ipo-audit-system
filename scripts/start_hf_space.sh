@@ -43,12 +43,13 @@ trap cleanup SIGTERM SIGINT EXIT
 # ---------- 1. 后台拉 uvicorn ----------
 log "启动 FastAPI (uvicorn) on 0.0.0.0:${API_PORT}..."
 # 直接调 venv 里的 uvicorn, 跳过 `uv run` 的隐式 sync + editable build
+# 输出同时写到 /tmp/uvicorn.log (持久) + stdout (HF runtime log 抓得到,方便看 traceback)
 PYTHONPATH=/app "${VENV_BIN}/uvicorn" app.main:app \
     --host 0.0.0.0 \
     --port "${API_PORT}" \
     --no-access-log \
     --log-level info \
-    > "${UVICORN_LOG}" 2>&1 &
+    2>&1 | tee "${UVICORN_LOG}" &
 UVICORN_PID=$!
 log "uvicorn PID=${UVICORN_PID}, 日志: ${UVICORN_LOG}"
 
