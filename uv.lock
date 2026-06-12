@@ -1549,7 +1549,6 @@ dependencies = [
     { name = "httpx" },
     { name = "lxml" },
     { name = "openpyxl" },
-    { name = "paddleocr" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "passlib", extra = ["bcrypt"] },
@@ -1562,7 +1561,6 @@ dependencies = [
     { name = "pyyaml" },
     { name = "redis" },
     { name = "reportlab" },
-    { name = "selenium" },
     { name = "sqlalchemy" },
     { name = "streamlit" },
     { name = "tabulate" },
@@ -1580,6 +1578,12 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
+ocr = [
+    { name = "paddleocr" },
+]
+scraper = [
+    { name = "selenium" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1595,7 +1599,7 @@ requires-dist = [
     { name = "lxml", specifier = ">=4.9.3" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
     { name = "openpyxl", specifier = ">=3.1.2" },
-    { name = "paddleocr", specifier = ">=2.7.0" },
+    { name = "paddleocr", marker = "extra == 'ocr'", specifier = ">=2.7.0" },
     { name = "pandas", specifier = ">=2.1.0" },
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
     { name = "pdfplumber", specifier = ">=0.10.0" },
@@ -1612,14 +1616,14 @@ requires-dist = [
     { name = "redis", specifier = ">=5.0.1" },
     { name = "reportlab", specifier = ">=4.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.8" },
-    { name = "selenium", specifier = ">=4.15.0" },
+    { name = "selenium", marker = "extra == 'scraper'", specifier = ">=4.15.0" },
     { name = "sqlalchemy", specifier = ">=2.0.25" },
     { name = "streamlit", specifier = ">=1.30.0" },
     { name = "tabulate", specifier = ">=0.9.0" },
     { name = "tenacity", specifier = ">=8.2.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.27.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["ocr", "scraper", "dev"]
 
 [[package]]
 name = "itsdangerous"
