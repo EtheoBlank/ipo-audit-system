@@ -114,6 +114,8 @@ uv run streamlit run frontend/app.py
 - 📕 **API 文档(ReDoc)**: <http://localhost:8000/redoc>
 - ❤️ **健康检查**: <http://localhost:8000/health>
 
+> 💡 **不想本地装?** 直接打开 [**🌐 在线体验**](https://etheozheng-etheoblank.hf.space) 试用已部署到 Hugging Face Space 的版本(功能完全相同,首次冷启 ~30s)。
+
 > 完整使用教程含截图位 + 故障排查 FAQ,请看 [docs/usage.md](docs/usage.md)
 
 ---
