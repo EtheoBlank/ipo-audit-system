@@ -1,3 +1,17 @@
+---
+title: IPO 审计系统
+emoji: 📊
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+license: mit
+short_description: 自动化 IPO 审计底稿生成与数据分析工具 · FastAPI + Streamlit
+---
+
+> 上面的 YAML 是 [Hugging Face Spaces (Docker SDK)](https://huggingface.co/docs/hub/spaces-config-reference) 的元数据,GitHub 渲染时会被当成普通代码块忽略,不影响阅读。
+
 <div align="center">
 
 # 🏛️ IPO Audit System
@@ -15,8 +29,10 @@
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000)](https://github.com/astral-sh/ruff)
+[![Hugging Face Space](https://img.shields.io/badge/%F0%9F%A4%97%20Live%20Demo-HF%20Space-orange?logo=huggingface&logoColor=white)](https://huggingface.co/spaces/EtheoZheng/EtheoBlank)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/EtheoBlank/ipo-audit-system/pulls)
 
+[🤗 在线体验](https://huggingface.co/spaces/EtheoZheng/EtheoBlank) ·
 [📖 使用教程](docs/usage.md) ·
 [🚀 30 秒快速开始](#-30-秒快速开始) ·
 [🧩 模块全景](#-模块全景13-大模块) ·
@@ -330,6 +346,86 @@ ipo-audit-system/
 
 ---
 
+## 🤗 部署到 Hugging Face Spaces
+
+> **在线体验:** <https://huggingface.co/spaces/EtheoZheng/EtheoBlank>
+>
+> 点开链接即可使用 IPO 审计系统的全部 Web 功能 —— 不需要 clone 代码、不需要装 Python、不需要任何 API Key 也能跑(只是 AI 模块会降级)。
+
+### 架构
+
+单容器双进程(Docker SDK 模式),只对外暴露 **7860** 一个端口:
+
+| 进程 | 容器内端口 | 暴露 | 说明 |
+|---|---|---|---|
+| Streamlit | 7860 | ✅ | 用户浏览器入口(HF Space 唯一外露) |
+| uvicorn  | 8000 | ❌ | FastAPI 后端,仅供 Streamlit 服务端调用 |
+
+Streamlit → FastAPI 是**服务端到服务端** HTTP 调用,不经浏览器,所以**完全不存在 CORS 跨域问题**,也不需要反向代理。
+
+### 已有 Space 的快速体验
+
+1. 打开 <https://huggingface.co/spaces/EtheoZheng/EtheoBlank>
+2. 等 Streamlit 加载完成(冷启动 30s~1min)
+3. 直接用 — 数据导入 / 试算平衡 / 底稿生成 / 监管案例 / 法规库 / 知识库 / 项目组管理 / 收发存盘点等**全部本地能用的功能**在这里都能用
+
+### 已知限制 (Demo 性质)
+
+| 限制 | 影响 | 说明 |
+|---|---|---|
+| **SQLite 数据库不持久化** | 容器重启 / 重新构建后,所有项目/AI 简报/知识库索引都清零 | HF Space Docker 模式不持久化容器内任意路径。如果要做真实项目,**本地或自托管部署** |
+| **未装 OCR (`paddleocr`)** | "收发存盘点 → 拍照 OCR 回填" 模块无法运行 | paddlepaddle 4GB+,塞进镜像不现实;代码已是 lazy import + 降级,启动不会爆 |
+| **未装 Selenium** | "监管案例" 模块的 Selenium 抓取路径被禁用,走 BeautifulSoup+httpx 路径 | Chromium 二进制 HF Space 装不上 |
+| **只外露 7860** | 容器内 FastAPI 的 `/docs` `/redoc` `/health` 无法从公网访问 | 调试可在本地 `docker run -p 8000:8000` 临时打开 |
+| **磁盘写入丢** | 上传的 Excel / 生成的底稿 / 知识库原书 都在容器内,重启清零 | 同 SQLite 限制 |
+
+### 自行部署到自己的 HF Space
+
+适合要自定义、跑真实数据、或想长期 demo 的用户:
+
+1. **fork 本仓库** 到你自己的 GitHub 账号
+2. 在 [huggingface.co/new-space](https://huggingface.co/new-space) 创建 Space:
+   - **Space SDK**: `Docker`
+   - **Space hardware**: `CPU basic` (免费档足够,首次构建会下载 `paddlepaddle` 之外的纯 Python 依赖)
+   - **Repository**: 选你 fork 后的仓库
+3. 等首次构建完成(5~10 分钟,看 `uv sync` 速度)
+4. 配置环境变量(可选,只有用 AI 模块才需要):
+   - 进 Space 的 `Settings` → `Variables and secrets`
+   - `DEEPSEEK_API_KEY` = 你的 DeepSeek Key
+   - `MINIMAX_API_KEY` = 你的 MiniMax Key
+   - `KB_EMBEDDING_PROVIDER` = `minimax` 或 `deepseek`(默认 `tfidf` 不需要 key)
+5. 访问你的 Space URL,功能与官方 demo 一致
+
+### 本地用 Docker 验证
+
+```bash
+# 1. 构建
+docker build -t ipo-audit:test .
+
+# 2. 启动(同时映射 7860 和 8000,后者用于本地看 API 文档)
+docker run -p 7860:7860 -p 8000:8000 --name ipo-audit-test ipo-audit:test
+
+# 3. 浏览器访问
+#    Web UI:  http://localhost:7860
+#    API 文档: http://localhost:8000/docs
+#    健康检查: curl http://localhost:8000/health
+
+# 4. 清理
+docker stop ipo-audit-test && docker rm ipo-audit-test
+```
+
+### 部署相关文件
+
+| 文件 | 作用 |
+|---|---|
+| `Dockerfile` | 镜像构建 — uv 装依赖 + 复制源码 |
+| `.dockerignore` | 排除 .venv / .git / 真实 .env / 测试代码 等 |
+| `scripts/start_hf_space.sh` | 容器内入口 — 后台 uvicorn + 前台 streamlit |
+| `.streamlit/config.toml` | Streamlit 配置 — headless / 7860 / 关 XSRF(嵌 iframe 需要) |
+| `frontend/app.py` | `API_BASE_URL` 改成读 `os.environ.get(...)` |
+
+---
+
 ## 🛠️ 技术栈
 
 | 层 | 选型 | 为什么 |
@@ -429,7 +525,7 @@ uv run pre-commit run --all-files
 - [ ] **Phase 16**: 内控穿行测试模板化
 - [ ] **Phase 17**: 跨期调整 / 合同资产 / 合同负债自动化
 - [ ] **Phase 18**: 多用户 / 权限 / 审计轨迹(audit trail)
-- [ ] **Phase 19**: 容器化(Docker Compose 一键起栈)
+- [x] **Phase 19**: 容器化(Docker 一键起栈 + [HF Space 部署](https://huggingface.co/spaces/EtheoZheng/EtheoBlank))
 - [ ] **Phase 20**: 报告模板自定义化(事务所品牌)
 
 ---

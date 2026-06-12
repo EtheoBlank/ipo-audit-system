@@ -1,10 +1,21 @@
 """Streamlit frontend for IPO Audit System - 全功能版."""
+import os
+
 import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime
 
-API_BASE_URL = "http://localhost:8000"
+# 后端 API 基础地址。
+#
+# 默认值 "http://localhost:8000" 同时适用于:
+#   1. 本地开发 (uvicorn :8000 + streamlit :8501/7860)
+#   2. Hugging Face Space 单容器双进程部署 (uvicorn :8000 + streamlit :7860)
+#      — Streamlit 通过服务端 HTTP 调 FastAPI, 浏览器只连 Streamlit 的 7860。
+#
+# 如果未来要把前端/后端拆成两个独立 Space 部署, 在 HF Space 的
+# "Variables and secrets" 里覆盖 API_BASE_URL 为后端 Space 的公网 URL 即可。
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
 st.set_page_config(
     page_title="IPO审计系统",

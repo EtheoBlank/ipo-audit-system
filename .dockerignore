@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+
+# 虚拟环境 (uv 在容器内重新建)
+.venv/
+venv/
+env/
+
+# 测试 / 缓存
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Git / CI / IDE
+.git/
+.gitignore
+.gitattributes
+.github/
+.idea/
+.vscode/
+.claude/
+
+# 配置 (真实 key 保护 — 部署到 HF Space 用 secrets 面板注入, 不要 .env)
+.env
+.env.local
+.env.*.local
+
+# 数据库 / 上传 / 输出 (HF Space 不持久化, 且 .gitignore 已排除)
+*.db
+*.sqlite
+*.sqlite3
+uploads/*
+!uploads/.gitkeep
+outputs/*
+!outputs/.gitkeep
+
+# 文档 / 测试源码 (运行不需要)
+docs/
+tests/
+*.md.orig
+
+# 大文件 / 数据
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+pre-commit-config.yaml
+*.yaml
+!streamlit/.streamlit/config.toml 2>/dev/null || true

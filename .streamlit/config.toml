@@ -1,0 +1,36 @@
+# Streamlit 配置 — Hugging Face Space 部署专用
+#
+# 这里所有选项都是 streamlit run --server.X=Y 的等价配置文件。
+# 留在这里既给本地启动脚本兜底, 也让 streamlit 进程在 HF 容器内行为一致。
+#
+# 关键说明:
+#   * headless=true  — 容器内没有浏览器, 必须 headless
+#   * port/address   — HF Space 唯一外露 7860, 容器内绑 0.0.0.0
+#   * enableCORS=false / enableXsrfProtection=false
+#     HF 把 Space 嵌在 huggingface.co 的 iframe 里, Streamlit 默认的
+#     XSRF 校验会拒掉跨站 POST, 必须关掉 (Streamlit 1.x 的 issue #4870)
+#   * gatherUsageStats=false — 关闭遥测, 减少容器内网络请求
+
+[server]
+headless = true
+port = 7860
+address = "0.0.0.0"
+enableCORS = false
+enableXsrfProtection = false
+runOnSave = false
+fileWatcherType = "none"   # 容器内不需要热重载, 关掉省 CPU
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#4472C4"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"    # 隐藏 streamlit 工具栏的 "rerun"/"clear" 冗余 UI
+showErrorDetails = false   # 生产环境不暴露 traceback
