@@ -32,6 +32,8 @@ from app.api import (
     related_parties as related_parties_api,
     # Pack C — 10 个审计循环
     audit_cycles as audit_cycles_api,
+    # Pack D — IPO 专属 (内控/截止性/招股书/可比公司/反馈/申报清单)
+    ipo_specials as ipo_specials_api,
 )
 
 logger = logging.getLogger(__name__)
@@ -262,6 +264,8 @@ def create_app() -> FastAPI:
     app.include_router(related_parties_api.router)
     # Pack C — 10 个审计循环
     app.include_router(audit_cycles_api.router)
+    # Pack D — IPO 专属
+    app.include_router(ipo_specials_api.router)
 
     # Health check endpoint
     @app.get("/health", tags=["系统"])

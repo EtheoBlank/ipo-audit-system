@@ -235,6 +235,7 @@ def main():
             "🔔 通知中心",            # Pack A
             "🤝 关联方专项",          # Pack B
             "🔄 审计循环 (Pack C)",    # Pack C
+            "🎯 IPO 专属 (Pack D)",    # Pack D
             "🔐 系统管理",            # Pack A
         ]
     )
@@ -346,6 +347,12 @@ def main():
             show_audit_cycles()
         except ImportError as exc:
             st.error(f"审计循环模块加载失败：{exc}")
+    elif page == "🎯 IPO 专属 (Pack D)":
+        try:
+            from frontend.pages_ipo_specials import show_ipo_specials
+            show_ipo_specials()
+        except ImportError as exc:
+            st.error(f"IPO 专属模块加载失败：{exc}")
     elif page == "🔐 系统管理":
         try:
             from frontend.pages_auth import show_auth
