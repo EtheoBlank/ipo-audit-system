@@ -108,6 +108,41 @@ class Settings(BaseSettings):
     # CORS settings
     CORS_ORIGINS: str = "http://localhost:8501,http://localhost:3000"  # comma-separated
 
+    # === 多用户 / 权限 / 审计轨迹 (Pack A — Roadmap Phase 18) ===
+    # 总开关: false 时跳过认证 (兼容现网无认证旧调用), true 时所有写端点必须 Bearer 令牌
+    AUTH_ENABLED: bool = False
+    # JWT 配置 — 生产部署必须把 JWT_SECRET 改成 >=32 字节随机串
+    JWT_SECRET: str = "ipo-audit-dev-only-change-in-prod-please-use-secrets-token-urlsafe-32"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_EXPIRE_MINUTES: int = 60
+    JWT_REFRESH_EXPIRE_DAYS: int = 7
+    BCRYPT_ROUNDS: int = 12
+    # 登录失败超过此次数自动锁定账号 (0 = 不锁定)
+    AUTH_MAX_FAILED_LOGIN: int = 10
+    # 默认管理员 — 首次启动若 DB 没用户则自动创建 (生产请改密码)
+    AUTH_BOOTSTRAP_ADMIN_USERNAME: str = "admin"
+    AUTH_BOOTSTRAP_ADMIN_PASSWORD: str = "Admin@1234"
+    AUTH_BOOTSTRAP_ADMIN_FULL_NAME: str = "系统管理员"
+    AUTH_BOOTSTRAP_FIRM_NAME: str = "默认事务所"
+    # 审计轨迹: 仅记录写操作 (POST/PUT/DELETE/PATCH); GET 不落库避免噪声
+    AUDIT_LOG_WRITE_ONLY: bool = True
+    # 审计轨迹: payload 截断长度 (字符), 0 = 不存 payload
+    AUDIT_LOG_PAYLOAD_MAX_CHARS: int = 4000
+    # 审计轨迹: 这些 path 前缀不落库 (健康检查/静态资源/Swagger 等)
+    AUDIT_LOG_EXCLUDE_PATHS: str = "/health,/docs,/redoc,/openapi.json,/favicon.ico"
+
+    # === 长期资产发生额审定 (Pack A — 用户特别要求) ===
+    # 默认前缀清单在 app/models/db/account_audit.py:DEFAULT_LONG_TERM_ASSET_PREFIXES
+    # 这里允许全局额外追加 / 排除 (用逗号分隔的科目编码前缀, 项目级覆盖优先)
+    LONG_TERM_ASSET_EXTRA_INCLUDES: str = ""
+    LONG_TERM_ASSET_EXTRA_EXCLUDES: str = ""
+
+    # === 报告模板 (Pack A — Roadmap Phase 20) ===
+    REPORT_TEMPLATE_DIR: Path = Path("./templates/reports")
+    REPORT_OUTPUT_DIR: Path = Path("./outputs/reports")
+    REPORT_TEMPLATE_MAX_SIZE: int = 20 * 1024 * 1024   # 20MB
+    REPORT_TEMPLATE_ALLOWED_EXTS: str = ".docx,.xlsx,.dotx,.xltx"
+
     def ensure_dirs(self) -> None:
         """Create required directories if they don't exist.
 
@@ -120,6 +155,8 @@ class Settings(BaseSettings):
             self.TEMPLATE_DIR,
             self.KNOWLEDGE_BASE_DIR,
             self.SENTIMENT_OUTPUT_DIR,
+            self.REPORT_TEMPLATE_DIR,
+            self.REPORT_OUTPUT_DIR,
         ):
             d.mkdir(parents=True, exist_ok=True)
             logger.debug("Ensured directory exists: %s", d)

@@ -1,9 +1,23 @@
-"""SQLAlchemy database models for IPO Audit System."""
+"""SQLAlchemy database models for IPO Audit System.
+
+模块化拆分: 新增的 ORM (Pack A/B/C/D 等) 一律放到 ``app/models/db/<module>.py``
+子文件里, 本文件在顶部统一 ``from app.models.db import *`` 聚合, 保证:
+  - 现有 ``from app.models.db_models import X`` 调用 100% 兼容
+  - 新表通过子模块 ``__all__`` 透出后 ``Base.metadata`` 完整收齐
+  - 单文件不再无限膨胀
+
+老模型 (Project / AccountBalance / ConfirmationCase / Sentiment* / TeamMember
+等) 暂时仍在本文件里, 后续重构按需迁移; 迁移时只需把类剪到子文件、
+本文件保留 import 即可, 调用方无感知。
+"""
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import String, Text, Float, Integer, DateTime, ForeignKey, Boolean, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
+
+# 子模块聚合 — 新增模块在 app/models/db/__init__.py 加一行即可
+from app.models.db import *  # noqa: F401, F403
 
 
 def _utcnow() -> datetime:
