@@ -38,6 +38,10 @@ RUN uv sync --frozen --no-dev --no-install-project
 # ---------- 源码层 ----------
 # templates/ 仓库里只有 .gitkeep (空目录占位),COPY 不会失败;
 # 实际目录由 app/core/config.py:ensure_dirs() 在启动时建,或由 HF 持久卷覆盖。
+# README.md 必须 COPY — pyproject.toml [project] readme = "README.md",而 start_hf_space.sh
+# 里的 `uv run uvicorn ...` 会触发隐式 sync + editable build,hatchling 校验 readme 字段时
+# 若 README.md 不在 CWD 就直接 OSError("Readme file does not exist")。
+COPY README.md ./
 COPY app ./app
 COPY frontend ./frontend
 COPY scripts ./scripts
