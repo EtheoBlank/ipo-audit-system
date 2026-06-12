@@ -40,6 +40,33 @@ cleanup() {
 }
 trap cleanup SIGTERM SIGINT EXIT
 
+# ---------- 0. 启动诊断: 确认 DB 路径 + 持久卷 + 表是否存在 ----------
+log "=== 启动诊断 ==="
+log "DATABASE_URL=${DATABASE_URL:-<未设置>}"
+log "DEBUG=${DEBUG:-<未设置>}"
+log "/data 存在: $(test -d /data && echo yes || echo NO)"
+log "/data 可写: $(test -w /data && echo yes || echo NO)"
+ls -la /data/ 2>/dev/null | head -5 || log "(ls /data 失败)"
+log "=== 显式跑一次 init_db + 列出所有表 (绕开 uvicorn lifespan) ==="
+PYTHONPATH=/app "${VENV_BIN}/python" -c "
+import asyncio
+from app.core.config import settings
+from app.core.database import init_db, engine, Base
+import app.models.db_models  # 强制注册
+print('DATABASE_URL 实际值 =', settings.DATABASE_URL)
+print('Base.metadata.tables =', sorted(Base.metadata.tables.keys())[:10], '... 共', len(Base.metadata.tables), '张表')
+asyncio.run(init_db())
+print('init_db() 完成')
+# 列一下表
+async def list_tables():
+    from sqlalchemy import text
+    async with engine.begin() as conn:
+        r = await conn.execute(text(\"SELECT name FROM sqlite_master WHERE type='table'\"))
+        print('sqlite_master 表 =', [row[0] for row in r.fetchall()])
+asyncio.run(list_tables())
+" 2>&1
+log "=== 诊断结束 ==="
+
 # ---------- 1. 后台拉 uvicorn ----------
 log "启动 FastAPI (uvicorn) on 0.0.0.0:${API_PORT}..."
 # 直接调 venv 里的 uvicorn, 跳过 `uv run` 的隐式 sync + editable build
