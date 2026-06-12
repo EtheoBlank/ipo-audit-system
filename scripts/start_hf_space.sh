@@ -40,32 +40,17 @@ cleanup() {
 }
 trap cleanup SIGTERM SIGINT EXIT
 
-# ---------- 0. 启动诊断: 确认 DB 路径 + 持久卷 + 表是否存在 ----------
-log "=== 启动诊断 ==="
-log "DATABASE_URL=${DATABASE_URL:-<未设置>}"
-log "DEBUG=${DEBUG:-<未设置>}"
-log "/data 存在: $(test -d /data && echo yes || echo NO)"
-log "/data 可写: $(test -w /data && echo yes || echo NO)"
-ls -la /data/ 2>/dev/null | head -5 || log "(ls /data 失败)"
-log "=== 显式跑一次 init_db + 列出所有表 (绕开 uvicorn lifespan) ==="
+# ---------- 0. 预 init: 在 uvicorn 启动前先把 DB 表建好 ----------
+# 兜底 uvicorn lifespan 里 init_db() 的潜在 race (Base.metadata 时机问题)。
+# 这里先建,后续 uvicorn lifespan 再 init_db 是 noop (create_all idempotent)。
+log "=== 预建 DB 表 (兜底) ==="
 PYTHONPATH=/app "${VENV_BIN}/python" -c "
 import asyncio
-from app.core.config import settings
-from app.core.database import init_db, engine, Base
-import app.models.db_models  # 强制注册
-print('DATABASE_URL 实际值 =', settings.DATABASE_URL)
-print('Base.metadata.tables =', sorted(Base.metadata.tables.keys())[:10], '... 共', len(Base.metadata.tables), '张表')
+from app.core.database import init_db
 asyncio.run(init_db())
-print('init_db() 完成')
-# 列一下表
-async def list_tables():
-    from sqlalchemy import text
-    async with engine.begin() as conn:
-        r = await conn.execute(text(\"SELECT name FROM sqlite_master WHERE type='table'\"))
-        print('sqlite_master 表 =', [row[0] for row in r.fetchall()])
-asyncio.run(list_tables())
+print('✅ 预建表完成')
 " 2>&1
-log "=== 诊断结束 ==="
+log "=== 预 init 完成 ==="
 
 # ---------- 1. 后台拉 uvicorn ----------
 log "启动 FastAPI (uvicorn) on 0.0.0.0:${API_PORT}..."

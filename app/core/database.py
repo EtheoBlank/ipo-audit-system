@@ -9,6 +9,16 @@ class Base(DeclarativeBase):
     pass
 
 
+# 关键: 在模块加载时 (而不是 lifespan 中) 显式 import 所有 ORM 模型,
+# 确保 Base.metadata 在任何 lifespan/请求之前就注册了所有表。
+# 原因: HF Space 用 Docker 时, 我们走 --no-install-project 模式 (源码从 /app 通过
+# PYTHONPATH 加载), 第一次 uvicorn 启动时 `import app.api.projects` 会触发
+# `app.models.db_models` 加载, 但有些启动顺序下 (比如 app.api.* 在 lifespan
+# 之后才被 import) 会导致 Base.metadata 为空, create_all 不会建任何表,
+# 后续 SELECT 报 "no such table"。
+import app.models.db_models  # noqa: F401, E402
+
+
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
@@ -38,10 +48,10 @@ async def get_db() -> AsyncSession:
 
 
 async def init_db() -> None:
-    """Initialize database tables.
+    """Initialize database tables (idempotent — safe to call multiple times).
 
-    关键: 在 create_all 之前必须显式 import 所有 ORM 模块,
-    否则 Base.metadata 为空, 不会有任何表被建 (尤其新加表后忘记 import 会导致数据丢失).
+    关键: 在 create_all 之前必须显式 import 所有 ORM 模块, 否则 Base.metadata 为空,
+    不会有任何表被建 (尤其新加表后忘记 import 会导致数据丢失).
     """
     # 显式 import 所有 ORM 模型 — SQLAlchemy 靠 import-time 注册
     import app.models.db_models  # noqa: F401
