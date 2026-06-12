@@ -6,7 +6,42 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.chart import BarChart, LineChart, Reference
 from pathlib import Path
 from datetime import datetime
+from typing import Iterable, Optional, Sequence
+
 from app.core.config import settings
+
+# 长期资产判定 — 与 account_audit 服务共用同一份默认前缀清单
+from app.models.db.account_audit import DEFAULT_LONG_TERM_ASSET_PREFIXES
+
+
+def _csv_prefixes(raw: Optional[str]) -> list[str]:
+    if not raw:
+        return []
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def is_long_term_asset_account(
+    account_code: str,
+    extra_includes: Optional[Sequence[str]] = None,
+    extra_excludes: Optional[Sequence[str]] = None,
+) -> bool:
+    """快速判定: 该科目是否长期资产 (用户特别要求, 发生额需逐笔审定).
+
+    项目级覆盖需要由调用方传 ``extra_includes`` / ``extra_excludes``
+    (来自 ``app.services.account_audit.get_effective_prefixes``).
+    无传入时使用全局默认 + ``settings.LONG_TERM_ASSET_EXTRA_INCLUDES`` /
+    ``LONG_TERM_ASSET_EXTRA_EXCLUDES``.
+    """
+    if not account_code:
+        return False
+    base = set(DEFAULT_LONG_TERM_ASSET_PREFIXES)
+    base |= set(extra_includes or _csv_prefixes(settings.LONG_TERM_ASSET_EXTRA_INCLUDES))
+    base -= set(extra_excludes or _csv_prefixes(settings.LONG_TERM_ASSET_EXTRA_EXCLUDES))
+    code = str(account_code).strip()
+    for p in base:
+        if code.startswith(p):
+            return True
+    return False
 
 
 class WorkbookGenerator:
@@ -484,3 +519,271 @@ class WorkbookGenerator:
 
         wb.save(workbook_path)
         return workbook_path
+
+    # ============================================================
+    #  长期资产发生额审定 (用户特别要求 — Pack A)
+    # ============================================================
+
+    def generate_long_term_asset_workbook(
+        self,
+        account_code: str,
+        account_name: str,
+        period_end: str,
+        balance_direction: str,
+        beginning_book: float,
+        beginning_audited: float,
+        ending_book: float,
+        ending_audited: float,
+        debit_rows: Iterable[dict],
+        credit_rows: Iterable[dict],
+    ) -> Path:
+        """生成长期资产专项底稿 (期初/借方/贷方/期末 都出审定数).
+
+        长期资产科目要求: 不仅期初期末有审定数, 本期借方和贷方发生额也要逐笔审定。
+        本方法生成的底稿包含 4 个 sheet:
+          1. 封面 + 余额汇总(审定 vs 账面, 恒等式校验)
+          2. 借方发生额明细 (审定逐笔)
+          3. 贷方发生额明细 (审定逐笔)
+          4. 调整分录汇总 (audited != book 的所有行)
+
+        Args:
+            account_code: 科目编码 (如 1601)
+            account_name: 科目名称 (如 固定资产)
+            period_end: 期末日期 YYYY-MM-DD
+            balance_direction: 余额方向 借/贷
+            beginning_book/audited: 期初账面/审定
+            ending_book/audited: 期末账面/审定
+            debit_rows: 借方发生额行, 每行 dict 含
+                voucher_date / voucher_no / summary / counter_account /
+                book_amount / audited_amount / adjustment_amount /
+                adjustment_reason / working_paper_ref / status / audited_by_display
+            credit_rows: 贷方发生额行 (字段同上)
+
+        Returns:
+            Path 生成的 Excel 文件
+        """
+        debit_list = list(debit_rows)
+        credit_list = list(credit_rows)
+
+        wb = Workbook()
+        styles = self._get_styles()
+
+        # === Sheet 1: 余额汇总 + 恒等式校验 ===
+        ws_sum = wb.active
+        ws_sum.title = "余额汇总"
+        ws_sum.merge_cells("A1:G1")
+        title = ws_sum["A1"]
+        title.value = f"{self.company_name} - {account_code} {account_name} 长期资产底稿 (期末 {period_end})"
+        title.font = styles["title_font"]
+        title.alignment = styles["center_align"]
+        ws_sum.row_dimensions[1].height = 30
+
+        # 表头
+        headers = ["项目", "账面金额", "审定金额", "审计调整", "调整方向", "占比", "备注"]
+        for col, h in enumerate(headers, 1):
+            ws_sum.cell(row=3, column=col, value=h)
+            self._apply_header_style(ws_sum, 3, col)
+        ws_sum.row_dimensions[3].height = 24
+
+        debit_book_total = sum(float(r.get("book_amount", 0) or 0) for r in debit_list)
+        debit_audited_total = sum(float(r.get("audited_amount", 0) or 0) for r in debit_list)
+        credit_book_total = sum(float(r.get("book_amount", 0) or 0) for r in credit_list)
+        credit_audited_total = sum(float(r.get("audited_amount", 0) or 0) for r in credit_list)
+
+        is_debit_acc = balance_direction == "借"
+
+        def _row(name: str, book: float, audited: float, ratio_base: float = 0.0) -> list:
+            adj = audited - book
+            direction = "增加" if adj > 0 else ("减少" if adj < 0 else "无")
+            ratio = (audited / ratio_base * 100) if ratio_base else 0
+            return [name, book, audited, adj, direction, f"{ratio:.2f}%" if ratio_base else "-", ""]
+
+        rows = [
+            _row("期初余额", beginning_book, beginning_audited),
+            _row("本期借方发生额合计", debit_book_total, debit_audited_total),
+            _row("本期贷方发生额合计", credit_book_total, credit_audited_total),
+            _row("期末余额", ending_book, ending_audited),
+        ]
+        # 恒等式校验: 借方科目 期初 + 借 - 贷 - 期末 = 0; 贷方科目反过来
+        if is_debit_acc:
+            identity_book = beginning_book + debit_book_total - credit_book_total - ending_book
+            identity_audited = (
+                beginning_audited + debit_audited_total - credit_audited_total - ending_audited
+            )
+        else:
+            identity_book = beginning_book - debit_book_total + credit_book_total - ending_book
+            identity_audited = (
+                beginning_audited - debit_audited_total + credit_audited_total - ending_audited
+            )
+
+        for r_idx, row in enumerate(rows, start=4):
+            for col, val in enumerate(row, 1):
+                ws_sum.cell(row=r_idx, column=col, value=val)
+                self._apply_data_style(ws_sum, r_idx, col, is_number=col in (2, 3, 4))
+
+        # 恒等式校验行 — 不平时标红
+        check_row = 4 + len(rows) + 1
+        ws_sum.cell(row=check_row, column=1, value="账面恒等式 (期初+借-贷-期末)")
+        ws_sum.cell(row=check_row, column=2, value=round(identity_book, 2))
+        ws_sum.cell(row=check_row + 1, column=1, value="审定恒等式 (审定值)")
+        ws_sum.cell(row=check_row + 1, column=2, value=round(identity_audited, 2))
+        balanced_book = abs(identity_book) < 0.01
+        balanced_audited = abs(identity_audited) < 0.01
+        ws_sum.cell(
+            row=check_row, column=4, value="✅ 平衡" if balanced_book else "❌ 不平衡"
+        )
+        ws_sum.cell(
+            row=check_row + 1, column=4, value="✅ 平衡" if balanced_audited else "❌ 不平衡"
+        )
+        if not balanced_audited:
+            for c in range(1, 8):
+                cell = ws_sum.cell(row=check_row + 1, column=c)
+                cell.fill = PatternFill(
+                    start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"
+                )
+
+        # 列宽
+        for idx, w in enumerate([26, 18, 18, 18, 12, 12, 30], 1):
+            ws_sum.column_dimensions[chr(64 + idx)].width = w
+
+        # === Sheet 2 / 3: 借/贷方发生额明细 ===
+        for sheet_name, source_rows in (
+            ("借方发生额(审定)", debit_list),
+            ("贷方发生额(审定)", credit_list),
+        ):
+            ws = wb.create_sheet(sheet_name)
+            ws.merge_cells("A1:J1")
+            t = ws["A1"]
+            t.value = f"{account_code} {account_name} — {sheet_name} (期末 {period_end})"
+            t.font = styles["title_font"]
+            t.alignment = styles["center_align"]
+            ws.row_dimensions[1].height = 28
+
+            detail_headers = [
+                "凭证日期", "凭证号", "摘要", "对方科目",
+                "账面金额", "审定金额", "审计调整",
+                "调整原因", "底稿索引", "审定状态",
+            ]
+            for col, h in enumerate(detail_headers, 1):
+                ws.cell(row=2, column=col, value=h)
+                self._apply_header_style(ws, 2, col)
+            ws.row_dimensions[2].height = 26
+
+            for r_idx, row in enumerate(source_rows, start=3):
+                ws.cell(row=r_idx, column=1, value=row.get("voucher_date", ""))
+                ws.cell(row=r_idx, column=2, value=row.get("voucher_no", ""))
+                ws.cell(row=r_idx, column=3, value=row.get("summary", "") or "")
+                ws.cell(row=r_idx, column=4, value=row.get("counter_account", "") or "")
+                book = float(row.get("book_amount", 0) or 0)
+                audited = float(row.get("audited_amount", 0) or 0)
+                adj = audited - book
+                ws.cell(row=r_idx, column=5, value=book)
+                ws.cell(row=r_idx, column=6, value=audited)
+                ws.cell(row=r_idx, column=7, value=adj)
+                ws.cell(row=r_idx, column=8, value=row.get("adjustment_reason", "") or "")
+                ws.cell(row=r_idx, column=9, value=row.get("working_paper_ref", "") or "")
+                ws.cell(row=r_idx, column=10, value=row.get("status", "") or "")
+                for col in range(1, 11):
+                    self._apply_data_style(ws, r_idx, col, is_number=col in (5, 6, 7))
+                # 调整非零的行高亮黄色
+                if abs(adj) >= 0.01:
+                    for col in range(1, 11):
+                        cell = ws.cell(row=r_idx, column=col)
+                        cell.fill = PatternFill(
+                            start_color="FFEB9C", end_color="FFEB9C", fill_type="solid"
+                        )
+
+            # 合计行
+            last = len(source_rows) + 3
+            ws.cell(row=last, column=1, value="合计")
+            ws.cell(row=last, column=5, value=sum(float(r.get("book_amount", 0) or 0) for r in source_rows))
+            ws.cell(row=last, column=6, value=sum(float(r.get("audited_amount", 0) or 0) for r in source_rows))
+            ws.cell(
+                row=last,
+                column=7,
+                value=sum(
+                    float(r.get("audited_amount", 0) or 0) - float(r.get("book_amount", 0) or 0)
+                    for r in source_rows
+                ),
+            )
+            for col in range(1, 11):
+                cell = ws.cell(row=last, column=col)
+                cell.fill = styles["subheader_fill"]
+                cell.font = styles["subheader_font"]
+                cell.border = styles["thin_border"]
+
+            # 列宽
+            for idx, w in enumerate([12, 14, 36, 14, 14, 14, 14, 28, 16, 12], 1):
+                ws.column_dimensions[chr(64 + idx)].width = w
+            ws.freeze_panes = "A3"
+            if source_rows:
+                ws.auto_filter.ref = f"A2:J{last - 1}"
+
+        # === Sheet 4: 调整分录汇总 ===
+        ws_adj = wb.create_sheet("调整分录汇总")
+        ws_adj.merge_cells("A1:H1")
+        t = ws_adj["A1"]
+        t.value = f"{account_code} {account_name} — 调整分录 (期末 {period_end})"
+        t.font = styles["title_font"]
+        t.alignment = styles["center_align"]
+        ws_adj.row_dimensions[1].height = 28
+
+        adj_headers = ["凭证日期", "凭证号", "摘要", "方向", "账面", "审定", "调整", "调整原因"]
+        for col, h in enumerate(adj_headers, 1):
+            ws_adj.cell(row=2, column=col, value=h)
+            self._apply_header_style(ws_adj, 2, col)
+
+        adj_rows = []
+        for direction_label, rows_iter in (("借", debit_list), ("贷", credit_list)):
+            for r in rows_iter:
+                book = float(r.get("book_amount", 0) or 0)
+                audited = float(r.get("audited_amount", 0) or 0)
+                if abs(audited - book) >= 0.01:
+                    adj_rows.append(
+                        {
+                            "voucher_date": r.get("voucher_date", ""),
+                            "voucher_no": r.get("voucher_no", ""),
+                            "summary": r.get("summary", "") or "",
+                            "direction": direction_label,
+                            "book": book,
+                            "audited": audited,
+                            "adj": audited - book,
+                            "reason": r.get("adjustment_reason", "") or "",
+                        }
+                    )
+
+        for r_idx, r in enumerate(adj_rows, start=3):
+            ws_adj.cell(row=r_idx, column=1, value=r["voucher_date"])
+            ws_adj.cell(row=r_idx, column=2, value=r["voucher_no"])
+            ws_adj.cell(row=r_idx, column=3, value=r["summary"])
+            ws_adj.cell(row=r_idx, column=4, value=r["direction"])
+            ws_adj.cell(row=r_idx, column=5, value=r["book"])
+            ws_adj.cell(row=r_idx, column=6, value=r["audited"])
+            ws_adj.cell(row=r_idx, column=7, value=r["adj"])
+            ws_adj.cell(row=r_idx, column=8, value=r["reason"])
+            for col in range(1, 9):
+                self._apply_data_style(ws_adj, r_idx, col, is_number=col in (5, 6, 7))
+
+        if not adj_rows:
+            ws_adj.cell(row=3, column=1, value="(本期无调整分录)").font = styles["normal_font"]
+
+        for idx, w in enumerate([12, 14, 36, 8, 14, 14, 14, 32], 1):
+            ws_adj.column_dimensions[chr(64 + idx)].width = w
+        ws_adj.freeze_panes = "A3"
+
+        # 保存
+        safe_name = "".join(c if c.isalnum() else "_" for c in account_name)[:40]
+        output_path = self.output_dir / f"长期资产_{account_code}_{safe_name}_{period_end}.xlsx"
+        # P0 第 2 轮修复 — wb.save 失败 (磁盘满/权限/路径) 不能让 API 500, 包成 IOError
+        try:
+            wb.save(output_path)
+        except (OSError, IOError, PermissionError) as exc:
+            import logging
+            logging.getLogger(__name__).exception(
+                "保存长期资产底稿失败 (account=%s, period=%s): %s",
+                account_code, period_end, exc,
+            )
+            raise IOError(
+                f"无法保存底稿到 {output_path}: {exc}. 请检查磁盘空间和目录权限."
+            ) from exc
+        return output_path
