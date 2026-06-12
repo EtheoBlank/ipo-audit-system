@@ -342,7 +342,12 @@ ipo-audit-system/
 | `/api/team-management` | 项目组 | `POST /members` · `POST /work-plan/generate` · `POST /meetings/{id}/score` · `GET /progress` · `GET /recommendations` |
 | `/api/sentiment` | 舆情 | `GET /notifications/unread` · `POST /scan/trigger` · `POST /briefings/generate` · `POST /quarterly/generate` |
 | `/api/comprehensive` | 综合底稿 | `POST /templates/upload` · `POST /generate-all` |
-| `/health` | 系统 | 健康检查 |
+| **Pack A** | | |
+| `/api/auth` | 认证 / 用户 / 权限 / 审计 / 5 级签字 | `POST /login` · `GET /me` · `POST /users` · `GET /audit-logs` · `POST /approvals` · `POST /approvals/{id}/decide` |
+| `/api/notifications` | 通用通知中心 | `GET /unread` · `GET /list` · `POST /mark-read` |
+| `/api/account-audit` | 长期资产发生额审定 | `POST /projects/{id}/initialize` · `PUT /movements/{id}` · `GET /projects/{id}/overview` · `GET /projects/{id}/export` |
+| `/api/report-templates` | 报告模板自定义化 | `POST /` (upload) · `GET /{id}/analyze` · `POST /render` |
+| `/health` | 系统 | 健康检查 (含 ``auth_enabled`` 字段) |
 
 完整 API 文档自动生成: 启动后访问 <http://localhost:8000/docs>
 
@@ -523,15 +528,24 @@ uv run pre-commit run --all-files
 - [x] **Phase 13**: 函证管理(财政部模板 + 回函 OCR + 差异统计)
 - [x] **Phase 14**: 舆情跟踪(简报 + 季报 + 全局红点)
 - [x] **Phase 15**: 综合底稿(事务所模板化全量生成)
+- [x] **Phase 18 (Pack A)**: 多用户 / 权限 / 审计轨迹 — 5 级签字流
+      (审计员→经理→项目合伙人→质控合伙人→签字合伙人) + JWT + RBAC + AuditLog
+- [x] **Pack A 用户特别要求**: 长期资产发生额审定 — 固定资产/在建工程/
+      无形资产/长投/商誉/使用权资产等长期资产科目, 不只期初期末出审定数,
+      本期借/贷方发生额逐笔出审定数 + 审计调整, 底稿自动恒等式校验
+- [x] **Phase 20 (Pack A)**: 报告模板自定义化 — 事务所上传 Word/Excel 模板,
+      ``${placeholder}`` 占位符渲染, 支持品牌定制
+- [x] **Pack A**: 通用通知中心 + 后台事件机制
 - [x] **DevOps**: GitHub Actions 矩阵 CI + pre-commit + ruff
+- [x] **Phase 19**: 容器化(Docker 一键起栈 + [HF Space 部署](https://huggingface.co/spaces/EtheoZheng/EtheoBlank))
 
 ### 🔭 路线图
 
-- [ ] **Phase 16**: 内控穿行测试模板化
-- [ ] **Phase 17**: 跨期调整 / 合同资产 / 合同负债自动化
-- [ ] **Phase 18**: 多用户 / 权限 / 审计轨迹(audit trail)
-- [x] **Phase 19**: 容器化(Docker 一键起栈 + [HF Space 部署](https://huggingface.co/spaces/EtheoZheng/EtheoBlank))
-- [ ] **Phase 20**: 报告模板自定义化(事务所品牌)
+- [ ] **Phase 16 (Pack D)**: 内控穿行测试模板化
+- [ ] **Phase 17 (Pack D)**: 跨期调整 / 合同资产 / 合同负债自动化
+- [ ] **Pack B**: 关联方专项 (主数据 / 识别 / 资金占用 / 同业竞争 / 披露)
+- [ ] **Pack C**: 缺失审计循环 (应付 / 费用 / 薪酬 / 固定资产 / 长投 / 无形资产 / 租赁 / 所得税)
+- [ ] **Pack D**: IPO 专属 (招股书勾稽 / 三年一期 / 客户供应商重叠 / 可比公司 / 反馈意见)
 
 ---
 
