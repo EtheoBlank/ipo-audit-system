@@ -40,15 +40,30 @@ st.markdown("""
         background: #6c757d; color: white; border-radius: 999px;
         padding: 0.3rem 0.8rem; font-weight: bold; font-size: 0.85rem;
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);}
+    .global-badge {position: fixed; top: 0.5rem; right: 9rem; z-index: 999;
+        background: #fd7e14; color: white; border-radius: 999px;
+        padding: 0.3rem 0.8rem; font-weight: bold; font-size: 0.85rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);}
+    .global-badge-zero {position: fixed; top: 0.5rem; right: 9rem; z-index: 999;
+        background: #6c757d; color: white; border-radius: 999px;
+        padding: 0.3rem 0.8rem; font-weight: bold; font-size: 0.85rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);}
 </style>
 """, unsafe_allow_html=True)
+
+
+def _auth_headers() -> dict:
+    """Pack A: 从 st.session_state 取 token, 给所有 API 调用带上."""
+    token = st.session_state.get("auth_token")
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 @st.cache_data(ttl=30)
 def get_sentiment_unread_count() -> int:
     """全局红点: 30 秒缓存, 调一次 /notifications/unread."""
     try:
-        r = requests.get(f"{API_BASE_URL}/api/sentiment/notifications/unread?limit=1", timeout=2)
+        r = requests.get(f"{API_BASE_URL}/api/sentiment/notifications/unread?limit=1",
+                         headers=_auth_headers(), timeout=2)
         if r.status_code == 200:
             return int((r.json() or {}).get("count", 0))
     except requests.exceptions.RequestException:
@@ -56,17 +71,43 @@ def get_sentiment_unread_count() -> int:
     return 0
 
 
+@st.cache_data(ttl=30)
+def get_global_unread_count() -> dict:
+    """Pack A: 通用通知中心未读数, 30s 缓存."""
+    try:
+        r = requests.get(f"{API_BASE_URL}/api/notifications/unread",
+                         headers=_auth_headers(), timeout=2)
+        if r.status_code == 200:
+            return r.json() or {"total_unread": 0}
+    except requests.exceptions.RequestException:
+        pass
+    return {"total_unread": 0}
+
+
 def render_sentiment_global_badge() -> None:
-    """在主页 main() 顶部渲染右上角红点 (全局)."""
-    count = get_sentiment_unread_count()
-    if count > 0:
+    """在主页 main() 顶部渲染右上角红点 (舆情 + 全局通知)."""
+    s_count = get_sentiment_unread_count()
+    if s_count > 0:
         st.markdown(
-            f'<div class="sentiment-badge">🔴 舆情 {count}</div>',
+            f'<div class="sentiment-badge">🔴 舆情 {s_count}</div>',
             unsafe_allow_html=True,
         )
     else:
         st.markdown(
-            f'<div class="sentiment-badge-zero">⚪ 舆情 0</div>',
+            '<div class="sentiment-badge-zero">⚪ 舆情 0</div>',
+            unsafe_allow_html=True,
+        )
+
+    g = get_global_unread_count()
+    total = int(g.get("total_unread", 0))
+    if total > 0:
+        st.markdown(
+            f'<div class="global-badge">🔔 通知 {total}</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="global-badge-zero">🔕 通知 0</div>',
             unsafe_allow_html=True,
         )
 
@@ -79,10 +120,28 @@ def check_api_health() -> bool:
         return False
 
 
+def get_auth_status() -> dict:
+    """Pack A: 取 /health 看 AUTH_ENABLED, 用于决定是否提示登录."""
+    try:
+        r = requests.get(f"{API_BASE_URL}/health", timeout=2)
+        if r.status_code == 200:
+            return r.json() or {}
+    except requests.exceptions.RequestException:
+        pass
+    return {}
+
+
 def api_request(method: str, endpoint: str, **kwargs):
     try:
         url = f"{API_BASE_URL}{endpoint}"
-        response = requests.request(method, url, timeout=30, **kwargs)
+        headers = kwargs.pop("headers", {}) or {}
+        headers.update(_auth_headers())
+        response = requests.request(method, url, timeout=30, headers=headers, **kwargs)
+        if response.status_code == 401:
+            st.warning("登录已失效, 请重新登录 (左侧 '🔐 系统管理' 页)")
+            st.session_state.pop("auth_token", None)
+            st.session_state.pop("auth_user", None)
+            return None
         response.raise_for_status()
         return response.json()
     except requests.exceptions.ConnectionError:
@@ -98,14 +157,46 @@ def get_projects():
     return api_request("GET", "/api/projects/") or []
 
 
+def _render_user_card_in_sidebar() -> None:
+    """Pack A: sidebar 顶部显示当前用户卡片 + 登出按钮."""
+    user = st.session_state.get("auth_user")
+    if user:
+        st.sidebar.markdown(
+            f"**👤 {user.get('full_name', '-')}**  \n"
+            f"角色: `{user.get('role', '-')}`  \n"
+            f"用户名: `{user.get('username', '-')}`"
+        )
+        if st.sidebar.button("🚪 登出", key="sidebar_logout", width="stretch"):
+            try:
+                requests.post(
+                    f"{API_BASE_URL}/api/auth/logout",
+                    headers=_auth_headers(), timeout=5,
+                )
+            except Exception:
+                pass
+            st.session_state.pop("auth_token", None)
+            st.session_state.pop("auth_user", None)
+            st.session_state.pop("auth_refresh_token", None)
+            st.rerun()
+    else:
+        health = get_auth_status()
+        if health.get("auth_enabled"):
+            st.sidebar.warning("🔒 未登录, 仅可查看部分功能")
+        else:
+            st.sidebar.info("⚠️ 当前 AUTH_ENABLED=false (开发模式无认证)")
+
+
 def main():
     st.markdown('<p class="main-header">📊 IPO 审计系统 (专业版)</p>', unsafe_allow_html=True)
 
-    # 全局红点 — 舆情未读 (右上角 fixed)
+    # 全局红点 — 舆情 + 通用通知 (右上角 fixed)
     render_sentiment_global_badge()
 
     # Sidebar
     st.sidebar.title("功能菜单")
+
+    # Pack A — 顶部用户卡片 + 登出
+    _render_user_card_in_sidebar()
     st.sidebar.markdown("---")
 
     if not check_api_health():
@@ -125,6 +216,7 @@ def main():
             "📁 项目管理",
             "📤 数据导入",
             "📊 底稿生成",
+            "📑 长期资产发生额审定",   # Pack A — 用户特别要求
             "⚖️ 试算平衡",
             "🔍 监管案例库",
             "🤖 AI风险分析",
@@ -139,6 +231,9 @@ def main():
             "📑 综合底稿自动生成",
             "👥 项目组管理",
             "📡 舆情跟踪",
+            "🎨 报告模板",            # Pack A
+            "🔔 通知中心",            # Pack A
+            "🔐 系统管理",            # Pack A
         ]
     )
 
@@ -150,6 +245,12 @@ def main():
         show_data_import()
     elif page == "📊 底稿生成":
         show_workbook_generation()
+    elif page == "📑 长期资产发生额审定":
+        try:
+            from frontend.pages_account_audit import show_account_audit
+            show_account_audit()
+        except ImportError as exc:
+            st.error(f"长期资产审定模块加载失败：{exc}")
     elif page == "⚖️ 试算平衡":
         show_trial_balance()
     elif page == "🔍 监管案例库":
@@ -219,6 +320,24 @@ def main():
             show_sentiment()
         except ImportError as exc:
             st.error(f"舆情跟踪模块加载失败：{exc}。")
+    elif page == "🎨 报告模板":
+        try:
+            from frontend.pages_report_templates import show_report_templates
+            show_report_templates()
+        except ImportError as exc:
+            st.error(f"报告模板模块加载失败：{exc}")
+    elif page == "🔔 通知中心":
+        try:
+            from frontend.pages_notification import show_notifications
+            show_notifications()
+        except ImportError as exc:
+            st.error(f"通知中心模块加载失败：{exc}")
+    elif page == "🔐 系统管理":
+        try:
+            from frontend.pages_auth import show_auth
+            show_auth()
+        except ImportError as exc:
+            st.error(f"系统管理模块加载失败：{exc}")
 
 
 def show_homepage():
