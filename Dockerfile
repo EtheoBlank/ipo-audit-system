@@ -35,14 +35,22 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 # ---------- 源码层 ----------
+# templates/ 仓库里只有 .gitkeep (空目录占位),COPY 不会失败;
+# 实际目录由 app/core/config.py:ensure_dirs() 在启动时建,或由 HF 持久卷覆盖。
 COPY app ./app
 COPY frontend ./frontend
-COPY templates ./templates
 COPY scripts ./scripts
+COPY templates ./templates
 
 # 运行时需要但 .gitignore 不跟踪的空目录 — 占位避免 .dockerignore 误删
 RUN mkdir -p uploads outputs && \
     touch uploads/.gitkeep outputs/.gitkeep
+
+# HF Space 持久化卷挂载在 /data (由 Space runtime 自动挂, 容器内可见)。
+# 把 /data 下的子目录在镜像里也建好, 这样 uvicorn 启动时 makedirs 不会失败
+# (运行时若 /data 已挂载, 这些 mkdir 不会破坏现有数据)。
+RUN mkdir -p /data/uploads /data/outputs /data/templates /data/uploads/knowledge_base /data/outputs/sentiment && \
+    chmod -R 777 /data
 
 # ---------- 启动 ----------
 # 7860 = Streamlit (HF Space 唯一外露端口)

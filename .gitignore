@@ -129,9 +129,14 @@ dmypy.json
 *.sqlite3
 
 # Uploaded files
-uploads/
-outputs/
-templates/
+uploads/*
+!uploads/.gitkeep
+outputs/*
+!outputs/.gitkeep
+# templates/ 目录: 忽略内容, 但保留 .gitkeep 占位文件
+# 这样 Docker COPY templates 不会失败 (目录非空才能被 git 跟踪)
+templates/*
+!templates/.gitkeep
 
 # OS
 .DS_Store

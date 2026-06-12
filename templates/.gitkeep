@@ -1,0 +1,10 @@
+# 审计底稿模板占位文件
+#
+# templates/ 目录用于存放 Excel 底稿模板 (科目明细表/利润表/资产负债表等)。
+# 当前版本的代码用 ExcelExporter 在内存里生成模板, 不依赖静态模板文件;
+# 未来若要做"自定义模板上传"功能, 把 .xlsx 文件放在这里即可被
+# app/services/workbook_generator.py 自动加载。
+#
+# 这个 .gitkeep 是为了:
+#   1. 让 templates/ 目录被 git 跟踪 (空目录 git 不会跟踪)
+#   2. 让 Dockerfile 的 `COPY templates ./templates` 不报错
