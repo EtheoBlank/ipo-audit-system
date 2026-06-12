@@ -25,6 +25,13 @@ ENV LANG=C.UTF-8 \
 
 WORKDIR /app
 
+# ---------- 系统依赖 ----------
+# bookworm-slim 不带 curl, 但 start_hf_space.sh 要 curl /health 做健康检查。
+# 一次性装好 curl + ca-certificates (HTTPS 验证)。
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
 # ---------- 依赖层 (单独 cache) ----------
 # 先复制锁文件, 利用 Docker layer cache: pyproject.toml/uv.lock 不变时这一层不重建
 COPY pyproject.toml uv.lock ./
