@@ -12,6 +12,7 @@
     if res is None:
         return  # 已经显示了 st.error / st.warning
 """
+
 from __future__ import annotations
 
 import os
@@ -67,7 +68,9 @@ def api_request(
         r = requests.request(method, url, timeout=timeout, headers=headers, **kwargs)
     except requests.exceptions.ConnectionError:
         if not silent_errors:
-            st.error("无法连接到后端服务, 请确保 FastAPI 已启动 (uv run uvicorn app.main:app --reload --port 8000)")
+            st.error(
+                "无法连接到后端服务, 请确保 FastAPI 已启动 (uv run uvicorn app.main:app --reload --port 8000)"
+            )
         return None
     except requests.exceptions.Timeout:
         if not silent_errors:

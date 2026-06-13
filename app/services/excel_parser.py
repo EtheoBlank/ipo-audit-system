@@ -1,7 +1,6 @@
 """Excel file parsing service for IPO Audit System."""
+
 import pandas as pd
-from pathlib import Path
-from typing import Optional
 from fastapi import UploadFile
 from app.core.config import settings
 

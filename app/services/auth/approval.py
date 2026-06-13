@@ -9,7 +9,14 @@
   in_progress → approved (所有步骤 approve)
   in_progress → rejected (任一步骤 reject, 流程立即结束)
   pending / in_progress → withdrawn (发起人主动撤回)
+
+并发保护 (Pack A.2 — 乐观锁):
+  - ApprovalWorkflow.version 每次 decide/withdraw 自增
+  - decide/withdraw 调用方可传 ``expected_version`` (一般来自上一次 GET 的快照),
+    若实际 version != expected_version, 抛 ``ApprovalConflict`` (HTTP 409 Conflict)
+  - 不传 expected_version 时退化为"读后即改", 不抗并发 (兼容老调用)
 """
+
 from __future__ import annotations
 
 import json
@@ -18,13 +25,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db.auth import (
     APPROVAL_STATUS_APPROVED,
     APPROVAL_STATUS_IN_PROGRESS,
-    APPROVAL_STATUS_PENDING,
     APPROVAL_STATUS_REJECTED,
     APPROVAL_STATUS_WITHDRAWN,
     ROLE_ASSISTANT,
@@ -43,6 +49,10 @@ logger = logging.getLogger(__name__)
 
 class InvalidApprovalAction(Exception):
     """审批动作非法 (顺序错 / 权限不足 / 已结束)."""
+
+
+class ApprovalConflict(Exception):
+    """并发审批冲突 — 当前 version 与 expected_version 不一致."""
 
 
 @dataclass
@@ -132,11 +142,17 @@ class ApprovalEngine:
 
     @staticmethod
     async def get_workflow(db: AsyncSession, workflow_id: int) -> Optional[ApprovalWorkflow]:
+        """加载 workflow + 预加载 steps — 返回 wf.
+
+        注意: 不要直接 ``wf.steps = steps`` 赋值, SQLAlchemy 在 async 上下文之外
+        触发 lazy load 会报 ``MissingGreenlet``. 改用 ``set_committed_value`` 标记
+        关系已加载, 后续访问 wf.steps 不会重新查询.
+        """
         stmt = select(ApprovalWorkflow).where(ApprovalWorkflow.id == workflow_id)
         wf = (await db.execute(stmt)).scalar_one_or_none()
         if wf is None:
             return None
-        # 预加载 steps
+        # 预加载 steps (单查, 走 async 安全路径)
         steps = list(
             (
                 await db.execute(
@@ -144,9 +160,14 @@ class ApprovalEngine:
                     .where(ApprovalStep.workflow_id == wf.id)
                     .order_by(ApprovalStep.step_no)
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
-        wf.steps = steps  # type: ignore[attr-defined]
+        # 标记 steps 已加载, 避免后续访问 wf.steps 触发 lazy load
+        from sqlalchemy.orm import attributes
+
+        attributes.set_committed_value(wf, "steps", steps)
         return wf
 
     @staticmethod
@@ -158,10 +179,23 @@ class ApprovalEngine:
         action: str,
         comment: Optional[str] = None,
         delegate_to_user_id: Optional[int] = None,
+        expected_version: Optional[int] = None,
     ) -> ApprovalWorkflow:
+        """处理一步审批.
+
+        Args:
+            expected_version: 乐观锁版本快照. 传了之后, 若当前 version != expected_version
+                抛 ``ApprovalConflict`` (HTTP 409). 不传则跳过版本校验 (兼容老调用).
+        """
         wf = await ApprovalEngine.get_workflow(db, workflow_id)
         if wf is None:
             raise InvalidApprovalAction(f"workflow_id={workflow_id} 不存在")
+        # 乐观锁: 读出 wf 之后, 调用方期望的 version 与现在不一致, 说明并发审批
+        if expected_version is not None and wf.version != expected_version:
+            raise ApprovalConflict(
+                f"并发冲突: 期望 version={expected_version}, 实际 version={wf.version}. "
+                f"请刷新审批详情后重试."
+            )
         if wf.status in {
             APPROVAL_STATUS_APPROVED,
             APPROVAL_STATUS_REJECTED,
@@ -194,15 +228,19 @@ class ApprovalEngine:
         current_step.approver_display = actor.full_name
         current_step.decided_at = now
 
+        new_status = wf.status
+        new_current_step = wf.current_step
+        new_completed_at = wf.completed_at
+
         if action == "reject":
-            wf.status = APPROVAL_STATUS_REJECTED
-            wf.completed_at = now
+            new_status = APPROVAL_STATUS_REJECTED
+            new_completed_at = now
         elif action == "approve":
             if wf.current_step >= wf.total_steps:
-                wf.status = APPROVAL_STATUS_APPROVED
-                wf.completed_at = now
+                new_status = APPROVAL_STATUS_APPROVED
+                new_completed_at = now
             else:
-                wf.current_step += 1
+                new_current_step = wf.current_step + 1
         elif action == "delegate":
             if delegate_to_user_id is None:
                 raise InvalidApprovalAction("delegate 必须指定 delegate_to_user_id")
@@ -216,10 +254,33 @@ class ApprovalEngine:
         else:
             raise InvalidApprovalAction(f"未知 action: {action}")
 
-        wf.updated_at = now
+        # 乐观锁 WHERE version=? 写: 原子 UPDATE
+        # 若 rowcount=0, 说明本次读 wf 后到 commit 之间又被改了 — 抛 ApprovalConflict
+        update_stmt = (
+            update(ApprovalWorkflow)
+            .where(
+                ApprovalWorkflow.id == wf.id,
+                ApprovalWorkflow.version == wf.version,
+            )
+            .values(
+                status=new_status,
+                current_step=new_current_step,
+                completed_at=new_completed_at,
+                updated_at=now,
+                version=wf.version + 1,
+            )
+        )
+        upd_res = await db.execute(update_stmt)
+        if upd_res.rowcount == 0:
+            await db.rollback()
+            # 重读一次, 给调用方更精确的提示
+            fresh = await ApprovalEngine.get_workflow(db, workflow_id)
+            fresh_version = fresh.version if fresh else "unknown"
+            raise ApprovalConflict(
+                f"并发冲突: 提交时 version 已变为 {fresh_version}. 请刷新后重试."
+            )
         await db.commit()
-        await db.refresh(wf)
-        # 重新预加载 steps
+        # 重新预加载 steps (返回最新)
         return await ApprovalEngine.get_workflow(db, wf.id)  # type: ignore[return-value]
 
     @staticmethod
@@ -228,12 +289,19 @@ class ApprovalEngine:
         *,
         workflow_id: int,
         actor: User,
+        expected_version: Optional[int] = None,
     ) -> ApprovalWorkflow:
         wf = await ApprovalEngine.get_workflow(db, workflow_id)
         if wf is None:
             raise InvalidApprovalAction(f"workflow_id={workflow_id} 不存在")
-        if wf.initiator_user_id and wf.initiator_user_id != actor.id and not role_at_least(
-            actor.role, ROLE_QC_PARTNER
+        if expected_version is not None and wf.version != expected_version:
+            raise ApprovalConflict(
+                f"并发冲突: 期望 version={expected_version}, 实际 version={wf.version}"
+            )
+        if (
+            wf.initiator_user_id
+            and wf.initiator_user_id != actor.id
+            and not role_at_least(actor.role, ROLE_QC_PARTNER)
         ):
             raise InvalidApprovalAction("仅发起人或质控合伙人以上可撤回")
         if wf.status in {
@@ -243,9 +311,26 @@ class ApprovalEngine:
         }:
             raise InvalidApprovalAction(f"流程已结束 ({wf.status})")
         now = _utcnow_naive()
-        wf.status = APPROVAL_STATUS_WITHDRAWN
-        wf.completed_at = now
-        wf.updated_at = now
+        update_stmt = (
+            update(ApprovalWorkflow)
+            .where(
+                ApprovalWorkflow.id == wf.id,
+                ApprovalWorkflow.version == wf.version,
+            )
+            .values(
+                status=APPROVAL_STATUS_WITHDRAWN,
+                completed_at=now,
+                updated_at=now,
+                version=wf.version + 1,
+            )
+        )
+        upd_res = await db.execute(update_stmt)
+        if upd_res.rowcount == 0:
+            await db.rollback()
+            fresh = await ApprovalEngine.get_workflow(db, workflow_id)
+            fresh_version = fresh.version if fresh else "unknown"
+            raise ApprovalConflict(
+                f"并发冲突: 提交时 version 已变为 {fresh_version}. 请刷新后重试."
+            )
         await db.commit()
-        await db.refresh(wf)
         return await ApprovalEngine.get_workflow(db, wf.id)  # type: ignore[return-value]

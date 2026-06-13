@@ -27,8 +27,14 @@ from app.services.auth.rbac import (
     AuthorizationError,
 )
 from app.services.auth.audit_log import record_audit_log, query_audit_logs
+from app.services.auth.archive import (
+    audit_log_stats,
+    ensure_archive_table,
+    rotate_audit_logs,
+)
 from app.services.auth.approval import (
     ApprovalEngine,
+    ApprovalConflict,
     DEFAULT_FIVE_LEVEL_FLOW,
     InvalidApprovalAction,
 )
@@ -47,6 +53,11 @@ from app.services.auth.dependencies import (
     require_role,
     require_permission,
 )
+from app.services.auth.tenant import (
+    ensure_project_in_firm,
+    project_default_firm_id,
+    scope_projects_to_firm,
+)
 
 __all__ = [
     "hash_password",
@@ -61,7 +72,11 @@ __all__ = [
     "AuthorizationError",
     "record_audit_log",
     "query_audit_logs",
+    "audit_log_stats",
+    "ensure_archive_table",
+    "rotate_audit_logs",
     "ApprovalEngine",
+    "ApprovalConflict",
     "DEFAULT_FIVE_LEVEL_FLOW",
     "InvalidApprovalAction",
     "authenticate",
@@ -75,4 +90,7 @@ __all__ = [
     "get_current_user_optional",
     "require_role",
     "require_permission",
+    "ensure_project_in_firm",
+    "project_default_firm_id",
+    "scope_projects_to_firm",
 ]

@@ -135,10 +135,7 @@ INDUSTRY_TEMPLATES: dict[str, dict[str, Any]] = {
             "- 多项目分散，重点关注完工已退场临设的归集；\n"
             "- 周转材料按摊销期已 ≤ 0 仍有库存的需提示报废。"
         ),
-        "risks": (
-            "- 项目部账外存货；\n"
-            "- 周转材料计提摊销与库存不匹配。"
-        ),
+        "risks": ("- 项目部账外存货；\n- 周转材料计提摊销与库存不匹配。"),
     },
     "默认": {
         "scope": "全部存货仓库（原材料 / 在产品 / 库存商品 / 委外 / 在途）",
@@ -158,12 +155,12 @@ INDUSTRY_TEMPLATES: dict[str, dict[str, Any]] = {
 class CountPlanDraft:
     title: str
     industry: str
-    period_end: str                       # YYYY-MM-DD
+    period_end: str  # YYYY-MM-DD
     count_date_start: str
     count_date_end: str
     objectives: str
     scope: str
-    team: list[dict[str, str]]           # [{name, role, contact}]
+    team: list[dict[str, str]]  # [{name, role, contact}]
     procedures: str
     special_notes: str
     risks: str
@@ -230,7 +227,8 @@ class CountPlanGenerator:
                 "4) 取得监盘程序的审计证据并形成监盘表/底稿。"
             ),
             scope=tpl["scope"],
-            team=team or [
+            team=team
+            or [
                 {"name": "审计经理", "role": "现场负责人", "contact": ""},
                 {"name": "审计员 A", "role": "账→物核对", "contact": ""},
                 {"name": "审计员 B", "role": "物→账核对", "contact": ""},
@@ -246,10 +244,10 @@ class CountPlanGenerator:
     SYS_PROMPT = (
         "你是 IPO 审计经理，专注存货监盘计划制定。基于给定的公司信息、行业、"
         "草案与用户最新反馈，返回更新后的监盘计划。必须严格输出 JSON："
-        "{\"title\":...,\"objectives\":...,\"scope\":...,\"procedures\":...,"
-        "\"special_notes\":...,\"risks\":...,\"team\":[{\"name\":...,"
-        "\"role\":...,\"contact\":...}],\"count_date_start\":\"YYYY-MM-DD\","
-        "\"count_date_end\":\"YYYY-MM-DD\",\"change_summary\":\"...\"}。"
+        '{"title":...,"objectives":...,"scope":...,"procedures":...,'
+        '"special_notes":...,"risks":...,"team":[{"name":...,'
+        '"role":...,"contact":...}],"count_date_start":"YYYY-MM-DD",'
+        '"count_date_end":"YYYY-MM-DD","change_summary":"..."}。'
         "保留原草案中未被用户改动的部分，只覆盖被指示修改的字段。"
     )
 
@@ -265,10 +263,12 @@ class CountPlanGenerator:
 
         if not (self.client and self.client.is_configured):
             # 无 AI → 把用户指令原样记入 revision_log，并把它追加到 special_notes
-            draft.revision_log.append({
-                "instruction": user_instruction,
-                "applied": "未启用 AI；用户原始指令已追加到『特殊事项』。",
-            })
+            draft.revision_log.append(
+                {
+                    "instruction": user_instruction,
+                    "applied": "未启用 AI；用户原始指令已追加到『特殊事项』。",
+                }
+            )
             draft.special_notes = (draft.special_notes or "") + f"\n[用户补充] {user_instruction}"
             return draft
 
@@ -300,21 +300,33 @@ class CountPlanGenerator:
             )
         except DeepSeekError as exc:
             logger.warning("CountPlan AI revise failed: %s", exc)
-            draft.revision_log.append({
-                "instruction": user_instruction,
-                "applied": f"AI 调用失败：{exc}；指令已追加到『特殊事项』。",
-            })
+            draft.revision_log.append(
+                {
+                    "instruction": user_instruction,
+                    "applied": f"AI 调用失败：{exc}；指令已追加到『特殊事项』。",
+                }
+            )
             draft.special_notes = (draft.special_notes or "") + f"\n[用户补充] {user_instruction}"
             return draft
 
-        for k in ("title", "objectives", "scope", "procedures", "special_notes",
-                  "risks", "count_date_start", "count_date_end"):
+        for k in (
+            "title",
+            "objectives",
+            "scope",
+            "procedures",
+            "special_notes",
+            "risks",
+            "count_date_start",
+            "count_date_end",
+        ):
             if result.get(k):
                 setattr(draft, k, str(result[k]))
         if isinstance(result.get("team"), list):
             draft.team = result["team"]
-        draft.revision_log.append({
-            "instruction": user_instruction,
-            "applied": str(result.get("change_summary", "AI 已按指令调整")),
-        })
+        draft.revision_log.append(
+            {
+                "instruction": user_instruction,
+                "applied": str(result.get("change_summary", "AI 已按指令调整")),
+            }
+        )
         return draft

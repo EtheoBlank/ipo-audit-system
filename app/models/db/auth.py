@@ -15,6 +15,7 @@
     够大可放完整请求体的截断版本
   - 时间字段全部 naive DateTime (沿用现有惯例, 写入前 .replace(tzinfo=None))
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -84,12 +85,12 @@ def _utcnow() -> datetime:
 
 
 # === 五级签字角色 (从低到高) ===
-ROLE_ASSISTANT = "assistant"          # 审计员
-ROLE_MANAGER = "manager"              # 经理
-ROLE_PARTNER = "partner"              # 项目合伙人
-ROLE_QC_PARTNER = "qc_partner"        # 质控合伙人
+ROLE_ASSISTANT = "assistant"  # 审计员
+ROLE_MANAGER = "manager"  # 经理
+ROLE_PARTNER = "partner"  # 项目合伙人
+ROLE_QC_PARTNER = "qc_partner"  # 质控合伙人
 ROLE_SIGNING_PARTNER = "signing_partner"  # 签字合伙人
-ROLE_ADMIN = "admin"                  # 系统管理员 (不在签字流, 但有所有权限)
+ROLE_ADMIN = "admin"  # 系统管理员 (不在签字流, 但有所有权限)
 
 ALL_ROLES = [
     ROLE_ASSISTANT,
@@ -112,11 +113,11 @@ ROLE_LEVEL = {
 
 
 # === 审批流状态 ===
-APPROVAL_STATUS_PENDING = "pending"        # 草稿, 未提交
+APPROVAL_STATUS_PENDING = "pending"  # 草稿, 未提交
 APPROVAL_STATUS_IN_PROGRESS = "in_progress"  # 流转中
-APPROVAL_STATUS_APPROVED = "approved"      # 全部通过
-APPROVAL_STATUS_REJECTED = "rejected"      # 任一步骤拒绝
-APPROVAL_STATUS_WITHDRAWN = "withdrawn"    # 发起人撤回
+APPROVAL_STATUS_APPROVED = "approved"  # 全部通过
+APPROVAL_STATUS_REJECTED = "rejected"  # 任一步骤拒绝
+APPROVAL_STATUS_WITHDRAWN = "withdrawn"  # 发起人撤回
 
 APPROVAL_STATE_ACTIONS = {"approve", "reject", "delegate", "comment"}
 
@@ -135,6 +136,7 @@ AUDIT_ACTION_IMPORT = "import"
 
 class Firm(Base):
     """会计师事务所 (多租户根, 单所部署只有一行 ``id=1``)."""
+
     __tablename__ = "auth_firms"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -165,6 +167,7 @@ class User(Base):
       - ``User`` 是系统登录账号, 一定能登录, 持有 JWT
       - 可选: ``User.team_member_id`` 关联两者, 让登录用户对应到 ``TeamMember``
     """
+
     __tablename__ = "auth_users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -207,6 +210,7 @@ class User(Base):
 
 class Role(Base):
     """角色 (RBAC 扩展, 高级用户自定义角色). 简单场景直接读 ``User.role`` 即可。"""
+
     __tablename__ = "auth_roles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -220,6 +224,7 @@ class Role(Base):
 
 class Permission(Base):
     """权限定义 (字符串 code, 例如 ``project.create`` / ``confirmation.lock``)."""
+
     __tablename__ = "auth_permissions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -232,13 +237,14 @@ class Permission(Base):
 
 class RolePermission(Base):
     """角色-权限 N:N."""
+
     __tablename__ = "auth_role_permissions"
-    __table_args__ = (
-        UniqueConstraint("role_id", "permission_id", name="uq_role_permission"),
-    )
+    __table_args__ = (UniqueConstraint("role_id", "permission_id", name="uq_role_permission"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    role_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_roles.id"), nullable=False, index=True)
+    role_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("auth_roles.id"), nullable=False, index=True
+    )
     permission_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("auth_permissions.id"), nullable=False, index=True
     )
@@ -247,17 +253,18 @@ class RolePermission(Base):
 
 class ApprovalWorkflow(Base):
     """审批工作流主表 (一个资源 = 一条流). 五级签字: assistant→manager→partner→qc_partner→signing_partner."""
+
     __tablename__ = "auth_approval_workflows"
-    __table_args__ = (
-        Index("ix_approval_resource", "resource_type", "resource_id"),
-    )
+    __table_args__ = (Index("ix_approval_resource", "resource_type", "resource_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     project_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("projects.id"), nullable=True, index=True
     )
 
-    resource_type: Mapped[str] = mapped_column(String(80), nullable=False)  # 如 confirmation_case / workbook / report
+    resource_type: Mapped[str] = mapped_column(
+        String(80), nullable=False
+    )  # 如 confirmation_case / workbook / report
     resource_id: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -265,12 +272,16 @@ class ApprovalWorkflow(Base):
     # 步骤总数 + 当前步骤
     total_steps: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     current_step: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    status: Mapped[str] = mapped_column(String(30), default=APPROVAL_STATUS_PENDING, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        String(30), default=APPROVAL_STATUS_PENDING, nullable=False, index=True
+    )
 
     initiator_user_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("auth_users.id"), nullable=True
     )
-    initiator_display: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # 冗余, 避免 join
+    initiator_display: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )  # 冗余, 避免 join
 
     # 流程定义 (JSON, 序列化的步骤列表), 可在创建时由用户自定义或走默认五级模板
     definition: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -281,6 +292,11 @@ class ApprovalWorkflow(Base):
     )
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
+    # 乐观锁版本号 — 每次 decide/withdraw 自增 1; 并发更新时旧 version 写入会失败
+    # 在 ORM 层不用 SQLAlchemy 自带 version_id_col (它会要求 INSERT 时也带 version),
+    # 改用应用层手动 +1 + WHERE version=? 防并发审批
+    version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
     # 关系
     steps: Mapped[list["ApprovalStep"]] = relationship(
         back_populates="workflow", cascade="all, delete-orphan", order_by="ApprovalStep.step_no"
@@ -289,10 +305,9 @@ class ApprovalWorkflow(Base):
 
 class ApprovalStep(Base):
     """审批步骤 (一行 = 一个审批人在一个步骤的处理记录)."""
+
     __tablename__ = "auth_approval_steps"
-    __table_args__ = (
-        UniqueConstraint("workflow_id", "step_no", name="uq_workflow_step"),
-    )
+    __table_args__ = (UniqueConstraint("workflow_id", "step_no", name="uq_workflow_step"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     workflow_id: Mapped[int] = mapped_column(
@@ -306,7 +321,9 @@ class ApprovalStep(Base):
     )
     approver_display: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
-    action: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # approve / reject / delegate / comment
+    action: Mapped[Optional[str]] = mapped_column(
+        String(30), nullable=True
+    )  # approve / reject / delegate / comment
     comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -322,12 +339,28 @@ class AuditLog(Base):
       - 仅 append, 不允许 UPDATE / DELETE (SQLAlchemy event 强制 — 见文件末尾)
       - payload 存 JSON 字符串截断版, 完整请求体过大时只存关键字段
       - 不与 User 强外键 (用户可能被删除, 轨迹仍要保留) — 冗余 user_display
+
+    索引设计 (针对长期 100w+ 行性能, 见 query_audit_logs 调用模式):
+      - ix_audit_created (created_at) — 时序倒序扫描 (默认排序)
+      - ix_audit_resource (resource_type, resource_id) — 资源溯源
+      - ix_audit_user_action (user_id, action) — 用户行为审计
+      - ix_audit_firm_created (firm_id, created_at desc) — 多租户隔离 + 时间窗
+      - ix_audit_project_created (project_id, created_at desc) — 项目级审计窗
+      - ix_audit_user_created (user_id, created_at desc) — 单用户时间线
+      - ix_audit_action_created (action, created_at desc) — 按动作 + 时间统计
+      - ix_audit_path (path) — 路径模糊查 (keyword 过滤)
     """
+
     __tablename__ = "audit_logs"
     __table_args__ = (
         Index("ix_audit_resource", "resource_type", "resource_id"),
         Index("ix_audit_user_action", "user_id", "action"),
         Index("ix_audit_created", "created_at"),
+        # 新增 — 多维 (创建时序 + 维度) 复合索引, 防止长期数据增长导致 ORDER BY created_at LIMIT 时退化为全表扫
+        Index("ix_audit_firm_created", "firm_id", "created_at"),
+        Index("ix_audit_project_created", "project_id", "created_at"),
+        Index("ix_audit_user_created", "user_id", "created_at"),
+        Index("ix_audit_action_created", "action", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -356,7 +389,9 @@ class AuditLog(Base):
     payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 字符串
     error_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_utcnow, nullable=False, index=True
+    )
 
 
 # ============================================================
@@ -372,15 +407,11 @@ class AuditLogTamperError(Exception):
 
 
 def _audit_log_block_update(mapper, connection, target):  # noqa: ARG001
-    raise AuditLogTamperError(
-        "AuditLog 是 append-only, 不允许 UPDATE (违反审计轨迹不可篡改原则)"
-    )
+    raise AuditLogTamperError("AuditLog 是 append-only, 不允许 UPDATE (违反审计轨迹不可篡改原则)")
 
 
 def _audit_log_block_delete(mapper, connection, target):  # noqa: ARG001
-    raise AuditLogTamperError(
-        "AuditLog 是 append-only, 不允许 DELETE (违反审计轨迹不可篡改原则)"
-    )
+    raise AuditLogTamperError("AuditLog 是 append-only, 不允许 DELETE (违反审计轨迹不可篡改原则)")
 
 
 # 在模块加载时一次性注册 (惰性 import 防循环)

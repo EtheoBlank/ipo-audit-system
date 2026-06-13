@@ -1,4 +1,5 @@
 """项目组管理 Streamlit 页面 — 7 个 Tab。"""
+
 from __future__ import annotations
 
 import json
@@ -17,7 +18,7 @@ def _projects_selectbox(label: str = "选择项目") -> Optional[dict]:
     if not projects:
         st.warning("⚠️ 请先在『项目管理』中创建一个项目。")
         return None
-    options = {f"#{p['id']} {p['name']} ({p.get('company_name','')})": p for p in projects}
+    options = {f"#{p['id']} {p['name']} ({p.get('company_name', '')})": p for p in projects}
     sel = st.selectbox(label, list(options.keys()))
     return options.get(sel) if sel else None
 
@@ -93,7 +94,7 @@ def _tab_members() -> None:
                 status = st.selectbox("状态", ["active", "inactive"], index=0)
             email = st.text_input("邮箱")
             phone = st.text_input("电话")
-            specialties = st.text_input("专长 (JSON 数组, 例 [\"收入循环\",\"存货盘点\"])")
+            specialties = st.text_input('专长 (JSON 数组, 例 ["收入循环","存货盘点"])')
             joined_at = st.date_input("入职日期", value=None)
             notes = st.text_area("备注")
             submitted = st.form_submit_button("添加")
@@ -153,7 +154,9 @@ def _tab_assignments() -> None:
 
     with col_r:
         st.markdown("##### ➕ 添加成员")
-        members = api_request("GET", "/api/team-management/members", params={"status": "active"}) or []
+        members = (
+            api_request("GET", "/api/team-management/members", params={"status": "active"}) or []
+        )
         if not members:
             st.warning("请先在『人员管理』录入人员。")
             return
@@ -186,7 +189,9 @@ def _tab_assignments() -> None:
                     "start_date": start_d.isoformat() if start_d else None,
                     "end_date": end_d.isoformat() if end_d else None,
                 }
-                res = api_request("POST", f"/api/team-management/projects/{pid}/assignments", json=payload)
+                res = api_request(
+                    "POST", f"/api/team-management/projects/{pid}/assignments", json=payload
+                )
                 if res:
                     st.success("已添加")
 
@@ -228,7 +233,9 @@ def _tab_work_plan() -> None:
     plan_idx = st.selectbox(
         "选择计划",
         range(len(plans)),
-        format_func=lambda i: f"#{plans[i]['id']} {plans[i]['name']} ({plans[i]['status']}, {len(plans[i].get('items',[]))} 项)",
+        format_func=lambda i: (
+            f"#{plans[i]['id']} {plans[i]['name']} ({plans[i]['status']}, {len(plans[i].get('items', []))} 项)"
+        ),
     )
     plan = plans[plan_idx]
     items = plan.get("items", [])
@@ -239,13 +246,17 @@ def _tab_work_plan() -> None:
     cols = st.columns(4)
     for col, status in zip(cols, statuses):
         with col:
-            st.markdown(f"**{_TASK_STATUS_LABELS[status]} ({sum(1 for x in items if x['status']==status)})**")
+            st.markdown(
+                f"**{_TASK_STATUS_LABELS[status]} ({sum(1 for x in items if x['status'] == status)})**"
+            )
             for it in [x for x in items if x["status"] == status]:
-                with st.expander(f"{it['title'][:30]}{'…' if len(it['title'])>30 else ''}"):
-                    st.caption(f"模块: {it.get('related_module','?')} | 优先级: {it.get('priority','?')} | 估时: {it.get('estimated_hours',0)}h")
+                with st.expander(f"{it['title'][:30]}{'…' if len(it['title']) > 30 else ''}"):
+                    st.caption(
+                        f"模块: {it.get('related_module', '?')} | 优先级: {it.get('priority', '?')} | 估时: {it.get('estimated_hours', 0)}h"
+                    )
                     if it.get("description"):
                         st.write(it["description"])
-                    st.write(f"建议级别: {it.get('recommended_level','?')}")
+                    st.write(f"建议级别: {it.get('recommended_level', '?')}")
                     new_status = st.selectbox(
                         "改状态",
                         statuses + ["cancelled"],
@@ -270,7 +281,9 @@ def _tab_work_plan() -> None:
                             "member_id": int(new_member) if new_member > 0 else None,
                             "actual_hours": float(new_actual),
                         }
-                        res = api_request("PUT", f"/api/team-management/work-plan-items/{it['id']}", json=payload)
+                        res = api_request(
+                            "PUT", f"/api/team-management/work-plan-items/{it['id']}", json=payload
+                        )
                         if res is not None:
                             st.success("已更新")
                             st.rerun()
@@ -334,7 +347,10 @@ def _tab_daily_reports() -> None:
     with col_r:
         st.markdown("##### 📜 历史汇报")
         reports = (
-            api_request("GET", f"/api/team-management/projects/{pid}/daily-reports", params={"limit": 30}) or []
+            api_request(
+                "GET", f"/api/team-management/projects/{pid}/daily-reports", params={"limit": 30}
+            )
+            or []
         )
         if reports:
             df = pd.DataFrame(
@@ -380,8 +396,11 @@ def _tab_meetings() -> None:
         st.markdown("##### ➕ 排期会议")
         with st.form("create_meeting", clear_on_submit=True):
             title = st.text_input("会议标题 *")
-            mtype = st.selectbox("类型", list(_MEETING_TYPE_LABELS.keys()),
-                                  format_func=lambda x: _MEETING_TYPE_LABELS[x])
+            mtype = st.selectbox(
+                "类型",
+                list(_MEETING_TYPE_LABELS.keys()),
+                format_func=lambda x: _MEETING_TYPE_LABELS[x],
+            )
             d = st.date_input("日期", value=date.today())
             t = st.time_input("时间", value=None)
             duration = st.number_input("时长(分钟)", 15, 480, 60, step=15)
@@ -398,7 +417,9 @@ def _tab_meetings() -> None:
                         "location": location or None,
                         "agenda": agenda or None,
                     }
-                    res = api_request("POST", f"/api/team-management/projects/{pid}/meetings", json=payload)
+                    res = api_request(
+                        "POST", f"/api/team-management/projects/{pid}/meetings", json=payload
+                    )
                     if res:
                         st.success(f"已创建会议 #{res.get('id')}")
 
@@ -428,12 +449,15 @@ def _tab_meetings() -> None:
                     if submit and content.strip():
                         payload = {
                             "content": content,
-                            "attendees": [a.strip() for a in attendees_raw.split(",") if a.strip()] or None,
+                            "attendees": [a.strip() for a in attendees_raw.split(",") if a.strip()]
+                            or None,
                             "decisions": _parse_lines(decisions_raw, ["decision", "owner"]),
                             "action_items": _parse_lines(actions_raw, ["action", "owner", "due"]),
                             "recorded_by": recorded_by or None,
                         }
-                        res = api_request("PUT", f"/api/team-management/meetings/{m['id']}/record", json=payload)
+                        res = api_request(
+                            "PUT", f"/api/team-management/meetings/{m['id']}/record", json=payload
+                        )
                         if res:
                             st.success(f"已记录，AI 评分 {res.get('quality_score', '-')}")
                             ai = res.get("ai_assessment") or {}
@@ -492,14 +516,19 @@ def _tab_dashboard() -> None:
     p = dash["project"]
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("任务总数", p["total_items"])
-    col2.metric("已完成", p["completed_items"], f"{p['completion_rate']*100:.0f}%")
+    col2.metric("已完成", p["completed_items"], f"{p['completion_rate'] * 100:.0f}%")
     col3.metric("进行中", p["in_progress_items"])
     col4.metric("阻塞", p["blocked_items"])
 
     col5, col6, col7, col8 = st.columns(4)
     col5.metric("估时(总)", f"{p['total_estimated_hours']:.0f} h")
     col6.metric("实工(总)", f"{p['total_actual_hours']:.0f} h")
-    col7.metric("开放卡点", p["open_blockers"], delta=f"紧急 {p['critical_blockers']}", delta_color="inverse")
+    col7.metric(
+        "开放卡点",
+        p["open_blockers"],
+        delta=f"紧急 {p['critical_blockers']}",
+        delta_color="inverse",
+    )
     col8.metric("平均存续", f"{dash['blockers']['avg_age_hours']:.0f} h")
 
     st.markdown("---")
@@ -510,7 +539,10 @@ def _tab_dashboard() -> None:
         st.markdown("##### 任务状态分布")
         if dash.get("by_status"):
             df_status = pd.DataFrame(
-                [{"状态": _TASK_STATUS_LABELS.get(k, k), "数量": v} for k, v in dash["by_status"].items()]
+                [
+                    {"状态": _TASK_STATUS_LABELS.get(k, k), "数量": v}
+                    for k, v in dash["by_status"].items()
+                ]
             )
             st.bar_chart(df_status.set_index("状态"))
         else:
@@ -563,7 +595,9 @@ def _tab_recommendations() -> None:
 
     if st.button("🤖 生成新一轮管理建议", type="primary"):
         with st.spinner("AI 分析中…"):
-            res = api_request("POST", f"/api/team-management/projects/{pid}/recommendations/generate")
+            res = api_request(
+                "POST", f"/api/team-management/projects/{pid}/recommendations/generate"
+            )
         if res:
             st.success(f"已生成建议 #{res.get('id')}")
             st.rerun()
@@ -576,7 +610,7 @@ def _tab_recommendations() -> None:
     for r in recs:
         confirmed = "✅ 已确认" if r.get("is_confirmed") else "⏳ 待确认"
         with st.expander(
-            f"#{r['id']} {r.get('period_start','-')}~{r.get('period_end','-')} {confirmed} | AI {'已启用' if r.get('ai_enabled') else '未启用'}"
+            f"#{r['id']} {r.get('period_start', '-')}~{r.get('period_end', '-')} {confirmed} | AI {'已启用' if r.get('ai_enabled') else '未启用'}"
         ):
             # 关键发现
             findings = r.get("findings") or []
@@ -584,8 +618,14 @@ def _tab_recommendations() -> None:
                 st.markdown("##### 关键发现")
                 for f in findings:
                     sev = f.get("severity", "info")
-                    icon = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢", "info": "ℹ️"}.get(sev, "•")
-                    st.markdown(f"{icon} **{f.get('category','')}** — {f.get('finding','')}")
+                    icon = {
+                        "critical": "🔴",
+                        "high": "🟠",
+                        "medium": "🟡",
+                        "low": "🟢",
+                        "info": "ℹ️",
+                    }.get(sev, "•")
+                    st.markdown(f"{icon} **{f.get('category', '')}** — {f.get('finding', '')}")
                     if f.get("evidence"):
                         st.caption(f"   证据: {f['evidence']}")
 
@@ -595,9 +635,9 @@ def _tab_recommendations() -> None:
                 st.markdown("##### 优先行动")
                 for a in actions:
                     st.markdown(
-                        f"- **{a.get('action','')}** — 负责人 {a.get('owner','?')}, "
-                        f"截止 {a.get('deadline','?')} "
-                        f"({a.get('rationale','')})"
+                        f"- **{a.get('action', '')}** — 负责人 {a.get('owner', '?')}, "
+                        f"截止 {a.get('deadline', '?')} "
+                        f"({a.get('rationale', '')})"
                     )
 
             # Markdown 长文

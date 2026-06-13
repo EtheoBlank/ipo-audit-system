@@ -10,6 +10,7 @@
   - Excel 批量上传 + Excel 导出审定明细
   - 长期资产范围 (科目前缀) 项目级覆盖
 """
+
 from __future__ import annotations
 
 import io
@@ -23,12 +24,9 @@ from fastapi import (
     File,
     HTTPException,
     Query,
-    Request,
     UploadFile,
-    status,
 )
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -48,7 +46,6 @@ from app.models.account_audit import (
 )
 from app.models.db.account_audit import (
     DEFAULT_LONG_TERM_ASSET_PREFIXES,
-    AccountMovementAudit,
 )
 from app.models.db.auth import (
     AUDIT_ACTION_CREATE,
@@ -58,7 +55,7 @@ from app.models.db.auth import (
     ROLE_ASSISTANT,
     User,
 )
-from app.models.db_models import Project
+from app.api._helpers import get_project_or_404
 from app.services.account_audit import (
     AccountAuditService,
     get_effective_prefixes,
@@ -81,15 +78,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/account-audit", tags=["长期资产发生额审定"])
 
 
-async def _get_project_or_404(db: AsyncSession, project_id: int) -> Project:
-    proj = (
-        await db.execute(select(Project).where(Project.id == project_id))
-    ).scalar_one_or_none()
-    if proj is None:
-        raise HTTPException(status_code=404, detail=f"项目 {project_id} 不存在")
-    return proj
-
-
 # ============================================================
 #  科目范围覆盖
 # ============================================================
@@ -104,7 +92,7 @@ async def get_effective_prefixes_api(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     overrides = await AccountAuditService.list_scope_overrides(db, project_id)
     effective = await get_effective_prefixes(db, project_id)
     return EffectivePrefixesResponse(
@@ -125,7 +113,7 @@ async def add_scope_override(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     ov = await AccountAuditService.add_scope_override(
         db,
         project_id=project_id,
@@ -189,7 +177,7 @@ async def initialize_from_chronological(
     db: AsyncSession = Depends(get_db),
 ):
     """从序时账抽长期资产发生额, 初始化审定记录."""
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     try:
         result = await AccountAuditService.initialize_from_chronological(
             db,
@@ -246,7 +234,7 @@ async def list_movements(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     result = await AccountAuditService.list_movements(
         db,
         project_id=project_id,
@@ -354,7 +342,7 @@ async def bulk_audit(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     result = await AccountAuditService.bulk_audit(
         db,
         project_id=project_id,
@@ -396,7 +384,7 @@ async def bulk_audit_upload(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     content, safe_name, suffix = await read_upload_capped(
         file, allowed_exts={".xlsx", ".xls", ".csv"}
     )
@@ -474,7 +462,7 @@ async def account_summary(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     summary = await AccountAuditService.account_summary(
         db,
         project_id=project_id,
@@ -494,7 +482,7 @@ async def project_overview(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     overview = await AccountAuditService.project_overview(
         db, project_id=project_id, period_end=period_end
     )
@@ -526,7 +514,7 @@ async def export_movements(
     db: AsyncSession = Depends(get_db),
 ):
     """导出长期资产审定明细 Excel."""
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     result = await AccountAuditService.list_movements(
         db,
         project_id=project_id,
@@ -572,8 +560,6 @@ async def export_movements(
     )
     return StreamingResponse(
         buf,
-        media_type=(
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
+        media_type=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )

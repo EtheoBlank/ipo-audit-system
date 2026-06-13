@@ -7,21 +7,22 @@
 
 详细 CRUD 略, 用户可走 /docs 看 ORM 模型对应字段。
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, desc, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api._helpers import get_project_or_404
 from app.core.database import get_db
 from app.models.db.audit_cycles import (
     AssetImpairmentTest,
     ConstructionInProgress,
-    DepreciationRecalc,
     ECLAssessment,
     ExpenseRecord,
     FixedAsset,
@@ -38,7 +39,6 @@ from app.models.db.audit_cycles import (
     Supplier,
 )
 from app.models.db.auth import ROLE_ASSISTANT, User
-from app.models.db_models import Project
 from app.services.audit_cycles import (
     CIPTransferChecker,
     DepreciationCalculator,
@@ -48,7 +48,6 @@ from app.services.audit_cycles import (
     GoodwillImpairmentCalculator,
     IncomeTaxRecalculator,
     LeaseAmortizer,
-    PayablesService,
     PayrollReconciler,
     RDCapitalizationAssessor,
     SubsequentEventClassifier,
@@ -57,13 +56,6 @@ from app.services.auth import get_current_user, record_audit_log, require_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/audit-cycles", tags=["审计循环 (Pack C)"])
-
-
-async def _get_project_or_404(db: AsyncSession, project_id: int) -> Project:
-    p = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
-    if p is None:
-        raise HTTPException(404, f"项目 {project_id} 不存在")
-    return p
 
 
 # ============================================================
@@ -142,9 +134,7 @@ async def rd_super_deduction(
     payload: RDSuperDeductionRequest,
     current_user: User = Depends(get_current_user),
 ):
-    return RDCapitalizationAssessor.rd_super_deduction(
-        payload.rd_expense, payload.manufacturing
-    )
+    return RDCapitalizationAssessor.rd_super_deduction(payload.rd_expense, payload.manufacturing)
 
 
 class GoodwillNPVRequest(BaseModel):
@@ -158,7 +148,11 @@ async def goodwill_npv(
     current_user: User = Depends(get_current_user),
 ):
     npv = GoodwillImpairmentCalculator.npv(payload.annual_cashflows, payload.discount_rate)
-    return {"npv": npv, "years": len(payload.annual_cashflows), "discount_rate": payload.discount_rate}
+    return {
+        "npv": npv,
+        "years": len(payload.annual_cashflows),
+        "discount_rate": payload.discount_rate,
+    }
 
 
 class GoodwillImpairmentRequest(BaseModel):
@@ -248,9 +242,7 @@ async def ecl_compute(
     current_user: User = Depends(get_current_user),
 ):
     stage = ECLCalculator.stage_for_aging_days(payload.aging_days)
-    ecl = ECLCalculator.compute_ecl(
-        payload.receivable, stage, payload.pd, payload.lgd
-    )
+    ecl = ECLCalculator.compute_ecl(payload.receivable, stage, payload.pd, payload.lgd)
     return {
         "stage": stage,
         "default_pd": ECLCalculator.default_pd_for_stage(stage),
@@ -302,7 +294,7 @@ async def scan_expense_anomalies(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     res = await ExpensesAnomalyDetector.scan(db, project_id=project_id, period_end=period_end)
     return res
 
@@ -314,7 +306,7 @@ async def payroll_reconcile(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     rec = await PayrollReconciler.reconcile(db, project_id=project_id, period_yyyymm=period_yyyymm)
     return {
         "id": rec.id,
@@ -333,13 +325,18 @@ async def fixed_asset_recalc(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    asset = (await db.execute(select(FixedAsset).where(FixedAsset.id == asset_id))).scalar_one_or_none()
+    asset = (
+        await db.execute(select(FixedAsset).where(FixedAsset.id == asset_id))
+    ).scalar_one_or_none()
     if asset is None:
         raise HTTPException(404, f"资产 {asset_id} 不存在")
     try:
         rec = await DepreciationCalculator.recalc_asset(
-            db, project_id=asset.project_id, asset_id=asset_id,
-            period_yyyymm=period_yyyymm, book_depreciation=book_depreciation,
+            db,
+            project_id=asset.project_id,
+            asset_id=asset_id,
+            period_yyyymm=period_yyyymm,
+            book_depreciation=book_depreciation,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -358,9 +355,9 @@ async def cip_transfer_check(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    cip = (await db.execute(
-        select(ConstructionInProgress).where(ConstructionInProgress.id == cip_id)
-    )).scalar_one_or_none()
+    cip = (
+        await db.execute(select(ConstructionInProgress).where(ConstructionInProgress.id == cip_id))
+    ).scalar_one_or_none()
     if cip is None:
         raise HTTPException(404, "CIP 不存在")
     ready, reason = CIPTransferChecker.is_ready_for_transfer(cip)
@@ -383,7 +380,7 @@ def _make_list_endpoint(model_cls, prefix: str, name: str):
         current_user: User = Depends(get_current_user),
         db: AsyncSession = Depends(get_db),
     ):
-        await _get_project_or_404(db, project_id)
+        await get_project_or_404(db, project_id)
         stmt = select(model_cls).where(model_cls.project_id == project_id).offset(skip).limit(limit)
         rows = list((await db.execute(stmt)).scalars().all())
         # 简化序列化 — 走 SQLAlchemy 默认 __dict__
@@ -404,12 +401,20 @@ _list_payroll = _make_list_endpoint(PayrollRecord, "payroll", "payroll")
 _list_fa = _make_list_endpoint(FixedAsset, "fixed-assets/assets", "fixed_assets")
 _list_cip = _make_list_endpoint(ConstructionInProgress, "fixed-assets/cip", "cip")
 _list_intangible = _make_list_endpoint(IntangibleAsset, "intangible/assets", "intangible_assets")
-_list_rd = _make_list_endpoint(RDCapitalizationAssessment, "intangible/rd-assessments", "rd_assessments")
+_list_rd = _make_list_endpoint(
+    RDCapitalizationAssessment, "intangible/rd-assessments", "rd_assessments"
+)
 _list_lti = _make_list_endpoint(LongTermInvestment, "long-term-investment/items", "lti")
 _list_lease = _make_list_endpoint(LeaseContract, "leases/contracts", "lease_contracts")
-_list_tax = _make_list_endpoint(IncomeTaxReconciliation, "income-tax/reconciliations", "tax_reconciliations")
+_list_tax = _make_list_endpoint(
+    IncomeTaxReconciliation, "income-tax/reconciliations", "tax_reconciliations"
+)
 _list_ecl = _make_list_endpoint(ECLAssessment, "accounting-estimates/ecl", "ecl")
-_list_imp = _make_list_endpoint(AssetImpairmentTest, "accounting-estimates/impairment", "impairment")
+_list_imp = _make_list_endpoint(
+    AssetImpairmentTest, "accounting-estimates/impairment", "impairment"
+)
 _list_prov = _make_list_endpoint(ProvisionEstimate, "accounting-estimates/provisions", "provisions")
 _list_subseq = _make_list_endpoint(SubsequentEvent, "subsequent-events/events", "subseq_events")
-_list_gc = _make_list_endpoint(GoingConcernAssessment, "subsequent-events/going-concern", "going_concern")
+_list_gc = _make_list_endpoint(
+    GoingConcernAssessment, "subsequent-events/going-concern", "going_concern"
+)

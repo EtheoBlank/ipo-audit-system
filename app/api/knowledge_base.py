@@ -1,19 +1,18 @@
 """知识库 API.
 
-  - POST   /books/upload          上传书籍 (启动后台索引)
-  - GET    /books                  列表
-  - GET    /books/{id}             详情
-  - DELETE /books/{id}             删除 (含文件)
-  - POST   /books/{id}/reindex     重建索引
-  - POST   /search                 语义+关键词检索
-  - POST   /match-case             面向"审计说明生成"的便捷接口 — 输入科目/风险点 → 返回案例
+- POST   /books/upload          上传书籍 (启动后台索引)
+- GET    /books                  列表
+- GET    /books/{id}             详情
+- DELETE /books/{id}             删除 (含文件)
+- POST   /books/{id}/reindex     重建索引
+- POST   /search                 语义+关键词检索
+- POST   /match-case             面向"审计说明生成"的便捷接口 — 输入科目/风险点 → 返回案例
 """
 
 from __future__ import annotations
 
 import logging
 import re
-import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +34,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.db_models import KnowledgeBook
+from app.models.db.auth import User
+from app.services.auth import get_current_user, get_current_user_optional
 from app.services.knowledge_base import KnowledgeBaseService
 from app.services.knowledge_base.document_loader import detect_file_type
 
@@ -127,6 +128,7 @@ async def upload_book(
     tags: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """上传一本书 / 一份文档 — 落盘后启动后台索引任务。"""
     filename = file.filename or ""
@@ -156,7 +158,7 @@ async def upload_book(
                 target.unlink(missing_ok=True)
                 raise HTTPException(
                     status_code=413,
-                    detail=f"文件过大 (>{settings.KB_MAX_BOOK_SIZE // (1024*1024)}MB)",
+                    detail=f"文件过大 (>{settings.KB_MAX_BOOK_SIZE // (1024 * 1024)}MB)",
                 )
 
     book = KnowledgeBook(
@@ -193,6 +195,7 @@ async def list_books(
     category: Optional[str] = None,
     status: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     q = select(KnowledgeBook)
     if category:
@@ -204,23 +207,34 @@ async def list_books(
 
 
 @router.get("/books/{book_id}", response_model=BookOut)
-async def get_book(book_id: int, db: AsyncSession = Depends(get_db)):
-    book = (await db.execute(
-        select(KnowledgeBook).where(KnowledgeBook.id == book_id)
-    )).scalar_one_or_none()
+async def get_book(
+    book_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    book = (
+        await db.execute(select(KnowledgeBook).where(KnowledgeBook.id == book_id))
+    ).scalar_one_or_none()
     if not book:
         raise HTTPException(status_code=404, detail="书籍不存在")
     return book
 
 
 @router.delete("/books/{book_id}")
-async def delete_book(book_id: int):
+async def delete_book(
+    book_id: int,
+    current_user: User = Depends(get_current_user),
+):
     await _kb_service.delete_book(book_id)
     return {"message": "已删除"}
 
 
 @router.post("/books/{book_id}/reindex")
-async def reindex_book(book_id: int, bg: BackgroundTasks):
+async def reindex_book(
+    book_id: int,
+    bg: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+):
     async def _runner():
         try:
             await _kb_service.reindex_book(book_id)
@@ -237,7 +251,11 @@ async def reindex_book(book_id: int, bg: BackgroundTasks):
 
 
 @router.post("/search", response_model=List[SearchResult])
-async def search_kb(req: SearchRequest, db: AsyncSession = Depends(get_db)):
+async def search_kb(
+    req: SearchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     results = await _kb_service.search(
         db,
         query=req.query,
@@ -251,7 +269,11 @@ async def search_kb(req: SearchRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/match-case", response_model=List[SearchResult])
-async def match_case(req: MatchCaseRequest, db: AsyncSession = Depends(get_db)):
+async def match_case(
+    req: MatchCaseRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     """便捷接口：根据科目 / 风险 / 行业组合 query → 返回相似案例 chunk。
 
     比 ``/search`` 多了一层"组装 query"逻辑，让前端不用自己拼字符串。
@@ -280,10 +302,7 @@ async def match_case(req: MatchCaseRequest, db: AsyncSession = Depends(get_db)):
         top_k=req.top_k,
         category=req.category,
         project_id=req.project_id,
-        context=(
-            f"account={req.account_code or ''};"
-            f"industry={req.industry or ''}"
-        ),
+        context=(f"account={req.account_code or ''};industry={req.industry or ''}"),
     )
     return [SearchResult(**r.__dict__) for r in results]
 
@@ -294,32 +313,38 @@ async def match_case(req: MatchCaseRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/categories")
-async def kb_categories(db: AsyncSession = Depends(get_db)):
+async def kb_categories(
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     from sqlalchemy import func
 
-    q = select(
-        KnowledgeBook.category, func.count(KnowledgeBook.id)
-    ).group_by(KnowledgeBook.category)
+    q = select(KnowledgeBook.category, func.count(KnowledgeBook.id)).group_by(
+        KnowledgeBook.category
+    )
     rows = (await db.execute(q)).all()
     return [{"category": c or "未分类", "count": n} for c, n in rows]
 
 
 @router.get("/stats")
-async def kb_stats(db: AsyncSession = Depends(get_db)):
+async def kb_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     from sqlalchemy import func
 
-    total_books = (await db.execute(
-        select(func.count(KnowledgeBook.id))
-    )).scalar() or 0
-    ready_books = (await db.execute(
-        select(func.count(KnowledgeBook.id)).where(KnowledgeBook.status == "ready")
-    )).scalar() or 0
-    total_chunks = (await db.execute(
-        select(func.coalesce(func.sum(KnowledgeBook.chunk_count), 0))
-    )).scalar() or 0
-    total_chars = (await db.execute(
-        select(func.coalesce(func.sum(KnowledgeBook.total_chars), 0))
-    )).scalar() or 0
+    total_books = (await db.execute(select(func.count(KnowledgeBook.id)))).scalar() or 0
+    ready_books = (
+        await db.execute(
+            select(func.count(KnowledgeBook.id)).where(KnowledgeBook.status == "ready")
+        )
+    ).scalar() or 0
+    total_chunks = (
+        await db.execute(select(func.coalesce(func.sum(KnowledgeBook.chunk_count), 0)))
+    ).scalar() or 0
+    total_chars = (
+        await db.execute(select(func.coalesce(func.sum(KnowledgeBook.total_chars), 0)))
+    ).scalar() or 0
     return {
         "total_books": total_books,
         "ready_books": ready_books,

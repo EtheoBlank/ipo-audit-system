@@ -9,6 +9,7 @@
 - 解析器接口统一：``ResolverCallable = Callable[[DataPath, WorkpaperDataContext], object]``
 - 解析失败不抛异常，返回 ``None``，由后续问答引擎兜底
 """
+
 from __future__ import annotations
 
 import logging
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 # ----------------------------- 数据上下文 -----------------------------
+
 
 @dataclass
 class WorkpaperDataContext:
@@ -50,6 +52,7 @@ class WorkpaperDataContext:
 
 # ----------------------------- 数据路径 -----------------------------
 
+
 @dataclass(frozen=True)
 class DataPath:
     """``workpaper:dataset.path.to.value`` 解析后的路径对象。"""
@@ -72,7 +75,7 @@ def parse_workpaper_source(source: str) -> Optional[DataPath]:
     """
     if not source.startswith("workpaper:"):
         return None
-    body = source[len("workpaper:"):]
+    body = source[len("workpaper:") :]
     if not body:
         return None
     parts = body.split(".")
@@ -224,6 +227,7 @@ class FieldMapper:
 # 内置解析器实现
 # ============================================================
 
+
 def _resolve_project(path: DataPath, ctx: WorkpaperDataContext) -> Any:
     """从 Project ORM 取字段。"""
     if ctx.project is None:
@@ -303,15 +307,12 @@ def _resolve_inventory(path: DataPath, ctx: WorkpaperDataContext) -> Any:
     head = path.parts[0]
     if head in ("ending", "ending_balance"):
         return float(
-            df[df["account_code"].str.startswith(("1401", "1403", "1405"))]
-            ["ending_balance"].sum()
+            df[df["account_code"].str.startswith(("1401", "1403", "1405"))]["ending_balance"].sum()
         )
     return None
 
 
-def _resolve_ledger(
-    path: DataPath, ctx: WorkpaperDataContext, account_prefix: str
-) -> Any:
+def _resolve_ledger(path: DataPath, ctx: WorkpaperDataContext, account_prefix: str) -> Any:
     """通用明细账解析。"""
     df = ctx.account_balances
     if df is None or df.empty:
@@ -371,18 +372,12 @@ def _resolve_confirmation(path: DataPath, ctx: WorkpaperDataContext) -> Any:
             for c in cases
             if getattr(c, "status", "") not in ("cancelled",)
         )
-        sample_balance = sum(
-            getattr(c, "sample_balance", 0) or 0
-            for c in cases
-        )
+        sample_balance = sum(getattr(c, "sample_balance", 0) or 0 for c in cases)
         if sample_balance == 0:
             return None
         return round(sent_amount / sample_balance, 4)
     if fn == "response_rate":
-        sent = sum(
-            getattr(c, "sent_amount", 0) or 0
-            for c in cases
-        )
+        sent = sum(getattr(c, "sent_amount", 0) or 0 for c in cases)
         replied = sum(
             getattr(c, "confirmed_amount", 0) or 0
             for c in cases
@@ -406,20 +401,11 @@ def _resolve_confirmation(path: DataPath, ctx: WorkpaperDataContext) -> Any:
             return None
         return round(agreed / replied, 4)
     if fn == "agreed":
-        return sum(
-            1 for c in cases
-            if getattr(c, "status", "") in ("confirmed", "agreed")
-        )
+        return sum(1 for c in cases if getattr(c, "status", "") in ("confirmed", "agreed"))
     if fn == "disputed":
-        return sum(
-            1 for c in cases
-            if getattr(c, "status", "") in ("disputed", "disagree")
-        )
+        return sum(1 for c in cases if getattr(c, "status", "") in ("disputed", "disagree"))
     if fn == "no_reply":
-        return sum(
-            1 for c in cases
-            if getattr(c, "status", "") in ("no_reply", "pending")
-        )
+        return sum(1 for c in cases if getattr(c, "status", "") in ("no_reply", "pending"))
     return None
 
 
@@ -470,8 +456,5 @@ def _resolve_revenue_contract(path: DataPath, ctx: WorkpaperDataContext) -> Any:
     if fn == "count":
         return len(contracts)
     if fn == "high_risk_count":
-        return sum(
-            1 for c in contracts
-            if getattr(c, "risk_level", "") == "高"
-        )
+        return sum(1 for c in contracts if getattr(c, "risk_level", "") == "高")
     return None

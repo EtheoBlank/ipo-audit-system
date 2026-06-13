@@ -1,4 +1,5 @@
 """Notification API — unread / list / mark-read."""
+
 from __future__ import annotations
 
 import logging

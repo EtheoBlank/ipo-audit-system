@@ -301,6 +301,9 @@ ipo-audit-system/
 │   ├── test_comprehensive_parser.py / test_comprehensive_frontend.py / test_e2e_comprehensive.py
 │   ├── test_field_mapper.py / test_fill_engine.py / test_qa_engine.py / test_rule_engine.py
 │   ├── test_firm_template_service.py / test_web_search_engine.py
+│   ├── test_pack_a2_b2.py                 # Pack A.2/B.2: 多租户隔离/乐观锁/审计归档/AI 推断/Word 富格式
+│   ├── test_auth.py / test_notification.py / test_account_audit.py / test_report_templates.py
+│   ├── test_audit_cycles.py / test_related_parties.py / test_ipo_specials.py
 │   └── ...
 │
 ├── docs/                               # ───── 文档 ─────
@@ -554,13 +557,31 @@ uv run pre-commit run --all-files
 
 ### 🔭 路线图
 
-**Pack A.2 / B.2 / 后续增强**:
-- [ ] 老业务 API 全量加 Depends(get_current_user) — 当前老路由 (projects/sales_ledger 等) 仍无鉴权
-- [ ] 跨事务所多租户硬隔离 (目前是软隔离, 建议单事务所部署)
-- [ ] ApprovalEngine 加版本号乐观锁 (并发审批)
-- [ ] Pack B AI 增强 (DeepSeek 推断关联方)
-- [ ] 报告模板渲染 Word 富格式优化 (当前正则替换不识别 docx run-level 格式)
-- [ ] 审计轨迹分区 + 索引优化 (长期 100w+ 行)
+**Pack A.2 / B.2 (本轮全部 6 项完工 + 41 个新增单测)**:
+- [x] **老业务 API 全量加鉴权** — projects / sales_ledger / workbooks / contracts / inventory /
+      confirmations / reports / regulatory_cases / regulations / knowledge_base /
+      comprehensive / team_management / sentiment **共 13 个老路由 170+ 端点**
+      全部接入 ``get_current_user`` / ``get_current_user_optional`` (写强制登录, 读匿名可读 + AUTH_ENABLED=false 兼容)
+- [x] **跨事务所多租户硬隔离** — ``Project.firm_id`` + ``scope_projects_to_firm`` /
+      ``ensure_project_in_firm`` 帮助器, admin 跨租户运维; ``app/services/auth/tenant.py``;
+      已挂载到 projects / workbooks / reports 关键写端点, 其他模块按需用同模式扩展
+- [x] **ApprovalEngine 加版本号乐观锁** — ``ApprovalWorkflow.version`` 字段 +
+      ``ApprovalEngine.decide(expected_version=...)`` + ``ApprovalConflict`` 异常 +
+      HTTP 409 Conflict (并发审批防双写)
+- [x] **Pack B AI 增强** — DeepSeek 关联方推断 (``RelatedPartyAIInferer``):
+      把客户/供应商/已知股东扔给 DeepSeek, JSON Mode 输出"潜在关联方候选 + confidence + 证据类型",
+      仍走人工 confirm 流程, 失败自动降级到规则识别
+- [x] **报告模板 Word 富格式渲染优化** — XML 段落级 run-aware 替换 (``_render_docx_xml_blob``):
+      把跨 ``<w:r>`` 拆散的 ``${placeholder}`` 拼回去, 整段替换写第一个 run + 清空其余, 保留字体/字号/加粗/颜色
+- [x] **审计轨迹分区 + 索引优化** — 4 个复合索引
+      (firm/project/user/action × created_at) + ``rotate_audit_logs`` 归档工具
+      (按 N 月切, dry-run 默认, 影子表 ``audit_logs_archive``) + ``audit_log_stats`` 监控
+
+### 🔮 下一阶段候选
+
+- [ ] PostgreSQL 真分区 (DECLARATIVE PARTITION BY RANGE created_at) — 当前应用层归档
+- [ ] 关联方 AI 推断支持供应商主表扫描 (Pack C 应付循环落库后)
+- [ ] 审批工作流抽离为独立子系统 (跨业务模块共用)
 
 ---
 

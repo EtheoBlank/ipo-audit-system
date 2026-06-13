@@ -1,33 +1,28 @@
 """Pack D — IPO 专属 API. /api/ipo-specials/*"""
+
 from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api._helpers import get_project_or_404
 from app.core.database import get_db
 from app.models.db.auth import ROLE_ASSISTANT, User
 from app.models.db.ipo_specials import (
     CustomerSupplierOverlap,
     FeedbackLetter,
     FeedbackQuestion,
-    ICWalkthrough,
-    InternalControlCycle,
-    JournalEntryDraft,
     PeerCompany,
-    PeerCompanyMetric,
     PeriodComparisonReport,
     Prospectus,
     ProspectusKeyMetric,
-    ReconciliationFinding,
-    RevenueCutoffTest,
     SubmissionChecklistItem,
 )
-from app.models.db_models import Project
 from app.services.auth import get_current_user, record_audit_log, require_role
 from app.services.ipo_specials import (
     DEFAULT_SUBMISSION_CHECKLIST,
@@ -42,13 +37,6 @@ from app.services.ipo_specials import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ipo-specials", tags=["IPO 专属 (Pack D)"])
-
-
-async def _get_project_or_404(db: AsyncSession, project_id: int) -> Project:
-    p = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
-    if p is None:
-        raise HTTPException(404, f"项目 {project_id} 不存在")
-    return p
 
 
 # ============================================================
@@ -102,11 +90,16 @@ async def cutoff_judge(
     current_user: User = Depends(get_current_user),
 ):
     judgement, diff_days = RevenueCutoffTester.judge(
-        payload.ship_date, payload.revenue_confirm_date,
-        payload.period_end, payload.cutoff_days,
+        payload.ship_date,
+        payload.revenue_confirm_date,
+        payload.period_end,
+        payload.cutoff_days,
     )
-    return {"judgement": judgement, "diff_days": diff_days,
-            "adjustment_required": judgement != "normal"}
+    return {
+        "judgement": judgement,
+        "diff_days": diff_days,
+        "adjustment_required": judgement != "normal",
+    }
 
 
 # ============================================================
@@ -123,25 +116,36 @@ async def upload_prospectus(
     db: AsyncSession = Depends(get_db),
 ):
     """记录招股书 (实际文件可走 report_templates / file upload, 这里只登记 metadata)."""
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     from datetime import date
+
     # 先把旧版本置为非 current
-    rows = list((await db.execute(
-        select(Prospectus).where(Prospectus.project_id == project_id)
-    )).scalars().all())
+    rows = list(
+        (await db.execute(select(Prospectus).where(Prospectus.project_id == project_id)))
+        .scalars()
+        .all()
+    )
     for r in rows:
         r.is_current = False
     p = Prospectus(
-        project_id=project_id, version=version, filename=filename,
-        upload_date=str(date.today()), is_current=True,
+        project_id=project_id,
+        version=version,
+        filename=filename,
+        upload_date=str(date.today()),
+        is_current=True,
     )
     db.add(p)
     await db.commit()
     await db.refresh(p)
     await record_audit_log(
-        db, user_id=current_user.id, user_display=current_user.full_name,
-        user_role=current_user.role, action="create",
-        resource_type="prospectus", resource_id=p.id, project_id=project_id,
+        db,
+        user_id=current_user.id,
+        user_display=current_user.full_name,
+        user_role=current_user.role,
+        action="create",
+        resource_type="prospectus",
+        resource_id=p.id,
+        project_id=project_id,
         summary=f"上传招股书 {version}",
     )
     return {"id": p.id, "version": p.version, "is_current": p.is_current}
@@ -153,12 +157,19 @@ async def list_prospectuses(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = list((await db.execute(
-        select(Prospectus).where(Prospectus.project_id == project_id)
-    )).scalars().all())
+    rows = list(
+        (await db.execute(select(Prospectus).where(Prospectus.project_id == project_id)))
+        .scalars()
+        .all()
+    )
     return [
-        {"id": r.id, "version": r.version, "upload_date": r.upload_date,
-         "is_current": r.is_current, "filename": r.filename}
+        {
+            "id": r.id,
+            "version": r.version,
+            "upload_date": r.upload_date,
+            "is_current": r.is_current,
+            "filename": r.filename,
+        }
         for r in rows
     ]
 
@@ -179,7 +190,9 @@ async def add_metric(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    p = (await db.execute(select(Prospectus).where(Prospectus.id == prospectus_id))).scalar_one_or_none()
+    p = (
+        await db.execute(select(Prospectus).where(Prospectus.id == prospectus_id))
+    ).scalar_one_or_none()
     if p is None:
         raise HTTPException(404, "招股书不存在")
     m = ProspectusKeyMetric(prospectus_id=prospectus_id, **payload.model_dump())
@@ -188,8 +201,11 @@ async def add_metric(
     await db.commit()
     await db.refresh(m)
     return {
-        "id": m.id, "metric_code": m.metric_code, "is_matched": m.is_matched,
-        "diff_amount": m.diff_amount, "diff_pct": m.diff_pct,
+        "id": m.id,
+        "metric_code": m.metric_code,
+        "is_matched": m.is_matched,
+        "diff_amount": m.diff_amount,
+        "diff_pct": m.diff_pct,
     }
 
 
@@ -215,12 +231,13 @@ async def add_period_metric(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     yoy = 0.0
     if payload.value_period_2 != 0:
         yoy = (payload.value_period_3 - payload.value_period_2) / abs(payload.value_period_2) * 100
     p = PeriodComparisonReport(
-        project_id=project_id, **payload.model_dump(),
+        project_id=project_id,
+        **payload.model_dump(),
         yoy_change_pct=round(yoy, 2),
     )
     p.anomaly_flag = PeriodAnomalyDetector.detect_anomaly(p)
@@ -228,7 +245,8 @@ async def add_period_metric(
     await db.commit()
     await db.refresh(p)
     return {
-        "id": p.id, "yoy_change_pct": p.yoy_change_pct,
+        "id": p.id,
+        "yoy_change_pct": p.yoy_change_pct,
         "anomaly_flag": p.anomaly_flag,
     }
 
@@ -239,13 +257,18 @@ async def list_period_metrics(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = list((await db.execute(
-        select(PeriodComparisonReport).where(PeriodComparisonReport.project_id == project_id)
-    )).scalars().all())
-    return [
-        {c.name: getattr(r, c.name) for c in r.__table__.columns}
-        for r in rows
-    ]
+    rows = list(
+        (
+            await db.execute(
+                select(PeriodComparisonReport).where(
+                    PeriodComparisonReport.project_id == project_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [{c.name: getattr(r, c.name) for c in r.__table__.columns} for r in rows]
 
 
 # ============================================================
@@ -266,24 +289,27 @@ async def detect_overlap(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     overlaps = await OverlapDetector.find_overlaps(
-        db, project_id=project_id,
+        db,
+        project_id=project_id,
         customer_names=payload.customer_names,
         supplier_names=payload.supplier_names,
         fuzzy_threshold=payload.fuzzy_threshold,
     )
     # 入库
     for o in overlaps:
-        db.add(CustomerSupplierOverlap(
-            project_id=project_id,
-            party_name=o["customer_name"],
-            match_type=o["match_type"],
-            fuzzy_score=o["fuzzy_score"],
-            customer_sales=0,
-            supplier_purchases=0,
-            explanation_required=True,
-        ))
+        db.add(
+            CustomerSupplierOverlap(
+                project_id=project_id,
+                party_name=o["customer_name"],
+                match_type=o["match_type"],
+                fuzzy_score=o["fuzzy_score"],
+                customer_sales=0,
+                supplier_purchases=0,
+                explanation_required=True,
+            )
+        )
     await db.commit()
     return {"overlaps_found": len(overlaps), "details": overlaps}
 
@@ -294,9 +320,17 @@ async def list_overlaps(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = list((await db.execute(
-        select(CustomerSupplierOverlap).where(CustomerSupplierOverlap.project_id == project_id)
-    )).scalars().all())
+    rows = list(
+        (
+            await db.execute(
+                select(CustomerSupplierOverlap).where(
+                    CustomerSupplierOverlap.project_id == project_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
     return [{c.name: getattr(r, c.name) for c in r.__table__.columns} for r in rows]
 
 
@@ -321,7 +355,7 @@ async def add_peer(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     p = PeerCompany(project_id=project_id, **payload.model_dump())
     db.add(p)
     await db.commit()
@@ -335,9 +369,11 @@ async def list_peers(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = list((await db.execute(
-        select(PeerCompany).where(PeerCompany.project_id == project_id)
-    )).scalars().all())
+    rows = list(
+        (await db.execute(select(PeerCompany).where(PeerCompany.project_id == project_id)))
+        .scalars()
+        .all()
+    )
     return [{c.name: getattr(r, c.name) for c in r.__table__.columns} for r in rows]
 
 
@@ -351,9 +387,7 @@ async def benchmark(
     payload: BenchmarkRequest,
     current_user: User = Depends(get_current_user),
 ):
-    return PeerBenchmarkAnalyzer.issuer_vs_peers(
-        payload.issuer_value, payload.peer_values
-    )
+    return PeerBenchmarkAnalyzer.issuer_vs_peers(payload.issuer_value, payload.peer_values)
 
 
 # ============================================================
@@ -378,7 +412,7 @@ async def add_letter(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     fl = FeedbackLetter(project_id=project_id, **payload.model_dump())
     db.add(fl)
     await db.commit()
@@ -392,9 +426,11 @@ async def list_letters(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = list((await db.execute(
-        select(FeedbackLetter).where(FeedbackLetter.project_id == project_id)
-    )).scalars().all())
+    rows = list(
+        (await db.execute(select(FeedbackLetter).where(FeedbackLetter.project_id == project_id)))
+        .scalars()
+        .all()
+    )
     items = []
     for r in rows:
         d = {c.name: getattr(r, c.name) for c in r.__table__.columns}
@@ -439,14 +475,20 @@ async def init_checklist(
     db: AsyncSession = Depends(get_db),
 ):
     """用内置模板初始化项目的申报材料清单."""
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     # 清旧
-    existing = list((await db.execute(
-        select(SubmissionChecklistItem).where(
-            SubmissionChecklistItem.project_id == project_id,
-            SubmissionChecklistItem.board_type == board_type,
+    existing = list(
+        (
+            await db.execute(
+                select(SubmissionChecklistItem).where(
+                    SubmissionChecklistItem.project_id == project_id,
+                    SubmissionChecklistItem.board_type == board_type,
+                )
+            )
         )
-    )).scalars().all())
+        .scalars()
+        .all()
+    )
     for e in existing:
         if not e.is_uploaded:
             await db.delete(e)
@@ -456,14 +498,23 @@ async def init_checklist(
     for code, name, required in DEFAULT_SUBMISSION_CHECKLIST:
         if code in existing_codes:
             continue
-        db.add(SubmissionChecklistItem(
-            project_id=project_id, board_type=board_type,
-            item_code=code, item_name=name, is_required=required,
-            is_uploaded=False,
-        ))
+        db.add(
+            SubmissionChecklistItem(
+                project_id=project_id,
+                board_type=board_type,
+                item_code=code,
+                item_name=name,
+                is_required=required,
+                is_uploaded=False,
+            )
+        )
         added += 1
     await db.commit()
-    return {"added": added, "board_type": board_type, "total_default": len(DEFAULT_SUBMISSION_CHECKLIST)}
+    return {
+        "added": added,
+        "board_type": board_type,
+        "total_default": len(DEFAULT_SUBMISSION_CHECKLIST),
+    }
 
 
 @router.get("/submission/projects/{project_id}/checklist")
@@ -477,9 +528,10 @@ async def get_checklist(
     if board_type:
         conds.append(SubmissionChecklistItem.board_type == board_type)
     from sqlalchemy import and_
-    rows = list((await db.execute(
-        select(SubmissionChecklistItem).where(and_(*conds))
-    )).scalars().all())
+
+    rows = list(
+        (await db.execute(select(SubmissionChecklistItem).where(and_(*conds)))).scalars().all()
+    )
     return [{c.name: getattr(r, c.name) for c in r.__table__.columns} for r in rows]
 
 
@@ -497,9 +549,11 @@ async def update_checklist_item(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    item = (await db.execute(
-        select(SubmissionChecklistItem).where(SubmissionChecklistItem.id == item_id)
-    )).scalar_one_or_none()
+    item = (
+        await db.execute(
+            select(SubmissionChecklistItem).where(SubmissionChecklistItem.id == item_id)
+        )
+    ).scalar_one_or_none()
     if item is None:
         raise HTTPException(404, "清单项不存在")
     for k, v in payload.model_dump(exclude_unset=True).items():
@@ -509,6 +563,8 @@ async def update_checklist_item(
     await db.commit()
     await db.refresh(item)
     return {
-        "id": item.id, "item_name": item.item_name, "is_uploaded": item.is_uploaded,
+        "id": item.id,
+        "item_name": item.item_name,
+        "is_uploaded": item.is_uploaded,
         "upload_date": item.upload_date,
     }

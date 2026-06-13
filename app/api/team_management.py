@@ -3,11 +3,12 @@
 覆盖：人员 CRUD、项目分配、工作计划生成/查看/任务更新、会议 CRUD+纪要、
 日报、卡点、dashboard、管理建议。
 """
+
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -19,21 +20,15 @@ from app.models.db_models import (
     DailyReport,
     ManagementRecommendation,
     Meeting,
-    MeetingRecord,
     Project,
     ProjectAssignment,
     TeamMember,
     WorkPlan,
-    WorkPlanItem,
     BLOCKER_STATUS_OPEN,
-    BLOCKER_STATUS_IN_PROGRESS,
-    BLOCKER_STATUS_ESCALATED,
-    WORK_PLAN_STATUS_DRAFT,
-    WORK_PLAN_STATUS_ACTIVE,
-    WORK_PLAN_STATUS_COMPLETED,
-    TASK_STATUS_DONE,
     MEMBER_STATUS_ACTIVE,
 )
+from app.models.db.auth import User
+from app.services.auth import get_current_user, get_current_user_optional
 from app.models.team_management import (
     BlockerCreate,
     BlockerResponse,
@@ -57,14 +52,12 @@ from app.models.team_management import (
     TeamMemberCreate,
     TeamMemberResponse,
     TeamMemberUpdate,
-    WorkPlanCreate,
     WorkPlanItemResponse,
     WorkPlanResponse,
     WorkPlanUpdate,
 )
 from app.services.team_management import (
     team_management_service,
-    work_plan_generator,
 )
 from app.services.team_management.progress_tracker import ProgressTracker
 
@@ -85,6 +78,7 @@ async def list_members(
     skip: int = 0,
     limit: int = 200,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """列出所有人员。"""
     q = select(TeamMember)
@@ -101,6 +95,7 @@ async def list_members(
 async def create_member(
     payload: TeamMemberCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """创建人员。"""
     m = TeamMember(**payload.model_dump())
@@ -111,8 +106,14 @@ async def create_member(
 
 
 @router.get("/members/{member_id}", response_model=TeamMemberResponse)
-async def get_member(member_id: int, db: AsyncSession = Depends(get_db)):
-    m = (await db.execute(select(TeamMember).where(TeamMember.id == member_id))).scalar_one_or_none()
+async def get_member(
+    member_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    m = (
+        await db.execute(select(TeamMember).where(TeamMember.id == member_id))
+    ).scalar_one_or_none()
     if not m:
         raise HTTPException(status_code=404, detail="人员不存在")
     return m
@@ -123,8 +124,11 @@ async def update_member(
     member_id: int,
     payload: TeamMemberUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    m = (await db.execute(select(TeamMember).where(TeamMember.id == member_id))).scalar_one_or_none()
+    m = (
+        await db.execute(select(TeamMember).where(TeamMember.id == member_id))
+    ).scalar_one_or_none()
     if not m:
         raise HTTPException(status_code=404, detail="人员不存在")
     for k, v in payload.model_dump(exclude_unset=True).items():
@@ -136,8 +140,14 @@ async def update_member(
 
 
 @router.delete("/members/{member_id}")
-async def delete_member(member_id: int, db: AsyncSession = Depends(get_db)):
-    m = (await db.execute(select(TeamMember).where(TeamMember.id == member_id))).scalar_one_or_none()
+async def delete_member(
+    member_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    m = (
+        await db.execute(select(TeamMember).where(TeamMember.id == member_id))
+    ).scalar_one_or_none()
     if not m:
         raise HTTPException(status_code=404, detail="人员不存在")
     await db.delete(m)
@@ -154,7 +164,11 @@ async def delete_member(member_id: int, db: AsyncSession = Depends(get_db)):
     "/projects/{project_id}/assignments",
     response_model=List[ProjectAssignmentResponse],
 )
-async def list_project_assignments(project_id: int, db: AsyncSession = Depends(get_db)):
+async def list_project_assignments(
+    project_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     q = (
         select(ProjectAssignment, TeamMember)
         .join(TeamMember, TeamMember.id == ProjectAssignment.member_id)
@@ -189,6 +203,7 @@ async def add_project_assignment(
     project_id: int,
     payload: ProjectAssignmentCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
     if not proj:
@@ -198,7 +213,9 @@ async def add_project_assignment(
     await db.commit()
     await db.refresh(assign)
     # 重新查带 member
-    member = (await db.execute(select(TeamMember).where(TeamMember.id == assign.member_id))).scalar_one()
+    member = (
+        await db.execute(select(TeamMember).where(TeamMember.id == assign.member_id))
+    ).scalar_one()
     return ProjectAssignmentResponse(
         id=assign.id,
         project_id=assign.project_id,
@@ -214,8 +231,14 @@ async def add_project_assignment(
 
 
 @router.delete("/assignments/{assignment_id}")
-async def remove_project_assignment(assignment_id: int, db: AsyncSession = Depends(get_db)):
-    a = (await db.execute(select(ProjectAssignment).where(ProjectAssignment.id == assignment_id))).scalar_one_or_none()
+async def remove_project_assignment(
+    assignment_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    a = (
+        await db.execute(select(ProjectAssignment).where(ProjectAssignment.id == assignment_id))
+    ).scalar_one_or_none()
     if not a:
         raise HTTPException(status_code=404, detail="分配记录不存在")
     await db.delete(a)
@@ -235,6 +258,7 @@ async def remove_project_assignment(assignment_id: int, db: AsyncSession = Depen
 async def generate_work_plan(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """AI 自动生成（或重新生成）工作计划。"""
     proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
@@ -253,6 +277,7 @@ async def list_work_plans(
     project_id: int,
     status: Optional[str] = Query(None, description="按状态过滤"),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """列出项目的所有工作计划（按状态过滤）。"""
     q = select(WorkPlan).where(WorkPlan.project_id == project_id)
@@ -264,7 +289,11 @@ async def list_work_plans(
 
 
 @router.get("/work-plans/{plan_id}", response_model=WorkPlanResponse)
-async def get_work_plan(plan_id: int, db: AsyncSession = Depends(get_db)):
+async def get_work_plan(
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     plan = (await db.execute(select(WorkPlan).where(WorkPlan.id == plan_id))).scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail="工作计划不存在")
@@ -276,6 +305,7 @@ async def update_work_plan(
     plan_id: int,
     payload: WorkPlanUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     try:
         return await team_management_service.update_work_plan(db, plan_id, payload)
@@ -291,6 +321,7 @@ async def update_work_plan_item(
     item_id: int,
     payload: WorkPlanItemUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """更新计划任务 — 用 Pydantic schema 强约束可写字段白名单。
 
@@ -318,6 +349,7 @@ async def list_meetings(
     meeting_type: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     q = select(Meeting).where(Meeting.project_id == project_id)
     if meeting_type:
@@ -337,6 +369,7 @@ async def create_meeting(
     project_id: int,
     payload: MeetingCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
     if not proj:
@@ -349,7 +382,11 @@ async def create_meeting(
 
 
 @router.get("/meetings/{meeting_id}", response_model=MeetingResponse)
-async def get_meeting(meeting_id: int, db: AsyncSession = Depends(get_db)):
+async def get_meeting(
+    meeting_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     m = (await db.execute(select(Meeting).where(Meeting.id == meeting_id))).scalar_one_or_none()
     if not m:
         raise HTTPException(status_code=404, detail="会议不存在")
@@ -361,6 +398,7 @@ async def update_meeting(
     meeting_id: int,
     payload: MeetingUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     m = (await db.execute(select(Meeting).where(Meeting.id == meeting_id))).scalar_one_or_none()
     if not m:
@@ -381,6 +419,7 @@ async def submit_meeting_record(
     meeting_id: int,
     payload: MeetingRecordCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     try:
         return await team_management_service.submit_meeting_record(db, meeting_id, payload)
@@ -404,6 +443,7 @@ async def list_daily_reports(
     end_date: Optional[str] = Query(None),
     limit: int = Query(100, le=500),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     q = select(DailyReport).where(DailyReport.project_id == project_id)
     if member_id:
@@ -426,6 +466,7 @@ async def create_daily_report(
     member_id: int = Query(..., description="汇报人 id"),
     payload: DailyReportCreate = ...,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
     if not proj:
@@ -452,6 +493,7 @@ async def list_blockers(
     severity: Optional[str] = Query(None),
     member_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     q = select(Blocker).where(Blocker.project_id == project_id)
     if status:
@@ -474,6 +516,7 @@ async def create_blocker(
     member_id: int = Query(..., description="提出人 id"),
     payload: BlockerCreate = ...,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
     if not proj:
@@ -498,6 +541,7 @@ async def update_blocker(
     blocker_id: int,
     payload: BlockerUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     b = (await db.execute(select(Blocker).where(Blocker.id == blocker_id))).scalar_one_or_none()
     if not b:
@@ -522,7 +566,11 @@ async def update_blocker(
     "/projects/{project_id}/dashboard",
     response_model=ProgressDashboardResponse,
 )
-async def get_dashboard(project_id: int, db: AsyncSession = Depends(get_db)):
+async def get_dashboard(
+    project_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     """项目综合进度看板。"""
     proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
     if not proj:
@@ -581,6 +629,7 @@ async def list_recommendations(
     project_id: int,
     limit: int = Query(20, le=100),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     q = (
         select(ManagementRecommendation)
@@ -600,6 +649,7 @@ async def generate_recommendation(
     project_id: int,
     payload: Optional[ManagementRecommendationRequest] = None,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """AI 周期性生成管理建议。"""
     payload = payload or ManagementRecommendationRequest()
@@ -623,6 +673,7 @@ async def confirm_recommendation(
     rec_id: int,
     payload: ManagementRecommendationConfirm,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     try:
         return await team_management_service.confirm_recommendation(

@@ -4,9 +4,9 @@
   - AI 不可用时返回结构化骨架，永不抛 500
   - DeepSeek JSON mode 失败 → 退回内置 IPO 审计阶段标准模板
 """
+
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -20,7 +20,6 @@ from app.models.db_models import (
     Project,
     TeamMember,
     MEMBER_LEVEL_LABELS,
-    MEMBER_LEVEL_ORDER,
 )
 from app.services.sales_ledger.deepseek_client import DeepSeekClient, DeepSeekError
 
@@ -42,9 +41,9 @@ class WorkPlanContext:
     industry: Optional[str] = None
     fiscal_year: Optional[int] = None
     # 导入概况
-    account_count: int = 0          # 科目余额条数
-    voucher_count: int = 0          # 序时账条数
-    bank_statement_count: int = 0   # 银行对账单条数
+    account_count: int = 0  # 科目余额条数
+    voucher_count: int = 0  # 序时账条数
+    bank_statement_count: int = 0  # 银行对账单条数
     # 人员清单 — id + 名称 + 级别 + 特长
     members: list[dict[str, Any]] = field(default_factory=list)
     # 是否已有已存在 active 计划
@@ -56,7 +55,9 @@ class WorkPlanGenerated:
     """AI 生成结果。"""
 
     name: str
-    items: list[dict[str, Any]]   # [{title, description, related_module, priority, estimated_hours, recommended_level}]
+    items: list[
+        dict[str, Any]
+    ]  # [{title, description, related_module, priority, estimated_hours, recommended_level}]
     prompt_used: str
     ai_enabled: bool
     ai_raw: Optional[dict[str, Any]] = None
@@ -249,11 +250,14 @@ class WorkPlanGenerator:
         )
 
     def _build_prompt(self, ctx: WorkPlanContext) -> str:
-        members_block = "\n".join(
-            f"- id={m.get('id')}, name={m.get('full_name')}, level={m.get('level')}, "
-            f"specialties={m.get('specialties') or '未指定'}"
-            for m in ctx.members
-        ) or "- (项目组尚未分配人员)"
+        members_block = (
+            "\n".join(
+                f"- id={m.get('id')}, name={m.get('full_name')}, level={m.get('level')}, "
+                f"specialties={m.get('specialties') or '未指定'}"
+                for m in ctx.members
+            )
+            or "- (项目组尚未分配人员)"
+        )
 
         return (
             f"### 项目信息\n"
@@ -334,9 +338,7 @@ class WorkPlanGenerator:
     #  上下文构建
     # ------------------------------------------------------------
 
-    async def build_context(
-        self, db: AsyncSession, project_id: int
-    ) -> WorkPlanContext:
+    async def build_context(self, db: AsyncSession, project_id: int) -> WorkPlanContext:
         """从数据库读取项目信息 + 账套导入规模 + 已分配人员，构建上下文。
 
         性能注意：用 SQL `func.count()` 聚合，避免把大表的所有 id 拉回 Python
@@ -350,19 +352,29 @@ class WorkPlanGenerator:
             MEMBER_STATUS_ACTIVE,
         )
 
-        proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
+        proj = (
+            await db.execute(select(Project).where(Project.id == project_id))
+        ).scalar_one_or_none()
         if not proj:
             raise ValueError(f"项目不存在: {project_id}")
 
-        ab_count = (await db.execute(
-            select(func.count(AccountBalance.id)).where(AccountBalance.project_id == project_id)
-        )).scalar() or 0
-        ca_count = (await db.execute(
-            select(func.count(ChronologicalAccount.id)).where(ChronologicalAccount.project_id == project_id)
-        )).scalar() or 0
-        bs_count = (await db.execute(
-            select(func.count(BankStatement.id)).where(BankStatement.project_id == project_id)
-        )).scalar() or 0
+        ab_count = (
+            await db.execute(
+                select(func.count(AccountBalance.id)).where(AccountBalance.project_id == project_id)
+            )
+        ).scalar() or 0
+        ca_count = (
+            await db.execute(
+                select(func.count(ChronologicalAccount.id)).where(
+                    ChronologicalAccount.project_id == project_id
+                )
+            )
+        ).scalar() or 0
+        bs_count = (
+            await db.execute(
+                select(func.count(BankStatement.id)).where(BankStatement.project_id == project_id)
+            )
+        ).scalar() or 0
 
         # 只列在岗人员，避免离职/暂离人员被推荐
         members_q = await db.execute(

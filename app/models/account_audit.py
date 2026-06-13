@@ -1,4 +1,5 @@
 """Pydantic schemas for AccountMovementAudit (长期资产发生额审定)."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,7 +9,6 @@ from typing import Optional, List
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 from app.models.db.account_audit import (
-    MOVEMENT_AUDIT_STATUS_PENDING,
     ALL_MOVEMENT_AUDIT_STATUSES,
     MOVEMENT_DIRECTION_DEBIT,
     MOVEMENT_DIRECTION_CREDIT,
@@ -59,6 +59,7 @@ class MovementAuditRowResponse(MovementAuditRowBase):
 
 class MovementAuditUpdate(BaseModel):
     """单行审定 — PUT /movements/{id}/audit."""
+
     audited_amount: float
     adjustment_reason: Optional[str] = Field(None, max_length=2000)
     working_paper_ref: Optional[str] = Field(None, max_length=100)
@@ -80,6 +81,7 @@ class MovementAuditUpdate(BaseModel):
 
 class MovementAuditBulkItem(BaseModel):
     """批量上传 (Excel 导入) 单条."""
+
     account_code: str
     voucher_no: str
     voucher_line_no: int = 1
@@ -118,6 +120,7 @@ class MovementAuditDisputeRequest(BaseModel):
 
 class AccountAuditSummary(BaseModel):
     """单科目本期发生额审定汇总."""
+
     project_id: int
     account_code: str
     account_name: str
@@ -149,14 +152,15 @@ class AccountAuditSummary(BaseModel):
     ending_balance_audited: float = 0.0
     ending_balance_adjustment: float = 0.0
 
-    identity_check_book: float = 0.0       # 期初 + 借 - 贷 - 期末 (账面)
-    identity_check_audited: float = 0.0    # 期初(审定) + 借(审定) - 贷(审定) - 期末(审定)
+    identity_check_book: float = 0.0  # 期初 + 借 - 贷 - 期末 (账面)
+    identity_check_audited: float = 0.0  # 期初(审定) + 借(审定) - 贷(审定) - 期末(审定)
     is_balanced: bool = True
     notes: Optional[str] = None
 
 
 class AccountAuditOverview(BaseModel):
     """项目级长期资产科目审定总览."""
+
     project_id: int
     period_end: str
     total_accounts: int
@@ -203,6 +207,7 @@ class ScopeOverrideResponse(ScopeOverrideCreate):
 
 class EffectivePrefixesResponse(BaseModel):
     """前端展示: 默认前缀 + 用户覆盖, 计算后生效的科目前缀集合."""
+
     default_prefixes: List[str]
     project_includes: List[str]
     project_excludes: List[str]

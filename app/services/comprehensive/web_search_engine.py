@@ -9,6 +9,7 @@
 
 每条结果都附 ``citation`` 引用，确保审计员可追溯。
 """
+
 from __future__ import annotations
 
 import logging
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 # ============================== 数据结构 ==============================
+
 
 @dataclass
 class SearchHit:
@@ -42,6 +44,7 @@ WebSearchFn = Callable[[str, int], Awaitable[list[SearchHit]]]
 
 
 # ============================== 引擎 ==============================
+
 
 class WebSearchError(Exception):
     """网络核查失败。"""
@@ -80,9 +83,7 @@ class WebSearchEngine:
                 continue
             tasks.append((label, fn(query, top_k)))
 
-        results = await asyncio.gather(
-            *(t[1] for t in tasks), return_exceptions=True
-        )
+        results = await asyncio.gather(*(t[1] for t in tasks), return_exceptions=True)
         hits: list[SearchHit] = []
         for (label, _), r in zip(tasks, results):
             if isinstance(r, Exception):
@@ -126,7 +127,7 @@ class WebSearchEngine:
             return FillResult(
                 field_id=field_def.field_id,
                 value=None,
-                source_used=f"web_search:{field_def.source.split(':',1)[1]}",
+                source_used=f"web_search:{field_def.source.split(':', 1)[1]}",
                 confidence=0.0,
                 citation=f"未检索到 '{query}' 的权威信息，将由人工补全",
             )
@@ -135,7 +136,7 @@ class WebSearchEngine:
         return FillResult(
             field_id=field_def.field_id,
             value=top.snippet,
-            source_used=f"web_search:{field_def.source.split(':',1)[1]}",
+            source_used=f"web_search:{field_def.source.split(':', 1)[1]}",
             confidence=min(0.95, top.score),
             citation=f"[{top.source}] {top.title} — {top.citation}",
         )
@@ -159,6 +160,7 @@ class WebSearchEngine:
 # ============================== 内置检索器 ==============================
 # 这些函数会接入真实的 DB / 服务，对外暴露 SearchHit 列表。
 # 设计为可注入，便于测试时 mock。
+
 
 async def regulation_db_search(query: str, top_k: int) -> list[SearchHit]:
     """在 ``Regulation`` 表中按关键词搜索。
@@ -195,8 +197,8 @@ async def regulation_db_search(query: str, top_k: int) -> list[SearchHit]:
         # 简单打分：title 中命中数 × 3 + keywords 中命中数 × 2
         scored: list[tuple[float, Any]] = []
         for r in rows:
-            title = (r.title or "")
-            kw_text = (getattr(r, "keywords", None) or "")
+            title = r.title or ""
+            kw_text = getattr(r, "keywords", None) or ""
             score = (
                 sum(1 for kw in keywords if kw in title) * 3.0
                 + sum(1 for kw in keywords if kw in kw_text) * 2.0
@@ -249,10 +251,7 @@ async def knowledge_base_search(query: str, top_k: int) -> list[SearchHit]:
                 title=title,
                 snippet=content[:400],
                 source="knowledge_base",
-                citation=(
-                    f"{title} 第 {page} 页"
-                    if page else title
-                ),
+                citation=(f"{title} 第 {page} 页" if page else title),
                 score=score,
             )
         )

@@ -15,6 +15,7 @@
   9. accounting_estimates (重要会计估计 — ECL 三阶段等)
  10. subsequent_events (后续期间事项)
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -37,25 +38,37 @@ from app.core.database import Base
 
 __all__ = [
     # Payables
-    "Supplier", "PayableAging",
+    "Supplier",
+    "PayableAging",
     # Expenses
-    "ExpenseRecord", "ExpenseAnomalyFlag",
+    "ExpenseRecord",
+    "ExpenseAnomalyFlag",
     # Payroll
-    "PayrollRecord", "PayrollReconciliation",
+    "PayrollRecord",
+    "PayrollReconciliation",
     # Fixed Assets
-    "FixedAsset", "DepreciationRecalc", "ConstructionInProgress",
+    "FixedAsset",
+    "DepreciationRecalc",
+    "ConstructionInProgress",
     # Intangible
-    "IntangibleAsset", "RDCapitalizationAssessment",
+    "IntangibleAsset",
+    "RDCapitalizationAssessment",
     # Long-term Investment
-    "LongTermInvestment", "GoodwillImpairmentTest",
+    "LongTermInvestment",
+    "GoodwillImpairmentTest",
     # Leases (CAS 21)
-    "LeaseContract", "LeaseAmortizationSchedule",
+    "LeaseContract",
+    "LeaseAmortizationSchedule",
     # Income Tax
-    "IncomeTaxReconciliation", "DeferredTaxItem",
+    "IncomeTaxReconciliation",
+    "DeferredTaxItem",
     # Accounting Estimates
-    "ECLAssessment", "AssetImpairmentTest", "ProvisionEstimate",
+    "ECLAssessment",
+    "AssetImpairmentTest",
+    "ProvisionEstimate",
     # Subsequent Events
-    "SubsequentEvent", "GoingConcernAssessment",
+    "SubsequentEvent",
+    "GoingConcernAssessment",
 ]
 
 
@@ -73,10 +86,14 @@ class Supplier(Base):
     __table_args__ = (Index("ix_supplier_project_code", "project_id", "supplier_code"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     supplier_code: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    unified_credit_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    unified_credit_code: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True, index=True
+    )
     contact: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
@@ -90,8 +107,12 @@ class PayableAging(Base):
     __table_args__ = (Index("ix_payable_aging_project_period", "project_id", "period_end"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
-    supplier_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("ac_suppliers.id"), nullable=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
+    supplier_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("ac_suppliers.id"), nullable=True
+    )
     supplier_name: Mapped[str] = mapped_column(String(200), nullable=False)
     period_end: Mapped[str] = mapped_column(String(20), nullable=False)
     # 5 个账龄区间
@@ -118,7 +139,9 @@ class ExpenseRecord(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     voucher_date: Mapped[str] = mapped_column(String(20), nullable=False)
     voucher_no: Mapped[str] = mapped_column(String(50), nullable=False)
     account_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
@@ -135,7 +158,9 @@ class ExpenseAnomalyFlag(Base):
     __tablename__ = "ac_expense_anomaly_flags"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     expense_record_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("ac_expense_records.id"), nullable=True
     )
@@ -155,7 +180,9 @@ class PayrollRecord(Base):
     __tablename__ = "ac_payroll_records"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     period_yyyymm: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
     employee_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     employee_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -172,10 +199,13 @@ class PayrollRecord(Base):
 
 class PayrollReconciliation(Base):
     """工资 vs 社保 vs 公积金 vs 个税 四表勾稽."""
+
     __tablename__ = "ac_payroll_reconciliations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     period_yyyymm: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
     payroll_total: Mapped[float] = mapped_column(Float, default=0.0)
     social_security_total: Mapped[float] = mapped_column(Float, default=0.0)
@@ -197,7 +227,9 @@ class FixedAsset(Base):
     __table_args__ = (Index("ix_fa_project_code", "project_id", "asset_code"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     asset_code: Mapped[str] = mapped_column(String(80), nullable=False)
     asset_name: Mapped[str] = mapped_column(String(200), nullable=False)
     category: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -208,7 +240,9 @@ class FixedAsset(Base):
     purchase_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     useful_life_months: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     salvage_rate: Mapped[float] = mapped_column(Float, default=0.05)
-    depreciation_method: Mapped[str] = mapped_column(String(40), default="straight_line", nullable=False)
+    depreciation_method: Mapped[str] = mapped_column(
+        String(40), default="straight_line", nullable=False
+    )
     # straight_line / double_declining / sum_of_years / units_of_production
     location: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     in_use: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -219,7 +253,9 @@ class DepreciationRecalc(Base):
     __tablename__ = "ac_depreciation_recalcs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     asset_id: Mapped[int] = mapped_column(Integer, ForeignKey("ac_fixed_assets.id"), nullable=False)
     period_yyyymm: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
     book_depreciation: Mapped[float] = mapped_column(Float, default=0.0)
@@ -235,7 +271,9 @@ class ConstructionInProgress(Base):
     __tablename__ = "ac_construction_in_progress"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     project_name: Mapped[str] = mapped_column(String(200), nullable=False)
     started_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     expected_completion_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
@@ -256,7 +294,9 @@ class IntangibleAsset(Base):
     __tablename__ = "ac_intangible_assets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     asset_name: Mapped[str] = mapped_column(String(200), nullable=False)
     category: Mapped[str] = mapped_column(String(80), nullable=False)
     # 专利 / 商标 / 软件 / 土地使用权 / 客户关系 / 自研技术 等
@@ -271,10 +311,13 @@ class IntangibleAsset(Base):
 
 class RDCapitalizationAssessment(Base):
     """CAS 6 五项条件评估."""
+
     __tablename__ = "ac_rd_capitalization_assessments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     rd_project_name: Mapped[str] = mapped_column(String(200), nullable=False)
     period_yyyymm: Mapped[str] = mapped_column(String(7), nullable=False)
     # CAS 6 五项条件
@@ -300,7 +343,9 @@ class LongTermInvestment(Base):
     __tablename__ = "ac_long_term_investments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     investee_name: Mapped[str] = mapped_column(String(200), nullable=False)
     method: Mapped[str] = mapped_column(String(20), nullable=False)  # cost / equity
     holding_pct: Mapped[float] = mapped_column(Float, default=0.0)
@@ -318,10 +363,13 @@ class LongTermInvestment(Base):
 
 class GoodwillImpairmentTest(Base):
     """商誉减值测试 — 5/8 年现金流折现."""
+
     __tablename__ = "ac_goodwill_impairment_tests"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     investment_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("ac_long_term_investments.id"), nullable=False
     )
@@ -348,7 +396,9 @@ class LeaseContract(Base):
     __tablename__ = "ac_lease_contracts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     contract_no: Mapped[str] = mapped_column(String(100), nullable=False)
     lessor: Mapped[str] = mapped_column(String(200), nullable=False)
     asset_description: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -391,7 +441,9 @@ class IncomeTaxReconciliation(Base):
     __tablename__ = "ac_income_tax_reconciliations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     fiscal_year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     pretax_profit: Mapped[float] = mapped_column(Float, default=0.0)
     permanent_diff_total: Mapped[float] = mapped_column(Float, default=0.0)
@@ -410,7 +462,9 @@ class DeferredTaxItem(Base):
     __tablename__ = "ac_deferred_tax_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     fiscal_year: Mapped[int] = mapped_column(Integer, nullable=False)
     item_name: Mapped[str] = mapped_column(String(200), nullable=False)
     is_dta: Mapped[bool] = mapped_column(Boolean, default=True)  # True=DTA, False=DTL
@@ -428,10 +482,13 @@ class DeferredTaxItem(Base):
 
 class ECLAssessment(Base):
     """坏账 ECL 三阶段评估."""
+
     __tablename__ = "ac_ecl_assessments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     period_end: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     customer_name: Mapped[str] = mapped_column(String(200), nullable=False)
     receivable_balance: Mapped[float] = mapped_column(Float, default=0.0)
@@ -448,7 +505,9 @@ class AssetImpairmentTest(Base):
     __tablename__ = "ac_asset_impairment_tests"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     asset_category: Mapped[str] = mapped_column(String(80), nullable=False)
     asset_ref: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     test_date: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -464,7 +523,9 @@ class ProvisionEstimate(Base):
     __tablename__ = "ac_provision_estimates"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     provision_type: Mapped[str] = mapped_column(String(50), nullable=False)
     # 诉讼 / 产品质量保证 / 重组 / 其他
     description: Mapped[str] = mapped_column(Text, nullable=False)
@@ -486,7 +547,9 @@ class SubsequentEvent(Base):
     __tablename__ = "ac_subsequent_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     balance_sheet_date: Mapped[str] = mapped_column(String(20), nullable=False)
     event_date: Mapped[str] = mapped_column(String(20), nullable=False)
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -502,10 +565,13 @@ class SubsequentEvent(Base):
 
 class GoingConcernAssessment(Base):
     """持续经营能力评估 (12 个月偿债压力测试)."""
+
     __tablename__ = "ac_going_concern_assessments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     assessment_date: Mapped[str] = mapped_column(String(20), nullable=False)
     operating_cashflow_12m: Mapped[float] = mapped_column(Float, default=0.0)
     interest_expense_12m: Mapped[float] = mapped_column(Float, default=0.0)

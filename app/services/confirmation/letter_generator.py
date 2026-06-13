@@ -13,10 +13,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -497,7 +495,9 @@ class ConfirmationLetterGenerator:
             "supplier_std": f"应付账款询证函 - {meta.get('party_name', '')}",
             "other_std": f"其他往来询证函 - {meta.get('party_name', '')}",
         }
-        title = doc.add_heading(title_map.get(template_id, f"询证函 - {meta.get('party_name', '')}"), level=1)
+        title = doc.add_heading(
+            title_map.get(template_id, f"询证函 - {meta.get('party_name', '')}"), level=1
+        )
         title.alignment = 1
 
         for line in text.splitlines():
@@ -510,6 +510,7 @@ class ConfirmationLetterGenerator:
 
         # 文件名: 替换系统不接受的字符, 保留中文; 加 uuid 防覆盖
         import uuid
+
         safe = re.sub(r"[\x00-\x1f/\\:*?\"<>|]", "_", filename_hint)[:80]
         suffix = uuid.uuid4().hex[:6]
         path = self.output_dir / f"{safe}_{suffix}.docx"
@@ -522,11 +523,20 @@ class ConfirmationLetterGenerator:
         """可选 PDF 转换（依赖 libreoffice / docx2pdf）。失败返回 None。"""
         try:
             import subprocess
+
             out = self.output_dir / (docx_path.stem + ".pdf")
             r = subprocess.run(
-                ["libreoffice", "--headless", "--convert-to", "pdf",
-                 "--outdir", str(self.output_dir), str(docx_path)],
-                capture_output=True, timeout=60,
+                [
+                    "libreoffice",
+                    "--headless",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    str(self.output_dir),
+                    str(docx_path),
+                ],
+                capture_output=True,
+                timeout=60,
             )
             if r.returncode == 0 and out.exists():
                 return out
@@ -576,7 +586,8 @@ class ConfirmationLetterGenerator:
         meta = {"party_name": party_name, "template_id": template_id}
         if file_format == "pdf":
             docx_path = self.render_docx(
-                template_id, text,
+                template_id,
+                text,
                 filename_hint=f"{template_id}_{party_name}_{sent_date}",
                 meta=meta,
             )
@@ -586,7 +597,8 @@ class ConfirmationLetterGenerator:
             # P0 修复: PDF 转换失败, 落库 file_format 应为 docx
             return docx_path, text, "docx"
         path = self.render_docx(
-            template_id, text,
+            template_id,
+            text,
             filename_hint=f"{template_id}_{party_name}_{sent_date}",
             meta=meta,
         )

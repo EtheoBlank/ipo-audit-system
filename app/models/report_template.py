@@ -1,4 +1,5 @@
 """Pydantic schemas for Report Template module."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -91,6 +92,7 @@ class ReportRenderHistoryResponse(BaseModel):
 
 class TemplateAnalyzeResponse(BaseModel):
     """探测出来的 placeholder 列表 (用户上传后预览)."""
+
     placeholders: List[str]
     duplicates: List[str]
     unknown_tags: List[str]

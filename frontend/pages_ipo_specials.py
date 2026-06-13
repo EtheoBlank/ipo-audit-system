@@ -1,4 +1,5 @@
 """Pack D — IPO 专属页面 (精简)."""
+
 from __future__ import annotations
 
 import json
@@ -31,7 +32,7 @@ def _pick_project() -> Optional[int]:
     if not projects:
         st.warning("尚未创建项目")
         return None
-    options = {f"{p['id']} - {p.get('name','')}": p["id"] for p in projects}
+    options = {f"{p['id']} - {p.get('name', '')}": p["id"] for p in projects}
     label = st.selectbox("选择项目", list(options.keys()), key="ipo_pick_project")
     return options[label]
 
@@ -45,14 +46,14 @@ def _tab_walkthrough(project_id: int) -> None:
     )
     if st.button("📊 生成流程图"):
         steps = [{"step_description": s.strip()} for s in steps_text.splitlines() if s.strip()]
-        r = _api("POST", "/api/ipo-specials/walkthrough/mermaid-flowchart",
-                 json={"steps": steps})
+        r = _api("POST", "/api/ipo-specials/walkthrough/mermaid-flowchart", json={"steps": steps})
         if r:
             st.code(r.get("mermaid", ""), language="mermaid")
             st.caption("提示: 复制到 https://mermaid.live 可视化")
 
     st.markdown("#### 抽样选笔")
-    sample_text = st.text_area("凭证列表 (一行一个 JSON, 含 amount/voucher_no)",
+    sample_text = st.text_area(
+        "凭证列表 (一行一个 JSON, 含 amount/voucher_no)",
         value='{"voucher_no": "JZ-001", "amount": 100000}\n{"voucher_no": "JZ-002", "amount": 50000}\n{"voucher_no": "JZ-003", "amount": 300000}',
     )
     cycle = st.selectbox("循环", ["sales", "procurement", "inventory", "payroll"])
@@ -60,8 +61,11 @@ def _tab_walkthrough(project_id: int) -> None:
     if st.button("🎲 抽样"):
         try:
             items = [json.loads(s) for s in sample_text.splitlines() if s.strip()]
-            r = _api("POST", "/api/ipo-specials/walkthrough/sample",
-                     json={"cycle_code": cycle, "items": items, "n": int(n)})
+            r = _api(
+                "POST",
+                "/api/ipo-specials/walkthrough/sample",
+                json={"cycle_code": cycle, "items": items, "n": int(n)},
+            )
             if r:
                 st.dataframe(pd.DataFrame(r.get("samples", [])), width="stretch")
         except Exception as exc:
@@ -76,12 +80,23 @@ def _tab_cutoff(project_id: int) -> None:
     period = c3.text_input("期末日期", value="2024-12-31")
     cutoff_days = st.number_input("Cutoff window (天)", min_value=1, max_value=30, value=5)
     if st.button("📊 判定"):
-        r = _api("POST", "/api/ipo-specials/revenue-cutoff/judge",
-                 json={"ship_date": ship, "revenue_confirm_date": confirm,
-                       "period_end": period, "cutoff_days": int(cutoff_days)})
+        r = _api(
+            "POST",
+            "/api/ipo-specials/revenue-cutoff/judge",
+            json={
+                "ship_date": ship,
+                "revenue_confirm_date": confirm,
+                "period_end": period,
+                "cutoff_days": int(cutoff_days),
+            },
+        )
         if r:
             j = r.get("judgement")
-            badge = {"early": "🔴 提前确认收入", "late": "🟡 延迟确认收入", "normal": "✅ 正常"}.get(j, j)
+            badge = {
+                "early": "🔴 提前确认收入",
+                "late": "🟡 延迟确认收入",
+                "normal": "✅ 正常",
+            }.get(j, j)
             st.info(f"{badge} (偏差 {r.get('diff_days')} 天)")
             if r.get("adjustment_required"):
                 st.warning("建议生成跨期调整分录")
@@ -97,8 +112,11 @@ def _tab_prospectus(project_id: int) -> None:
         version = c1.text_input("版本", value="v1")
         filename = c2.text_input("文件名 (可选)")
         if st.button("提交版本"):
-            r = _api("POST", f"/api/ipo-specials/prospectus/projects/{project_id}/upload",
-                     params={"version": version, "filename": filename or None})
+            r = _api(
+                "POST",
+                f"/api/ipo-specials/prospectus/projects/{project_id}/upload",
+                params={"version": version, "filename": filename or None},
+            )
             if r:
                 st.success(f"已登记 v{r.get('version')}, 招股书 ID = {r.get('id')}")
                 st.rerun()
@@ -115,13 +133,19 @@ def _tab_prospectus(project_id: int) -> None:
         sv = c5.number_input("系统数值 (留 0 = 暂无)", value=0.0)
         if st.button("勾稽"):
             payload = {
-                "metric_code": code, "metric_name": name,
-                "period_label": period, "prospectus_value": pv,
+                "metric_code": code,
+                "metric_name": name,
+                "period_label": period,
+                "prospectus_value": pv,
                 "system_value": sv if sv != 0 else None,
             }
             r = _api("POST", f"/api/ipo-specials/prospectus/{pid}/metrics", json=payload)
             if r:
-                ok = "✅ 一致" if r.get("is_matched") else f"⚠️ 差异 {r.get('diff_amount')} ({r.get('diff_pct'):.2f}%)"
+                ok = (
+                    "✅ 一致"
+                    if r.get("is_matched")
+                    else f"⚠️ 差异 {r.get('diff_amount')} ({r.get('diff_pct'):.2f}%)"
+                )
                 st.info(ok)
 
 
@@ -130,7 +154,9 @@ def _tab_period_compare(project_id: int) -> None:
     with st.expander("➕ 新增对比指标", expanded=False):
         with st.form("period_form"):
             c1, c2 = st.columns(2)
-            rt = c1.selectbox("报表类型", ["balance_sheet", "income_statement", "cash_flow", "ratios"])
+            rt = c1.selectbox(
+                "报表类型", ["balance_sheet", "income_statement", "cash_flow", "ratios"]
+            )
             code = c2.text_input("指标 code (gross_margin 等)")
             name = st.text_input("指标名称")
             c3, c4, c5, c6 = st.columns(4)
@@ -141,12 +167,19 @@ def _tab_period_compare(project_id: int) -> None:
             ok = st.form_submit_button("提交", type="primary")
         if ok and code:
             payload = {
-                "report_type": rt, "metric_code": code, "metric_name": name,
-                "value_period_1": v1, "value_period_2": v2,
-                "value_period_3": v3, "value_period_h1": vh,
+                "report_type": rt,
+                "metric_code": code,
+                "metric_name": name,
+                "value_period_1": v1,
+                "value_period_2": v2,
+                "value_period_3": v3,
+                "value_period_h1": vh,
             }
-            r = _api("POST", f"/api/ipo-specials/period-comparison/projects/{project_id}/metrics",
-                     json=payload)
+            r = _api(
+                "POST",
+                f"/api/ipo-specials/period-comparison/projects/{project_id}/metrics",
+                json=payload,
+            )
             if r:
                 msg = f"YoY {r.get('yoy_change_pct')}%"
                 if r.get("anomaly_flag"):
@@ -187,8 +220,9 @@ def _tab_peer(project_id: int) -> None:
     st.markdown("### 🏢 可比公司基准库")
     rows = _api("GET", f"/api/ipo-specials/peer-companies/projects/{project_id}/list") or []
     if rows:
-        st.dataframe(pd.DataFrame(rows)[["id", "stock_code", "short_name", "main_business"]],
-                     width="stretch")
+        st.dataframe(
+            pd.DataFrame(rows)[["id", "stock_code", "short_name", "main_business"]], width="stretch"
+        )
 
     with st.expander("➕ 新增可比公司", expanded=False):
         with st.form("peer_form"):
@@ -198,9 +232,15 @@ def _tab_peer(project_id: int) -> None:
             main_business = st.text_area("主业描述")
             ok = st.form_submit_button("提交")
         if ok and short:
-            r = _api("POST", f"/api/ipo-specials/peer-companies/projects/{project_id}",
-                     json={"stock_code": stock or None, "short_name": short,
-                           "main_business": main_business or None})
+            r = _api(
+                "POST",
+                f"/api/ipo-specials/peer-companies/projects/{project_id}",
+                json={
+                    "stock_code": stock or None,
+                    "short_name": short,
+                    "main_business": main_business or None,
+                },
+            )
             if r:
                 st.success(f"已新增 {r.get('short_name')}")
                 st.rerun()
@@ -212,8 +252,11 @@ def _tab_peer(project_id: int) -> None:
     if st.button("📊 基准对比"):
         try:
             peers = [float(x) for x in peer_values_text.split(",") if x.strip()]
-            r = _api("POST", "/api/ipo-specials/peer-companies/benchmark",
-                     json={"issuer_value": issuer_value, "peer_values": peers})
+            r = _api(
+                "POST",
+                "/api/ipo-specials/peer-companies/benchmark",
+                json={"issuer_value": issuer_value, "peer_values": peers},
+            )
             if r:
                 cols = st.columns(4)
                 cols[0].metric("可比均值", f"{r['peer_avg']:.2f}")
@@ -229,8 +272,16 @@ def _tab_feedback(project_id: int) -> None:
     letters = _api("GET", f"/api/ipo-specials/feedback/projects/{project_id}/letters") or []
     if letters:
         df = pd.DataFrame(letters)
-        cols_show = ["id", "letter_no", "issuer", "received_date", "reply_deadline",
-                     "days_to_deadline", "urgency", "status"]
+        cols_show = [
+            "id",
+            "letter_no",
+            "issuer",
+            "received_date",
+            "reply_deadline",
+            "days_to_deadline",
+            "urgency",
+            "status",
+        ]
         cols_show = [c for c in cols_show if c in df.columns]
         st.dataframe(df[cols_show], width="stretch")
 
@@ -248,12 +299,17 @@ def _tab_feedback(project_id: int) -> None:
             ok = st.form_submit_button("提交")
         if ok and ln and issue_d:
             payload = {
-                "letter_no": ln, "issuer": issuer, "issue_date": issue_d,
-                "received_date": recv_d or issue_d, "reply_deadline": deadline or issue_d,
-                "sla_days": int(sla), "title": title or None,
+                "letter_no": ln,
+                "issuer": issuer,
+                "issue_date": issue_d,
+                "received_date": recv_d or issue_d,
+                "reply_deadline": deadline or issue_d,
+                "sla_days": int(sla),
+                "title": title or None,
             }
-            r = _api("POST", f"/api/ipo-specials/feedback/projects/{project_id}/letters",
-                     json=payload)
+            r = _api(
+                "POST", f"/api/ipo-specials/feedback/projects/{project_id}/letters", json=payload
+            )
             if r:
                 st.success(f"已新增函 {r.get('id')}")
                 st.rerun()
@@ -264,19 +320,35 @@ def _tab_checklist(project_id: int) -> None:
     board = st.selectbox("板块", ["main_board", "chinext", "sse_star", "bse"])
     c1, c2 = st.columns(2)
     if c1.button("🔄 用内置模板初始化"):
-        r = _api("POST", f"/api/ipo-specials/submission/projects/{project_id}/init-checklist",
-                 params={"board_type": board})
+        r = _api(
+            "POST",
+            f"/api/ipo-specials/submission/projects/{project_id}/init-checklist",
+            params={"board_type": board},
+        )
         if r:
             st.success(f"已添加 {r.get('added')} 条 (共内置 {r.get('total_default')} 条)")
             st.rerun()
 
-    items = _api("GET", f"/api/ipo-specials/submission/projects/{project_id}/checklist",
-                 params={"board_type": board}) or []
+    items = (
+        _api(
+            "GET",
+            f"/api/ipo-specials/submission/projects/{project_id}/checklist",
+            params={"board_type": board},
+        )
+        or []
+    )
     if items:
         df = pd.DataFrame(items)
         # 高亮缺失项
-        cols_show = ["id", "item_code", "item_name", "is_required",
-                     "is_uploaded", "upload_date", "uploaded_by_display"]
+        cols_show = [
+            "id",
+            "item_code",
+            "item_name",
+            "is_required",
+            "is_uploaded",
+            "upload_date",
+            "uploaded_by_display",
+        ]
         cols_show = [c for c in cols_show if c in df.columns]
         st.dataframe(df[cols_show], width="stretch", height=400)
         missing = df[(df.get("is_required", False)) & (~df.get("is_uploaded", False))]
@@ -289,8 +361,11 @@ def _tab_checklist(project_id: int) -> None:
         notes = st.text_input("备注")
         if st.button("提交"):
             if item_id:
-                r = _api("PUT", f"/api/ipo-specials/submission/checklist/{item_id}",
-                         json={"is_uploaded": True, "upload_date": upload_date, "notes": notes or None})
+                r = _api(
+                    "PUT",
+                    f"/api/ipo-specials/submission/checklist/{item_id}",
+                    json={"is_uploaded": True, "upload_date": upload_date, "notes": notes or None},
+                )
                 if r:
                     st.success("已更新")
                     st.rerun()
@@ -301,20 +376,38 @@ def show_ipo_specials() -> None:
         '<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">🎯 IPO 专属 (Pack D)</p>',
         unsafe_allow_html=True,
     )
-    st.caption("内控穿行 + 截止性 + 招股书勾稽 + 三年一期对比 + 客户供应商重叠 + 可比公司 + 反馈意见 + 申报清单")
+    st.caption(
+        "内控穿行 + 截止性 + 招股书勾稽 + 三年一期对比 + 客户供应商重叠 + 可比公司 + 反馈意见 + 申报清单"
+    )
     project_id = _pick_project()
     if not project_id:
         return
 
-    tabs = st.tabs([
-        "🔍 内控穿行", "⏰ 截止性", "📖 招股书勾稽", "📊 三年一期",
-        "🔀 客户供应商重叠", "🏢 可比公司", "📨 反馈意见", "✅ 申报清单",
-    ])
-    with tabs[0]: _tab_walkthrough(project_id)
-    with tabs[1]: _tab_cutoff(project_id)
-    with tabs[2]: _tab_prospectus(project_id)
-    with tabs[3]: _tab_period_compare(project_id)
-    with tabs[4]: _tab_overlap(project_id)
-    with tabs[5]: _tab_peer(project_id)
-    with tabs[6]: _tab_feedback(project_id)
-    with tabs[7]: _tab_checklist(project_id)
+    tabs = st.tabs(
+        [
+            "🔍 内控穿行",
+            "⏰ 截止性",
+            "📖 招股书勾稽",
+            "📊 三年一期",
+            "🔀 客户供应商重叠",
+            "🏢 可比公司",
+            "📨 反馈意见",
+            "✅ 申报清单",
+        ]
+    )
+    with tabs[0]:
+        _tab_walkthrough(project_id)
+    with tabs[1]:
+        _tab_cutoff(project_id)
+    with tabs[2]:
+        _tab_prospectus(project_id)
+    with tabs[3]:
+        _tab_period_compare(project_id)
+    with tabs[4]:
+        _tab_overlap(project_id)
+    with tabs[5]:
+        _tab_peer(project_id)
+    with tabs[6]:
+        _tab_feedback(project_id)
+    with tabs[7]:
+        _tab_checklist(project_id)

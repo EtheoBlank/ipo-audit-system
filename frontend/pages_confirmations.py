@@ -69,8 +69,10 @@ def fetch_case_summary(case_id: int):
 
 def show_confirmations():
     st.markdown("## 📬 函证管理 (Confirmation)")
-    st.caption("从账套自动生成银行/客户/供应商/其他往来询证函统计表 → "
-               "确定发函后锁定 → 回函照片 OCR + AI 解析 → 回函情况自动统计")
+    st.caption(
+        "从账套自动生成银行/客户/供应商/其他往来询证函统计表 → "
+        "确定发函后锁定 → 回函照片 OCR + AI 解析 → 回函情况自动统计"
+    )
 
     catalogue = fetch_subjects()
     projects = fetch_projects()
@@ -90,39 +92,45 @@ def show_confirmations():
     project_id = proj["id"]
     fiscal_year = proj["fiscal_year"]
 
-    tabs = st.tabs([
-        "📋 函证科目",
-        "📁 案卷管理",
-        "🧮 统计表生成",
-        "✉️ 确定发函",
-        "📥 回函登记",
-        "📊 回函情况",
-        "📤 导出工作簿",
-    ])
+    tabs = st.tabs(
+        [
+            "📋 函证科目",
+            "📁 案卷管理",
+            "🧮 统计表生成",
+            "✉️ 确定发函",
+            "📥 回函登记",
+            "📊 回函情况",
+            "📤 导出工作簿",
+        ]
+    )
 
     # ============================================================
     # Tab 1: 函证科目
     # ============================================================
     with tabs[0]:
         st.markdown("### 函证涉及的全部科目清单")
-        st.caption("银行询证函按财政部《银行询证函参考格式》(财会[2024]6号 等)要求至少函证 26 个项目；"
-                   "客户/供应商函证按 CSA 1311 / 1502 / 1504 等准则要求函证余额+本期发生额+票据+合同条款。")
+        st.caption(
+            "银行询证函按财政部《银行询证函参考格式》(财会[2024]6号 等)要求至少函证 26 个项目；"
+            "客户/供应商函证按 CSA 1311 / 1502 / 1504 等准则要求函证余额+本期发生额+票据+合同条款。"
+        )
 
         subjects = catalogue.get("subjects", [])
         if subjects:
-            df = pd.DataFrame([
-                {
-                    "科目编号": s["code"],
-                    "科目名称": s["name"],
-                    "类别": s["category"],
-                    "函证方类型": s["party_type_label"],
-                    "必发阈值": s.get("threshold", 0),
-                    "默认函证项数": len(s.get("default_subjects", [])),
-                    "默认函证项": " / ".join(s.get("default_subjects", [])[:3]) + (
-                        "..." if len(s.get("default_subjects", [])) > 3 else ""),
-                }
-                for s in subjects
-            ])
+            df = pd.DataFrame(
+                [
+                    {
+                        "科目编号": s["code"],
+                        "科目名称": s["name"],
+                        "类别": s["category"],
+                        "函证方类型": s["party_type_label"],
+                        "必发阈值": s.get("threshold", 0),
+                        "默认函证项数": len(s.get("default_subjects", [])),
+                        "默认函证项": " / ".join(s.get("default_subjects", [])[:3])
+                        + ("..." if len(s.get("default_subjects", [])) > 3 else ""),
+                    }
+                    for s in subjects
+                ]
+            )
             st.dataframe(df, use_container_width=True, hide_index=True)
 
             with st.expander("📄 银行询证函官方模板字段 (26 项)", expanded=False):
@@ -152,14 +160,16 @@ def show_confirmations():
             if cases:
                 rows = []
                 for c in cases:
-                    rows.append({
-                        "ID": c["id"],
-                        "案卷名称": c["case_name"],
-                        "报告期": c["period_end"],
-                        "年度": c["fiscal_year"],
-                        "锁定": "🔒 是" if c["is_locked"] else "🔓 否",
-                        "生成时间": c["generated_at"][:19] if c.get("generated_at") else "",
-                    })
+                    rows.append(
+                        {
+                            "ID": c["id"],
+                            "案卷名称": c["case_name"],
+                            "报告期": c["period_end"],
+                            "年度": c["fiscal_year"],
+                            "锁定": "🔒 是" if c["is_locked"] else "🔓 否",
+                            "生成时间": c["generated_at"][:19] if c.get("generated_at") else "",
+                        }
+                    )
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             else:
                 st.info("该项目下尚无案卷")
@@ -170,7 +180,9 @@ def show_confirmations():
                 case_name = st.text_input("案卷名称", value=f"{fiscal_year}年度审计函证")
                 period_end = st.date_input("报告期截止日", value=date(fiscal_year, 12, 31))
                 notes = st.text_area("备注", value="")
-                generated_by = st.text_input("生成人", value=st.session_state.get("user_name", "审计师"))
+                generated_by = st.text_input(
+                    "生成人", value=st.session_state.get("user_name", "审计师")
+                )
                 if st.form_submit_button("✅ 创建案卷", type="primary"):
                     payload = {
                         "project_id": project_id,
@@ -197,8 +209,10 @@ def show_confirmations():
             case = st.selectbox(
                 "选择案卷",
                 options=cases,
-                format_func=lambda c: f"#{c['id']} {c['case_name']} ({c['period_end']})"
-                + (" 🔒" if c["is_locked"] else ""),
+                format_func=lambda c: (
+                    f"#{c['id']} {c['case_name']} ({c['period_end']})"
+                    + (" 🔒" if c["is_locked"] else "")
+                ),
             )
             if case and case["is_locked"]:
                 st.warning("⚠️ 案卷已锁定, 无法重新生成。请新建案卷。")
@@ -209,7 +223,9 @@ def show_confirmations():
                     bank_threshold = st.number_input("银行阈值 (0=全发)", value=0.0, min_value=0.0)
                     customer_threshold = st.number_input("客户阈值", value=100000.0, min_value=0.0)
                 with col2:
-                    supplier_threshold = st.number_input("供应商阈值", value=100000.0, min_value=0.0)
+                    supplier_threshold = st.number_input(
+                        "供应商阈值", value=100000.0, min_value=0.0
+                    )
                     other_threshold = st.number_input("其他往来阈值", value=50000.0, min_value=0.0)
                 with col3:
                     sample_ratio = st.slider("阈值以下随机抽样比例", 0.0, 0.5, 0.10, 0.05)
@@ -229,37 +245,44 @@ def show_confirmations():
                         "generated_by": st.session_state.get("user_name", "审计师"),
                     }
                     with st.spinner("正在从账套聚合并选样..."):
-                        r = api_request("POST",
-                                        f"/api/confirmations/cases/{case['id']}/generate",
-                                        json=payload)
+                        r = api_request(
+                            "POST", f"/api/confirmations/cases/{case['id']}/generate", json=payload
+                        )
                     if r:
-                        st.success(f"✅ 已生成 {r['selected_count']} 个函证对象, "
-                                   f"账面金额合计 {r['total_amount']:,.2f} 元")
+                        st.success(
+                            f"✅ 已生成 {r['selected_count']} 个函证对象, "
+                            f"账面金额合计 {r['total_amount']:,.2f} 元"
+                        )
                         # 按类型分布
                         if r.get("by_party_type"):
                             st.markdown("#### 按函证方类型分布")
-                            tdf = pd.DataFrame([
-                                {"类型": k, "数量": v["count"], "金额": v["amount"]}
-                                for k, v in r["by_party_type"].items()
-                            ])
+                            tdf = pd.DataFrame(
+                                [
+                                    {"类型": k, "数量": v["count"], "金额": v["amount"]}
+                                    for k, v in r["by_party_type"].items()
+                                ]
+                            )
                             st.dataframe(tdf, use_container_width=True, hide_index=True)
 
                 # 现有 items
                 items = fetch_case_items(case["id"])
                 if items:
                     st.markdown("#### 当前函证对象清单")
-                    rows = [{
-                        "ID": it["id"],
-                        "类型": it["party_type_label"],
-                        "对方": it["party_name"],
-                        "对方编号": it.get("party_id") or "",
-                        "我方科目": it.get("account_name") or "",
-                        "账面余额": it["book_balance"],
-                        "函证金额": it["total_confirm_amount"],
-                        "重要性": it["importance"],
-                        "选样原因": it.get("selection_reason") or "",
-                        "状态": it["status_label"],
-                    } for it in items]
+                    rows = [
+                        {
+                            "ID": it["id"],
+                            "类型": it["party_type_label"],
+                            "对方": it["party_name"],
+                            "对方编号": it.get("party_id") or "",
+                            "我方科目": it.get("account_name") or "",
+                            "账面余额": it["book_balance"],
+                            "函证金额": it["total_confirm_amount"],
+                            "重要性": it["importance"],
+                            "选样原因": it.get("selection_reason") or "",
+                            "状态": it["status_label"],
+                        }
+                        for it in items
+                    ]
                     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
     # ============================================================
@@ -267,8 +290,10 @@ def show_confirmations():
     # ============================================================
     with tabs[3]:
         st.markdown("### 确定发函 (锁定案卷 + 逐个发函)")
-        st.caption("⚠️ 一旦『确定发函』并锁定, 发函日期与金额快照不可再修改, "
-                   "避免后续账套数据更新导致多版本混乱。")
+        st.caption(
+            "⚠️ 一旦『确定发函』并锁定, 发函日期与金额快照不可再修改, "
+            "避免后续账套数据更新导致多版本混乱。"
+        )
 
         cases = fetch_cases(project_id)
         if not cases:
@@ -277,8 +302,10 @@ def show_confirmations():
             case = st.selectbox(
                 "选择案卷",
                 options=cases,
-                format_func=lambda c: f"#{c['id']} {c['case_name']} ({c['period_end']})"
-                + (" 🔒" if c["is_locked"] else ""),
+                format_func=lambda c: (
+                    f"#{c['id']} {c['case_name']} ({c['period_end']})"
+                    + (" 🔒" if c["is_locked"] else "")
+                ),
                 key="send_case",
             )
             if not case:
@@ -292,8 +319,9 @@ def show_confirmations():
                             "locked_by": st.session_state.get("user_name", "审计师"),
                             "lock_reason": "已确认函证对象清单",
                         }
-                        r = api_request("POST", f"/api/confirmations/cases/{case['id']}/lock",
-                                        json=payload)
+                        r = api_request(
+                            "POST", f"/api/confirmations/cases/{case['id']}/lock", json=payload
+                        )
                         if r:
                             st.success("案卷已锁定")
                             st.rerun()
@@ -302,8 +330,7 @@ def show_confirmations():
             with col2:
                 if case["is_locked"]:
                     if st.button("🔓 解锁", help="仅当无发函时允许"):
-                        r = api_request("POST",
-                                        f"/api/confirmations/cases/{case['id']}/unlock")
+                        r = api_request("POST", f"/api/confirmations/cases/{case['id']}/unlock")
                         if r:
                             st.success("已解锁")
                             st.rerun()
@@ -331,16 +358,19 @@ def show_confirmations():
                                 col1, col2 = st.columns(2)
                                 with col1:
                                     sent_date = st.date_input("发函日期", value=date.today())
-                                    sent_method = st.selectbox("发函方式",
-                                                               ["邮寄", "电子邮件", "跟函", "电邮+邮寄"])
-                                    sent_by = st.text_input("发函人",
-                                                            value=st.session_state.get("user_name", "审计师"))
+                                    sent_method = st.selectbox(
+                                        "发函方式", ["邮寄", "电子邮件", "跟函", "电邮+邮寄"]
+                                    )
+                                    sent_by = st.text_input(
+                                        "发函人", value=st.session_state.get("user_name", "审计师")
+                                    )
                                 with col2:
                                     recipient = st.text_input("收件人", value=it["party_name"])
                                     recipient_address = st.text_area("收件地址", value="")
                                     courier_no = st.text_input("快递单号", value="")
-                                expected_reply = st.date_input("预计回函日",
-                                                               value=date.today() + timedelta(days=14))
+                                expected_reply = st.date_input(
+                                    "预计回函日", value=date.today() + timedelta(days=14)
+                                )
                                 file_format = st.selectbox("文件格式", ["docx", "pdf"])
                                 if st.form_submit_button("✉️ 发函 (生成询证函并锁定)"):
                                     payload = {
@@ -355,8 +385,11 @@ def show_confirmations():
                                         "template_id": "standard",
                                         "file_format": file_format,
                                     }
-                                    r = api_request("POST", f"/api/confirmations/items/{it['id']}/send",
-                                                    json=payload)
+                                    r = api_request(
+                                        "POST",
+                                        f"/api/confirmations/items/{it['id']}/send",
+                                        json=payload,
+                                    )
                                     if r:
                                         st.success(f"✅ 询证函已生成: {r.get('letter_no')}")
                                         st.rerun()
@@ -366,8 +399,10 @@ def show_confirmations():
                         col1, col2 = st.columns(2)
                         with col1:
                             if st.button("📥 下载询证函", key=f"dl_{it['id']}"):
-                                content = api_request("GET",
-                                    f"/api/confirmations/letters/{it['sent_letter_id']}/download")
+                                content = api_request(
+                                    "GET",
+                                    f"/api/confirmations/letters/{it['sent_letter_id']}/download",
+                                )
                                 if content:
                                     st.download_button(
                                         "下载",
@@ -405,7 +440,9 @@ def show_confirmations():
                     sel = st.selectbox(
                         "选择已发函项目",
                         options=sent_items,
-                        format_func=lambda it: f"#{it['id']} {it['party_name']} - {it['book_balance']:,.2f} - {it['status_label']}",
+                        format_func=lambda it: (
+                            f"#{it['id']} {it['party_name']} - {it['book_balance']:,.2f} - {it['status_label']}"
+                        ),
                     )
                     if sel:
                         letter_id = sel["sent_letter_id"]
@@ -413,22 +450,36 @@ def show_confirmations():
                         st.markdown(f"账面余额: **{sel['book_balance']:,.2f}**")
                         st.markdown("---")
 
-                        mode = st.radio("录入方式", ["📷 上传回函照片 (OCR+AI)", "✍️ 手工录入"],
-                                        horizontal=True)
+                        mode = st.radio(
+                            "录入方式", ["📷 上传回函照片 (OCR+AI)", "✍️ 手工录入"], horizontal=True
+                        )
 
                         if mode.startswith("📷"):
-                            uploaded = st.file_uploader("上传回函照片/PDF",
-                                                       type=["jpg", "jpeg", "png", "pdf"],
-                                                       key=f"ph_{letter_id}")
-                            auto_confirm = st.checkbox("AI 解析后自动回填状态", value=True,
-                                                      help="取消则只解析不修改状态, 需人工确认")
+                            uploaded = st.file_uploader(
+                                "上传回函照片/PDF",
+                                type=["jpg", "jpeg", "png", "pdf"],
+                                key=f"ph_{letter_id}",
+                            )
+                            auto_confirm = st.checkbox(
+                                "AI 解析后自动回填状态",
+                                value=True,
+                                help="取消则只解析不修改状态, 需人工确认",
+                            )
                             if uploaded and st.button("🚀 OCR + AI 解析", type="primary"):
-                                files = {"file": (uploaded.name, uploaded.getvalue(),
-                                                  uploaded.type or "image/jpeg")}
+                                files = {
+                                    "file": (
+                                        uploaded.name,
+                                        uploaded.getvalue(),
+                                        uploaded.type or "image/jpeg",
+                                    )
+                                }
                                 data = {"auto_confirm": str(auto_confirm).lower()}
-                                r = api_request("POST",
+                                r = api_request(
+                                    "POST",
                                     f"/api/confirmations/letters/{letter_id}/photos",
-                                    files=files, data=data)
+                                    files=files,
+                                    data=data,
+                                )
                                 if r:
                                     st.success(r.get("message", "OK"))
                                     parsed = r.get("parsed_data") or {}
@@ -441,15 +492,20 @@ def show_confirmations():
                                 col1, col2 = st.columns(2)
                                 with col1:
                                     received_date = st.date_input("收函日期", value=date.today())
-                                    response_method = st.selectbox("回函方式",
-                                                                   ["纸质原件", "扫描件", "电邮", "传真"])
-                                    response_status = st.selectbox("回函状态", [
-                                        "match", "partial", "mismatch", "reject", "unclear"
-                                    ], format_func=lambda x: {
-                                        "match": "相符", "partial": "部分相符",
-                                        "mismatch": "不符", "reject": "拒函",
-                                        "unclear": "待人工核对",
-                                    }.get(x, x))
+                                    response_method = st.selectbox(
+                                        "回函方式", ["纸质原件", "扫描件", "电邮", "传真"]
+                                    )
+                                    response_status = st.selectbox(
+                                        "回函状态",
+                                        ["match", "partial", "mismatch", "reject", "unclear"],
+                                        format_func=lambda x: {
+                                            "match": "相符",
+                                            "partial": "部分相符",
+                                            "mismatch": "不符",
+                                            "reject": "拒函",
+                                            "unclear": "待人工核对",
+                                        }.get(x, x),
+                                    )
                                 with col2:
                                     amount_confirmed = st.number_input("对方确认金额", value=0.0)
                                     difference_reason = st.text_area("差异原因", value="")
@@ -467,16 +523,17 @@ def show_confirmations():
                                         "auditor_note": auditor_note,
                                         "confirmed_by": st.session_state.get("user_name", "审计师"),
                                     }
-                                    r = api_request("POST",
+                                    r = api_request(
+                                        "POST",
                                         f"/api/confirmations/letters/{letter_id}/response",
-                                        json=payload)
+                                        json=payload,
+                                    )
                                     if r:
                                         st.success("回函已录入")
                                         st.rerun()
 
                         # 显示已有回函
-                        rd = api_request("GET",
-                                         f"/api/confirmations/letters/{letter_id}/response")
+                        rd = api_request("GET", f"/api/confirmations/letters/{letter_id}/response")
                         if rd and rd.get("response"):
                             st.markdown("---")
                             st.markdown("#### 当前回函")
@@ -487,9 +544,11 @@ def show_confirmations():
                             with col2:
                                 st.metric("对方确认金额", f"{resp['amount_confirmed']:,.2f}")
                             with col3:
-                                st.metric("差异金额",
-                                          f"{resp['amount_difference']:,.2f}",
-                                          delta=f"{resp['amount_difference']:,.2f}")
+                                st.metric(
+                                    "差异金额",
+                                    f"{resp['amount_difference']:,.2f}",
+                                    delta=f"{resp['amount_difference']:,.2f}",
+                                )
                             st.markdown(f"**收函日期**: {resp.get('received_date') or '-'}")
                             st.markdown(f"**回函方式**: {resp.get('response_method')}")
                             st.markdown(f"**差异原因**: {resp.get('difference_reason') or '-'}")
@@ -525,8 +584,7 @@ def show_confirmations():
                     with col3:
                         st.metric("已发函数", summary["sent_count"])
                     with col4:
-                        st.metric("回函率",
-                                  f"{summary['response_rate']*100:.1f}%")
+                        st.metric("回函率", f"{summary['response_rate'] * 100:.1f}%")
 
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
@@ -534,11 +592,9 @@ def show_confirmations():
                     with col2:
                         st.metric("差异笔数", summary["items_with_difference"])
                     with col3:
-                        st.metric("差异金额合计",
-                                  f"{summary['total_difference_amount']:,.2f}")
+                        st.metric("差异金额合计", f"{summary['total_difference_amount']:,.2f}")
                     with col4:
-                        st.metric("已确认金额合计",
-                                  f"{summary['total_confirmed']:,.2f}")
+                        st.metric("已确认金额合计", f"{summary['total_confirmed']:,.2f}")
 
                     # 按 party_type
                     if summary.get("by_party_type"):
@@ -551,18 +607,22 @@ def show_confirmations():
                     with col1:
                         st.markdown("#### 函证对象状态分布")
                         if summary.get("status_summary"):
-                            df = pd.DataFrame([
-                                {"状态": k, "数量": v}
-                                for k, v in summary["status_summary"].items()
-                            ])
+                            df = pd.DataFrame(
+                                [
+                                    {"状态": k, "数量": v}
+                                    for k, v in summary["status_summary"].items()
+                                ]
+                            )
                             st.dataframe(df, use_container_width=True, hide_index=True)
                     with col2:
                         st.markdown("#### 回函状态分布")
                         if summary.get("response_status_summary"):
-                            df = pd.DataFrame([
-                                {"状态": k, "数量": v}
-                                for k, v in summary["response_status_summary"].items()
-                            ])
+                            df = pd.DataFrame(
+                                [
+                                    {"状态": k, "数量": v}
+                                    for k, v in summary["response_status_summary"].items()
+                                ]
+                            )
                             st.dataframe(df, use_container_width=True, hide_index=True)
 
                     # 催办
@@ -581,7 +641,9 @@ def show_confirmations():
     # ============================================================
     with tabs[6]:
         st.markdown("### 导出函证工作簿")
-        st.caption("多 Sheet Excel: 函证统计表 / 发函清单 / 回函情况 / 差异分析 / 汇总 / 未回函催办")
+        st.caption(
+            "多 Sheet Excel: 函证统计表 / 发函清单 / 回函情况 / 差异分析 / 汇总 / 未回函催办"
+        )
         cases = fetch_cases(project_id)
         if not cases:
             st.warning("请先创建案卷")
@@ -593,8 +655,7 @@ def show_confirmations():
                 key="exp_case",
             )
             if case and st.button("📤 导出工作簿", type="primary"):
-                content = api_request("GET",
-                                      f"/api/confirmations/cases/{case['id']}/export")
+                content = api_request("GET", f"/api/confirmations/cases/{case['id']}/export")
                 if content and isinstance(content, bytes):
                     st.download_button(
                         "下载 Excel",

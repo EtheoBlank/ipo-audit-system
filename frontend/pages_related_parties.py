@@ -1,4 +1,5 @@
 """关联方专项页面 (Pack B). 8 个 tab."""
+
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
@@ -30,7 +31,9 @@ def _pick_project() -> Optional[int]:
     if not projects:
         st.warning("尚未创建项目, 请先在 '📁 项目管理' 创建")
         return None
-    options = {f"{p['id']} - {p.get('name','')} / {p.get('company_name','')}": p["id"] for p in projects}
+    options = {
+        f"{p['id']} - {p.get('name', '')} / {p.get('company_name', '')}": p["id"] for p in projects
+    }
     label = st.selectbox("选择项目", list(options.keys()), key="rp_pick_project")
     return options[label]
 
@@ -53,7 +56,8 @@ def _tab_main_data(project_id: int) -> None:
     st.markdown("### 📋 关联方主数据")
     cols = st.columns(4)
     party_type = cols[0].selectbox(
-        "类型", ["全部"] + list(_PARTY_TYPE_LABELS.keys()),
+        "类型",
+        ["全部"] + list(_PARTY_TYPE_LABELS.keys()),
         format_func=lambda k: "全部" if k == "全部" else _PARTY_TYPE_LABELS.get(k, k),
     )
     confirmed = cols[1].selectbox("状态", ["全部", "已确认", "待确认"])
@@ -69,26 +73,29 @@ def _tab_main_data(project_id: int) -> None:
         params["keyword"] = keyword
 
     res = _api("GET", f"/api/related-parties/projects/{project_id}/parties", params=params) or {
-        "total": 0, "items": []
+        "total": 0,
+        "items": [],
     }
     items = res.get("items", [])
     st.metric("命中数", res.get("total", 0))
     if items:
-        df = pd.DataFrame([
-            {
-                "ID": i["id"],
-                "名称": i["name"],
-                "类型": _PARTY_TYPE_LABELS.get(i["party_type"], i["party_type"]),
-                "性质": "公司" if i["party_kind"] == "entity" else "自然人",
-                "信用代码": i.get("unified_credit_code") or "-",
-                "持股%": i.get("holding_pct") or 0,
-                "来源": i.get("source"),
-                "已确认": "✅" if i.get("is_confirmed") else "⏳",
-                "已披露": "✅" if i.get("is_disclosed_in_prospectus") else "❌",
-                "可信度": f"{i.get('confidence', 0):.2f}",
-            }
-            for i in items
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "ID": i["id"],
+                    "名称": i["name"],
+                    "类型": _PARTY_TYPE_LABELS.get(i["party_type"], i["party_type"]),
+                    "性质": "公司" if i["party_kind"] == "entity" else "自然人",
+                    "信用代码": i.get("unified_credit_code") or "-",
+                    "持股%": i.get("holding_pct") or 0,
+                    "来源": i.get("source"),
+                    "已确认": "✅" if i.get("is_confirmed") else "⏳",
+                    "已披露": "✅" if i.get("is_disclosed_in_prospectus") else "❌",
+                    "可信度": f"{i.get('confidence', 0):.2f}",
+                }
+                for i in items
+            ]
+        )
         st.dataframe(df, width="stretch", height=400)
 
     with st.expander("➕ 新建关联方", expanded=False):
@@ -96,7 +103,8 @@ def _tab_main_data(project_id: int) -> None:
             c1, c2 = st.columns(2)
             name = c1.text_input("名称*")
             party_type_new = c2.selectbox(
-                "类型*", list(_PARTY_TYPE_LABELS.keys()),
+                "类型*",
+                list(_PARTY_TYPE_LABELS.keys()),
                 format_func=lambda k: _PARTY_TYPE_LABELS.get(k, k),
             )
             party_kind = c1.selectbox("性质", ["entity", "person"])
@@ -142,7 +150,9 @@ def _tab_relations(project_id: int) -> None:
             ok = st.form_submit_button("提交", type="primary")
         if ok and a and b and rt:
             payload = {
-                "party_a_id": int(a), "party_b_id": int(b), "relation_type": rt,
+                "party_a_id": int(a),
+                "party_b_id": int(b),
+                "relation_type": rt,
                 "holding_pct": holding if holding > 0 else None,
             }
             r = _api("POST", f"/api/related-parties/projects/{project_id}/relations", json=payload)
@@ -173,34 +183,55 @@ def _tab_detector(project_id: int) -> None:
         if extra_keywords:
             payload["keywords_extra"] = [k.strip() for k in extra_keywords.split(",") if k.strip()]
         with st.spinner("识别中..."):
-            res = _api("POST", f"/api/related-parties/projects/{project_id}/detector/run", json=payload)
+            res = _api(
+                "POST", f"/api/related-parties/projects/{project_id}/detector/run", json=payload
+            )
         if res:
-            st.success(f"扫描 {res.get('scanned_vouchers', 0)} 凭证 / {res.get('scanned_customers', 0)} 客户, 新候选 {res.get('new_candidates', 0)}")
+            st.success(
+                f"扫描 {res.get('scanned_vouchers', 0)} 凭证 / {res.get('scanned_customers', 0)} 客户, 新候选 {res.get('new_candidates', 0)}"
+            )
             cands = res.get("candidates", [])
             if cands:
                 st.markdown(f"#### 候选关联方 ({len(cands)} 个)")
-                df = pd.DataFrame([
-                    {
-                        "名称": c["name"],
-                        "类型": _PARTY_TYPE_LABELS.get(c["party_type"], c["party_type"]),
-                        "来源": c["source"],
-                        "可信度": f"{c.get('confidence', 0):.2f}",
-                        "证据": "\n".join(c.get("evidence", [])),
-                    }
-                    for c in cands
-                ])
+                df = pd.DataFrame(
+                    [
+                        {
+                            "名称": c["name"],
+                            "类型": _PARTY_TYPE_LABELS.get(c["party_type"], c["party_type"]),
+                            "来源": c["source"],
+                            "可信度": f"{c.get('confidence', 0):.2f}",
+                            "证据": "\n".join(c.get("evidence", [])),
+                        }
+                        for c in cands
+                    ]
+                )
                 st.dataframe(df, width="stretch", height=400)
-                st.info("候选已生成. 请到 '主数据' tab 手工新建对应关联方 (类型选 controlled_entity 等), 完成 confirm 流程.")
+                st.info(
+                    "候选已生成. 请到 '主数据' tab 手工新建对应关联方 (类型选 controlled_entity 等), 完成 confirm 流程."
+                )
 
 
 def _tab_transactions(project_id: int) -> None:
     st.markdown("### 💰 关联交易")
-    rows = _api("GET", f"/api/related-parties/projects/{project_id}/transactions",
-                params={"limit": 500}) or []
+    rows = (
+        _api(
+            "GET", f"/api/related-parties/projects/{project_id}/transactions", params={"limit": 500}
+        )
+        or []
+    )
     if rows:
         df = pd.DataFrame(rows)
-        cols_show = ["id", "party_id", "transaction_type", "period_end", "amount",
-                     "currency", "pricing_basis", "is_fair", "fairness_score"]
+        cols_show = [
+            "id",
+            "party_id",
+            "transaction_type",
+            "period_end",
+            "amount",
+            "currency",
+            "pricing_basis",
+            "is_fair",
+            "fairness_score",
+        ]
         cols_show = [c for c in cols_show if c in df.columns]
         st.dataframe(df[cols_show], width="stretch", height=380)
     else:
@@ -212,9 +243,18 @@ def _tab_transactions(project_id: int) -> None:
             party_id = c1.number_input("party_id*", min_value=1, step=1)
             tx_type = c2.selectbox(
                 "类型*",
-                ["sales", "purchase", "loan_receivable", "loan_payable",
-                 "guarantee", "lease", "service", "shared_resource",
-                 "asset_transfer", "other"],
+                [
+                    "sales",
+                    "purchase",
+                    "loan_receivable",
+                    "loan_payable",
+                    "guarantee",
+                    "lease",
+                    "service",
+                    "shared_resource",
+                    "asset_transfer",
+                    "other",
+                ],
             )
             amount = c3.number_input("金额*", min_value=0.0, step=100.0)
             period_end = c1.text_input("期末日期 YYYY-MM-DD")
@@ -223,11 +263,16 @@ def _tab_transactions(project_id: int) -> None:
             ok = st.form_submit_button("提交", type="primary")
         if ok and party_id and amount > 0:
             payload = {
-                "party_id": int(party_id), "transaction_type": tx_type,
-                "amount": float(amount), "period_end": period_end or None,
-                "pricing_basis": pricing or None, "notes": note or None,
+                "party_id": int(party_id),
+                "transaction_type": tx_type,
+                "amount": float(amount),
+                "period_end": period_end or None,
+                "pricing_basis": pricing or None,
+                "notes": note or None,
             }
-            r = _api("POST", f"/api/related-parties/projects/{project_id}/transactions", json=payload)
+            r = _api(
+                "POST", f"/api/related-parties/projects/{project_id}/transactions", json=payload
+            )
             if r:
                 st.success("已新增")
                 st.rerun()
@@ -238,9 +283,11 @@ def _tab_transactions(project_id: int) -> None:
     if st.button("🔍 跑公允性测试"):
         payload = {"period_end": period_end_for_check or None}
         with st.spinner("分析中..."):
-            r = _api("POST",
-                     f"/api/related-parties/projects/{project_id}/transactions/check-fairness",
-                     json=payload)
+            r = _api(
+                "POST",
+                f"/api/related-parties/projects/{project_id}/transactions/check-fairness",
+                json=payload,
+            )
         if r:
             st.success(
                 f"评估 {r.get('assessed', 0)} 笔, 公允 {r.get('fair', 0)}, "
@@ -285,8 +332,14 @@ def _tab_peer_competition(project_id: int) -> None:
     rows = _api("GET", f"/api/related-parties/projects/{project_id}/peer-competition") or []
     if rows:
         df = pd.DataFrame(rows)
-        cols_show = ["party_id", "overlap_score", "overlap_keywords",
-                     "risk_level", "solution_type", "assessed_at"]
+        cols_show = [
+            "party_id",
+            "overlap_score",
+            "overlap_keywords",
+            "risk_level",
+            "solution_type",
+            "assessed_at",
+        ]
         cols_show = [c for c in cols_show if c in df.columns]
         st.dataframe(df[cols_show], width="stretch")
     else:
@@ -320,7 +373,9 @@ def _tab_peer_competition(project_id: int) -> None:
 
 def _tab_disclosure(project_id: int) -> None:
     st.markdown("### 📑 招股书披露 diff")
-    st.caption("把招股书 '关联方及关联交易' 章节里所披露的关联方名单粘到下方 (一行一个), 与系统识别的 diff.")
+    st.caption(
+        "把招股书 '关联方及关联交易' 章节里所披露的关联方名单粘到下方 (一行一个), 与系统识别的 diff."
+    )
 
     prospectus_names = st.text_area(
         "招股书披露的关联方名单 (一行一个)",
@@ -348,15 +403,26 @@ def _tab_disclosure(project_id: int) -> None:
     params: Dict[str, Any] = {}
     if gap_status != "全部":
         params["gap_status"] = gap_status
-    gaps = _api(
-        "GET",
-        f"/api/related-parties/projects/{project_id}/disclosure/gaps",
-        params=params,
-    ) or []
+    gaps = (
+        _api(
+            "GET",
+            f"/api/related-parties/projects/{project_id}/disclosure/gaps",
+            params=params,
+        )
+        or []
+    )
     if gaps:
         df = pd.DataFrame(gaps)
-        cols_show = ["party_name", "gap_status", "in_system", "in_prospectus",
-                     "transaction_count", "total_amount", "suggested_action", "resolved"]
+        cols_show = [
+            "party_name",
+            "gap_status",
+            "in_system",
+            "in_prospectus",
+            "transaction_count",
+            "total_amount",
+            "suggested_action",
+            "resolved",
+        ]
         cols_show = [c for c in cols_show if c in df.columns]
         st.dataframe(df[cols_show], width="stretch", height=350)
     else:
@@ -386,10 +452,18 @@ def show_related_parties() -> None:
     if not project_id:
         return
 
-    tabs = st.tabs([
-        "📋 主数据", "🔗 关系图", "🔍 识别引擎", "💰 关联交易",
-        "💸 资金占用", "🏭 同业竞争", "📑 披露 diff", "📄 专项报告",
-    ])
+    tabs = st.tabs(
+        [
+            "📋 主数据",
+            "🔗 关系图",
+            "🔍 识别引擎",
+            "💰 关联交易",
+            "💸 资金占用",
+            "🏭 同业竞争",
+            "📑 披露 diff",
+            "📄 专项报告",
+        ]
+    )
     with tabs[0]:
         _tab_main_data(project_id)
     with tabs[1]:

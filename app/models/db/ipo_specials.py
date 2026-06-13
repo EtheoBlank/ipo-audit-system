@@ -14,13 +14,20 @@
   - 反馈意见 (FeedbackLetter / FeedbackQuestion / FeedbackResponse)
   - 申报材料 (SubmissionChecklistItem)
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
-    Boolean, DateTime, Float, ForeignKey, Integer, String, Text, Index,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,19 +36,30 @@ from app.core.database import Base
 
 __all__ = [
     # Phase 16
-    "InternalControlCycle", "ICRiskControl", "ICWalkthrough", "ICWalkthroughStep", "ICSamplingResult",
+    "InternalControlCycle",
+    "ICRiskControl",
+    "ICWalkthrough",
+    "ICWalkthroughStep",
+    "ICSamplingResult",
     # Phase 17
-    "RevenueCutoffTest", "ContractAssetLiability", "JournalEntryDraft",
+    "RevenueCutoffTest",
+    "ContractAssetLiability",
+    "JournalEntryDraft",
     # 招股书勾稽
-    "Prospectus", "ProspectusKeyMetric", "ReconciliationFinding",
+    "Prospectus",
+    "ProspectusKeyMetric",
+    "ReconciliationFinding",
     # 三年一期对比
     "PeriodComparisonReport",
     # 客户/供应商重叠
     "CustomerSupplierOverlap",
     # 可比公司
-    "PeerCompany", "PeerCompanyMetric",
+    "PeerCompany",
+    "PeerCompanyMetric",
     # 反馈意见
-    "FeedbackLetter", "FeedbackQuestion", "FeedbackResponse",
+    "FeedbackLetter",
+    "FeedbackQuestion",
+    "FeedbackResponse",
     # 申报材料
     "SubmissionChecklistItem",
 ]
@@ -58,10 +76,13 @@ def _utcnow() -> datetime:
 
 class InternalControlCycle(Base):
     """6 大循环 (销售/采购/存货/薪酬/财务报告/IT) + 自定义."""
+
     __tablename__ = "ipo_ic_cycles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     cycle_code: Mapped[str] = mapped_column(String(40), nullable=False)
     # sales / procurement / inventory / payroll / financial_reporting / it / custom
     cycle_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -72,10 +93,13 @@ class InternalControlCycle(Base):
 
 class ICRiskControl(Base):
     """风险-控制矩阵 (RCM)."""
+
     __tablename__ = "ipo_ic_risk_controls"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    cycle_id: Mapped[int] = mapped_column(Integer, ForeignKey("ipo_ic_cycles.id"), nullable=False, index=True)
+    cycle_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("ipo_ic_cycles.id"), nullable=False, index=True
+    )
     risk_no: Mapped[str] = mapped_column(String(40), nullable=False)
     risk_description: Mapped[str] = mapped_column(Text, nullable=False)
     risk_level: Mapped[str] = mapped_column(String(20), default="medium", nullable=False)
@@ -92,7 +116,9 @@ class ICWalkthrough(Base):
     __tablename__ = "ipo_ic_walkthroughs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     cycle_id: Mapped[int] = mapped_column(Integer, ForeignKey("ipo_ic_cycles.id"), nullable=False)
     walkthrough_no: Mapped[str] = mapped_column(String(60), nullable=False)
     walkthrough_date: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -125,7 +151,9 @@ class ICSamplingResult(Base):
     __tablename__ = "ipo_ic_sampling_results"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     cycle_code: Mapped[str] = mapped_column(String(40), nullable=False)
     sampling_method: Mapped[str] = mapped_column(String(40), nullable=False)
     # top_n / random / cutoff / risk_based
@@ -144,7 +172,9 @@ class RevenueCutoffTest(Base):
     __tablename__ = "ipo_revenue_cutoff_tests"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     period_end: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     sales_record_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     cutoff_judgement: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -163,7 +193,9 @@ class ContractAssetLiability(Base):
     __tablename__ = "ipo_contract_asset_liabilities"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     contract_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     performance_obligation: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     period_end: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
@@ -176,10 +208,13 @@ class ContractAssetLiability(Base):
 
 class JournalEntryDraft(Base):
     """跨期调整分录草稿 — 审计师复核后接受落入序时账."""
+
     __tablename__ = "ipo_journal_entry_drafts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     source_module: Mapped[str] = mapped_column(String(50), nullable=False)
     # revenue_cutoff / contract_asset / depreciation / impairment / 等
     period_end: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -205,7 +240,9 @@ class Prospectus(Base):
     __tablename__ = "ipo_prospectuses"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     version: Mapped[str] = mapped_column(String(20), default="v1", nullable=False)
     filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     upload_date: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -216,6 +253,7 @@ class Prospectus(Base):
 
 class ProspectusKeyMetric(Base):
     """招股书关键数据点 (毛利率/产能利用率/前五客户占比 等)."""
+
     __tablename__ = "ipo_prospectus_key_metrics"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -240,7 +278,9 @@ class ReconciliationFinding(Base):
     __tablename__ = "ipo_reconciliation_findings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     prospectus_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("ipo_prospectuses.id"), nullable=True
     )
@@ -260,10 +300,13 @@ class ReconciliationFinding(Base):
 
 class PeriodComparisonReport(Base):
     """三年一期对比表 — 资产负债表 / 利润表 / 现金流量表."""
+
     __tablename__ = "ipo_period_comparison_reports"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     report_type: Mapped[str] = mapped_column(String(40), nullable=False)
     # balance_sheet / income_statement / cash_flow / ratios
     metric_code: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
@@ -285,10 +328,13 @@ class PeriodComparisonReport(Base):
 
 class CustomerSupplierOverlap(Base):
     """客户即供应商 / 客户与供应商重叠检测."""
+
     __tablename__ = "ipo_customer_supplier_overlaps"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     party_name: Mapped[str] = mapped_column(String(200), nullable=False)
     unified_credit_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     match_type: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -311,7 +357,9 @@ class PeerCompany(Base):
     __tablename__ = "ipo_peer_companies"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     stock_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     short_name: Mapped[str] = mapped_column(String(100), nullable=False)
     full_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
@@ -324,6 +372,7 @@ class PeerCompany(Base):
 
 class PeerCompanyMetric(Base):
     """可比公司的年度财务指标 (毛利率/净利率/ROE/营收增速 等)."""
+
     __tablename__ = "ipo_peer_company_metrics"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -347,7 +396,9 @@ class FeedbackLetter(Base):
     __tablename__ = "ipo_feedback_letters"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     letter_no: Mapped[str] = mapped_column(String(100), nullable=False)
     issuer: Mapped[str] = mapped_column(String(100), nullable=False)
     # CSRC / SSE / SZSE / BSE / other
@@ -403,7 +454,9 @@ class SubmissionChecklistItem(Base):
     __tablename__ = "ipo_submission_checklist_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     board_type: Mapped[str] = mapped_column(String(40), nullable=False)
     # main_board / chinext / sse_star / bse
     item_code: Mapped[str] = mapped_column(String(80), nullable=False)

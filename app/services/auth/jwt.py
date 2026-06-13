@@ -3,6 +3,7 @@
 jose 不可用时 (HF Space 极端情况) 走纯 stdlib 实现, HS256 + 显式
 header / payload / signature, 兼容标准 JWT 格式。
 """
+
 from __future__ import annotations
 
 import base64
@@ -49,7 +50,9 @@ def _b64url_decode(s: str) -> bytes:
 def _stdlib_encode(payload: Dict[str, Any]) -> str:
     header = {"alg": "HS256", "typ": "JWT"}
     h_b = _b64url_encode(json.dumps(header, separators=(",", ":"), sort_keys=True).encode())
-    p_b = _b64url_encode(json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str).encode())
+    p_b = _b64url_encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str).encode()
+    )
     signing_input = f"{h_b}.{p_b}".encode("ascii")
     sig = hmac.new(settings.JWT_SECRET.encode("utf-8"), signing_input, hashlib.sha256).digest()
     return f"{h_b}.{p_b}.{_b64url_encode(sig)}"

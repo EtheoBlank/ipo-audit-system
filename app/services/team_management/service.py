@@ -3,6 +3,7 @@
 负责把 work_plan_generator / quality_assessor / recommendation_generator /
 progress_tracker 串起来，暴露给 API 层使用。
 """
+
 from __future__ import annotations
 
 import json
@@ -20,8 +21,6 @@ from app.models.db_models import (
     Meeting,
     MeetingRecord,
     Project,
-    ProjectAssignment,
-    TeamMember,
     WorkPlan,
     WorkPlanItem,
     WORK_PLAN_STATUS_DRAFT,
@@ -49,7 +48,6 @@ from app.services.team_management.recommendation_generator import (
     management_recommendation_generator,
 )
 from app.services.team_management.work_plan_generator import (
-    WorkPlanContext,
     WorkPlanGenerated,
     WorkPlanGenerator,
     work_plan_generator,
@@ -92,9 +90,7 @@ class TeamManagementService:
                 await db.execute(
                     select(WorkPlan).where(
                         WorkPlan.project_id == project_id,
-                        WorkPlan.status.in_(
-                            [WORK_PLAN_STATUS_DRAFT, WORK_PLAN_STATUS_ACTIVE]
-                        ),
+                        WorkPlan.status.in_([WORK_PLAN_STATUS_DRAFT, WORK_PLAN_STATUS_ACTIVE]),
                     )
                 )
             ).scalar_one_or_none()
@@ -122,9 +118,7 @@ class TeamManagementService:
     #  工作计划
     # ============================================================
 
-    async def generate_work_plan(
-        self, db: AsyncSession, project_id: int
-    ) -> dict[str, Any]:
+    async def generate_work_plan(self, db: AsyncSession, project_id: int) -> dict[str, Any]:
         """为项目生成工作计划（AI + 模板兜底）。"""
         ctx = await self.work_plan_generator.build_context(db, project_id)
         result: WorkPlanGenerated = await self.work_plan_generator.generate(ctx)
@@ -134,7 +128,9 @@ class TeamManagementService:
             name=result.name,
             status=WORK_PLAN_STATUS_DRAFT,
             generated_by="ai" if result.ai_enabled else "template",
-            total_estimated_hours=sum(float(x.get("estimated_hours", 0) or 0) for x in result.items),
+            total_estimated_hours=sum(
+                float(x.get("estimated_hours", 0) or 0) for x in result.items
+            ),
             ai_prompt_used=result.prompt_used[:5000] if result.prompt_used else None,
             ai_enabled=result.ai_enabled,
         )
@@ -188,15 +184,22 @@ class TeamManagementService:
         """
         # 字段白名单 — 与 WorkPlanItemUpdate schema 保持一致
         allowed = {
-            "title", "description", "member_id", "related_module", "priority",
-            "status", "estimated_hours", "actual_hours", "start_date", "due_date",
-            "sort_order", "recommended_level",
+            "title",
+            "description",
+            "member_id",
+            "related_module",
+            "priority",
+            "status",
+            "estimated_hours",
+            "actual_hours",
+            "start_date",
+            "due_date",
+            "sort_order",
+            "recommended_level",
         }
         forbidden = set(payload.keys()) - allowed
         if forbidden:
-            raise ValueError(
-                f"不允许修改系统字段: {sorted(forbidden)}"
-            )
+            raise ValueError(f"不允许修改系统字段: {sorted(forbidden)}")
 
         item = (
             await db.execute(select(WorkPlanItem).where(WorkPlanItem.id == item_id))
@@ -241,9 +244,15 @@ class TeamManagementService:
         assessment: MeetingQualityResult = await self.quality_assessor.assess(ctx)
 
         # 序列化 JSON 字段
-        decisions_json = json.dumps(payload.decisions, ensure_ascii=False) if payload.decisions else None
-        actions_json = json.dumps(payload.action_items, ensure_ascii=False) if payload.action_items else None
-        attendees_json = json.dumps(payload.attendees, ensure_ascii=False) if payload.attendees else None
+        decisions_json = (
+            json.dumps(payload.decisions, ensure_ascii=False) if payload.decisions else None
+        )
+        actions_json = (
+            json.dumps(payload.action_items, ensure_ascii=False) if payload.action_items else None
+        )
+        attendees_json = (
+            json.dumps(payload.attendees, ensure_ascii=False) if payload.attendees else None
+        )
         assessment_json = json.dumps(
             {
                 "strengths": assessment.strengths,
@@ -255,9 +264,7 @@ class TeamManagementService:
 
         # 是否已有 record？更新
         existing = (
-            await db.execute(
-                select(MeetingRecord).where(MeetingRecord.meeting_id == meeting_id)
-            )
+            await db.execute(select(MeetingRecord).where(MeetingRecord.meeting_id == meeting_id))
         ).scalar_one_or_none()
         if existing:
             existing.content = payload.content
@@ -316,16 +323,18 @@ class TeamManagementService:
 
         # 实际查询逾期任务数（之前硬编码 0 — 修复后建议引擎能正确触发"逾期"分支）
         today_str = date.today().isoformat()
-        overdue_count = (await db.execute(
-            select(func.count(WorkPlanItem.id))
-            .join(WorkPlan, WorkPlan.id == WorkPlanItem.plan_id)
-            .where(
-                WorkPlan.project_id == project_id,
-                WorkPlanItem.due_date.is_not(None),
-                WorkPlanItem.due_date < today_str,
-                WorkPlanItem.status.notin_([TASK_STATUS_DONE, "cancelled"]),
+        overdue_count = (
+            await db.execute(
+                select(func.count(WorkPlanItem.id))
+                .join(WorkPlan, WorkPlan.id == WorkPlanItem.plan_id)
+                .where(
+                    WorkPlan.project_id == project_id,
+                    WorkPlanItem.due_date.is_not(None),
+                    WorkPlanItem.due_date < today_str,
+                    WorkPlanItem.status.notin_([TASK_STATUS_DONE, "cancelled"]),
+                )
             )
-        )).scalar() or 0
+        ).scalar() or 0
 
         # 拉近 15 条日报
         reports_q = await db.execute(

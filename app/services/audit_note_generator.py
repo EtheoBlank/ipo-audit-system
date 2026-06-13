@@ -36,15 +36,15 @@ class AuditNoteContext:
     balance_amount: Optional[float] = None
     industry: Optional[str] = None
     risk_description: Optional[str] = None
-    audit_objective: Optional[str] = None          # 例如"收入截止性"、"存货跌价"
-    extra_facts: Optional[dict] = None              # 任意额外字段
+    audit_objective: Optional[str] = None  # 例如"收入截止性"、"存货跌价"
+    extra_facts: Optional[dict] = None  # 任意额外字段
 
 
 @dataclass
 class AuditNoteResult:
     """生成结果。"""
 
-    note: str                                       # 主输出 — Markdown
+    note: str  # 主输出 — Markdown
     references_kb: List[dict] = field(default_factory=list)
     references_regulations: List[dict] = field(default_factory=list)
     ai_enabled: bool = False
@@ -86,8 +86,7 @@ class AuditNoteGenerator:
                 category=kb_category,
                 project_id=ctx.project_id,
                 context=(
-                    f"account_code={ctx.account_code or ''};"
-                    f"objective={ctx.audit_objective or ''}"
+                    f"account_code={ctx.account_code or ''};objective={ctx.audit_objective or ''}"
                 ),
             )
         except Exception:  # noqa: BLE001
@@ -144,9 +143,7 @@ class AuditNoteGenerator:
     def _build_query(self, ctx: AuditNoteContext) -> str:
         parts: list[str] = []
         if ctx.account_code or ctx.account_name:
-            parts.append(
-                f"科目 {ctx.account_code or ''} {ctx.account_name or ''}".strip()
-            )
+            parts.append(f"科目 {ctx.account_code or ''} {ctx.account_name or ''}".strip())
         if ctx.audit_objective:
             parts.append(f"审计目标 {ctx.audit_objective}")
         if ctx.risk_description:
@@ -209,9 +206,7 @@ class AuditNoteGenerator:
         kb_blocks = []
         for i, r in enumerate(kb, 1):
             loc = " / ".join(filter(None, [r.book_title, r.chapter, r.section]))
-            kb_blocks.append(
-                f"[案例{i}] (出处: {loc}, 相似度 {r.score:.2f})\n{r.content[:600]}"
-            )
+            kb_blocks.append(f"[案例{i}] (出处: {loc}, 相似度 {r.score:.2f})\n{r.content[:600]}")
         kb_block = "\n\n".join(kb_blocks) or "(知识库未命中)"
 
         reg_blocks = []

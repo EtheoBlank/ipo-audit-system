@@ -16,10 +16,11 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api._helpers import get_project_or_404
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.contracts import (
@@ -27,7 +28,9 @@ from app.models.contracts import (
     ContractAnalysisResponse,
     ContractDocumentResponse,
 )
-from app.models.db_models import ContractDocument, Project
+from app.models.db_models import ContractDocument
+from app.models.db.auth import User
+from app.services.auth import get_current_user, get_current_user_optional
 from app.services.contract_analysis import ContractAnalyzer, ContractOCR, OCRError
 from app.services.sales_ledger import DeepSeekClient
 
@@ -37,14 +40,6 @@ router = APIRouter(prefix="/api/contracts", tags=["收入合同"])
 
 
 # ---------- helpers ------------------------------------------------------
-
-
-async def _get_project_or_404(db: AsyncSession, project_id: int) -> Project:
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
-    return project
 
 
 def _to_response(c: ContractDocument) -> ContractDocumentResponse:
@@ -88,9 +83,10 @@ async def upload_contract(
     file: UploadFile = File(...),
     note: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload a contract image / scanned PDF. OCR is run server-side."""
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
 
     save_dir: Path = settings.UPLOAD_DIR
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -136,9 +132,10 @@ async def upload_contract_text(
     text: str = Body(..., embed=True),
     note: Optional[str] = Body(None, embed=True),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Save user-pasted contract text directly (no OCR)."""
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="合同文本不能为空")
 
@@ -166,15 +163,20 @@ async def upload_contract_text(
 async def list_contracts(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     rows = (
-        await db.execute(
-            select(ContractDocument)
-            .where(ContractDocument.project_id == project_id)
-            .order_by(ContractDocument.uploaded_at.desc())
+        (
+            await db.execute(
+                select(ContractDocument)
+                .where(ContractDocument.project_id == project_id)
+                .order_by(ContractDocument.uploaded_at.desc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [_to_response(c) for c in rows]
 
 
@@ -182,11 +184,10 @@ async def list_contracts(
 async def get_contract(
     contract_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     c = (
-        await db.execute(
-            select(ContractDocument).where(ContractDocument.id == contract_id)
-        )
+        await db.execute(select(ContractDocument).where(ContractDocument.id == contract_id))
     ).scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="合同不存在")
@@ -197,11 +198,10 @@ async def get_contract(
 async def delete_contract(
     contract_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     c = (
-        await db.execute(
-            select(ContractDocument).where(ContractDocument.id == contract_id)
-        )
+        await db.execute(select(ContractDocument).where(ContractDocument.id == contract_id))
     ).scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="合同不存在")
@@ -221,12 +221,11 @@ async def analyze_contract(
     contract_id: int,
     req: ContractAnalysisRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Run CAS 14 five-step analysis and/or 7-field key-point extraction."""
     c = (
-        await db.execute(
-            select(ContractDocument).where(ContractDocument.id == contract_id)
-        )
+        await db.execute(select(ContractDocument).where(ContractDocument.id == contract_id))
     ).scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="合同不存在")
@@ -251,6 +250,7 @@ async def analyze_contract(
 
     # Persist results
     from datetime import datetime, timezone
+
     if key_points is not None:
         c.key_points = json.dumps(key_points, ensure_ascii=False)
     if five_step is not None:

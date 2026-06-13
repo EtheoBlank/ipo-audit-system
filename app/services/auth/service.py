@@ -1,4 +1,5 @@
 """高层编排 — authenticate / login / refresh / change-password."""
+
 from __future__ import annotations
 
 import logging

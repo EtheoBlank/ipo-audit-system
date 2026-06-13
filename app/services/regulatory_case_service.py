@@ -1,8 +1,8 @@
 """监管案例库服务 - 第三阶段."""
+
 import httpx
 from bs4 import BeautifulSoup
-from typing import List, Dict, Optional, Any
-from datetime import datetime, timedelta
+from typing import List, Dict
 import hashlib
 import asyncio
 from app.core.config import settings
@@ -34,14 +34,16 @@ class RegulatoryCaseScraper:
             for row in soup.select("table.list tr"):
                 cols = row.select("td")
                 if len(cols) >= 4:
-                    cases.append({
-                        "case_no": cols[0].get_text(strip=True),
-                        "case_type": "问询函",
-                        "source": "证监会",
-                        "publish_date": cols[1].get_text(strip=True),
-                        "title": cols[2].get_text(strip=True),
-                        "content": cols[3].get_text(strip=True)[:500],
-                    })
+                    cases.append(
+                        {
+                            "case_no": cols[0].get_text(strip=True),
+                            "case_type": "问询函",
+                            "source": "证监会",
+                            "publish_date": cols[1].get_text(strip=True),
+                            "title": cols[2].get_text(strip=True),
+                            "content": cols[3].get_text(strip=True)[:500],
+                        }
+                    )
         except Exception as e:
             print(f"CSRC scrape error: {e}")
         return cases
@@ -56,14 +58,24 @@ class RegulatoryCaseScraper:
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "lxml")
             for item in soup.select(".inquiry-item"):
-                cases.append({
-                    "case_no": item.select_one(".case-no").get_text(strip=True) if item.select_one(".case-no") else "",
-                    "case_type": "问询函",
-                    "source": "上交所",
-                    "publish_date": item.select_one(".date").get_text(strip=True) if item.select_one(".date") else "",
-                    "title": item.select_one(".title").get_text(strip=True) if item.select_one(".title") else "",
-                    "content": item.select_one(".content").get_text(strip=True)[:500] if item.select_one(".content") else "",
-                })
+                cases.append(
+                    {
+                        "case_no": item.select_one(".case-no").get_text(strip=True)
+                        if item.select_one(".case-no")
+                        else "",
+                        "case_type": "问询函",
+                        "source": "上交所",
+                        "publish_date": item.select_one(".date").get_text(strip=True)
+                        if item.select_one(".date")
+                        else "",
+                        "title": item.select_one(".title").get_text(strip=True)
+                        if item.select_one(".title")
+                        else "",
+                        "content": item.select_one(".content").get_text(strip=True)[:500]
+                        if item.select_one(".content")
+                        else "",
+                    }
+                )
         except Exception as e:
             print(f"SSE scrape error: {e}")
         return cases
@@ -78,14 +90,24 @@ class RegulatoryCaseScraper:
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "lxml")
             for item in soup.select(".inquiry-list li"):
-                cases.append({
-                    "case_no": item.select_one(".code").get_text(strip=True) if item.select_one(".code") else "",
-                    "case_type": "问询函",
-                    "source": "深交所",
-                    "publish_date": item.select_one(".date").get_text(strip=True) if item.select_one(".date") else "",
-                    "title": item.select_one(".title").get_text(strip=True) if item.select_one(".title") else "",
-                    "content": item.select_one(".summary").get_text(strip=True)[:500] if item.select_one(".summary") else "",
-                })
+                cases.append(
+                    {
+                        "case_no": item.select_one(".code").get_text(strip=True)
+                        if item.select_one(".code")
+                        else "",
+                        "case_type": "问询函",
+                        "source": "深交所",
+                        "publish_date": item.select_one(".date").get_text(strip=True)
+                        if item.select_one(".date")
+                        else "",
+                        "title": item.select_one(".title").get_text(strip=True)
+                        if item.select_one(".title")
+                        else "",
+                        "content": item.select_one(".summary").get_text(strip=True)[:500]
+                        if item.select_one(".summary")
+                        else "",
+                    }
+                )
         except Exception as e:
             print(f"SZSE scrape error: {e}")
         return cases
@@ -102,14 +124,16 @@ class RegulatoryCaseScraper:
             for row in soup.select("table.list tr"):
                 cols = row.select("td")
                 if len(cols) >= 4:
-                    cases.append({
-                        "case_no": cols[0].get_text(strip=True),
-                        "case_type": "处罚决定",
-                        "source": "证监会",
-                        "publish_date": cols[1].get_text(strip=True),
-                        "title": cols[2].get_text(strip=True),
-                        "content": cols[3].get_text(strip=True)[:500],
-                    })
+                    cases.append(
+                        {
+                            "case_no": cols[0].get_text(strip=True),
+                            "case_type": "处罚决定",
+                            "source": "证监会",
+                            "publish_date": cols[1].get_text(strip=True),
+                            "title": cols[2].get_text(strip=True),
+                            "content": cols[3].get_text(strip=True)[:500],
+                        }
+                    )
         except Exception as e:
             print(f"CSRC penalty scrape error: {e}")
         return cases
@@ -191,7 +215,7 @@ class CaseMatcher:
         title = case.get("title", "")
         content = case.get("content", "")
 
-        #行业匹配
+        # 行业匹配
         industry = company_info.get("industry", "")
         if industry in title or industry in content:
             score += 30

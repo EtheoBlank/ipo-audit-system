@@ -81,9 +81,7 @@ class SalesLedgerExporter:
                 # 2. summary
                 summary = analysis.get("summary") or {}
                 if summary:
-                    pd.DataFrame([summary]).to_excel(
-                        writer, sheet_name="总览", index=False
-                    )
+                    pd.DataFrame([summary]).to_excel(writer, sheet_name="总览", index=False)
 
                 # 3-5. pivots
                 for key, sheet in (
@@ -94,9 +92,7 @@ class SalesLedgerExporter:
                 ):
                     rows = analysis.get(key) or []
                     if rows:
-                        pd.DataFrame(rows).to_excel(
-                            writer, sheet_name=sheet, index=False
-                        )
+                        pd.DataFrame(rows).to_excel(writer, sheet_name=sheet, index=False)
 
                 # 6-7. alerts
                 for key, sheet in (
@@ -105,9 +101,7 @@ class SalesLedgerExporter:
                 ):
                     rows = analysis.get(key) or []
                     if rows:
-                        pd.DataFrame(rows).to_excel(
-                            writer, sheet_name=sheet, index=False
-                        )
+                        pd.DataFrame(rows).to_excel(writer, sheet_name=sheet, index=False)
 
                 # 8-11. new procedures
                 for key, sheet in (
@@ -118,16 +112,12 @@ class SalesLedgerExporter:
                 ):
                     rows = analysis.get(key) or []
                     if rows:
-                        pd.DataFrame(rows).to_excel(
-                            writer, sheet_name=sheet, index=False
-                        )
+                        pd.DataFrame(rows).to_excel(writer, sheet_name=sheet, index=False)
 
                 # 8. inventory recon
                 recon = analysis.get("inventory_recon") or []
                 if recon:
-                    pd.DataFrame(recon).to_excel(
-                        writer, sheet_name="收发存对账", index=False
-                    )
+                    pd.DataFrame(recon).to_excel(writer, sheet_name="收发存对账", index=False)
 
                 # 9. industry benchmark
                 bench = analysis.get("industry_benchmark")

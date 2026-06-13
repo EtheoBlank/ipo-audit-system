@@ -224,6 +224,41 @@ frontend/
 
 ⚠️ **生产部署必须立即登录后修改密码**, 并且把 `JWT_SECRET` 改成强随机串。
 
+## Pack A.2 / B.2 — 本轮增强 (路线图全部完工 + 41 个新增单测覆盖)
+
+| 增强 | 实现位置 | 单测 | 说明 |
+|------|----------|------|------|
+| **老业务 API 全量加鉴权** | `app/api/*.py` 13 个老路由 | `test_pack_a2_b2.py::TestLegacyApisImport` | 全部接入 `get_current_user` / `get_current_user_optional`; AUTH_ENABLED=false 兼容老调用 |
+| **多租户硬隔离** | `app/services/auth/tenant.py` + `Project.firm_id` | `test_pack_a2_b2.py::TestTenantIsolation` | `scope_projects_to_firm(query, user)` / `ensure_project_in_firm(db, pid, user)`; admin 跨租户 |
+| **审批乐观锁** | `app/services/auth/approval.py` + `ApprovalWorkflow.version` | `test_pack_a2_b2.py::TestApprovalOptimisticLock` | `decide(expected_version=N)` 不匹配抛 `ApprovalConflict` → HTTP 409 |
+| **审计轨迹索引 + 归档** | `app/models/db/auth.py` + `app/services/auth/archive.py` | `test_pack_a2_b2.py::TestAuditLogArchive` | 4 个 (维度, created_at) 复合索引 + `rotate_audit_logs(months=N, confirm=True)` 影子表归档 |
+| **DeepSeek 关联方推断** | `app/services/related_parties/ai_inferer.py` | `test_pack_a2_b2.py::TestRelatedPartyAIInferer` | `RelatedPartyAIInferer` 类, DetectorRunRequest.enable_ai_inference=true 启用; 失败自动降级到规则识别 |
+| **Word 富格式渲染** | `app/services/report_template/__init__.py` (`_render_docx_xml_blob`) | `test_pack_a2_b2.py::TestReportTemplateRunAware` | XML 段落级 run-aware 替换, 保留字体/字号/加粗/颜色/下划线 |
+
+调用模式速查:
+
+```python
+# 多租户硬隔离 — 列表查询
+from app.services.auth import scope_projects_to_firm
+query = select(Project)
+query = scope_projects_to_firm(query, current_user)
+
+# 多租户硬隔离 — 单项目访问 (403 / 404)
+from app.services.auth import ensure_project_in_firm
+proj = await ensure_project_in_firm(db, project_id, current_user)
+
+# 乐观锁审批 (前端必须先 GET 拿到 version 才能 decide)
+payload = ApprovalDecision(action="approve", expected_version=wf.version)
+POST /api/auth/approvals/{id}/decide  # 409 时刷新重试
+
+# AuditLog 归档 (admin only)
+POST /api/auth/audit-logs/rotate?months=6&confirm=true
+
+# DeepSeek 关联方推断
+POST /api/related-parties/detector/run
+{ "project_id": 1, "enable_ai_inference": true, "ai_max_candidates": 30 }
+```
+
 ## 开发注意事项
 
 - 使用 `uv` 作为包管理器
@@ -233,3 +268,60 @@ frontend/
 - ORM → DataFrame 转换统一使用 `app.utils.db_helpers.account_balances_to_df()`
 - 日志使用 `logging.getLogger(__name__)`，启动时由 `app.core.logging.setup_logging()` 统一配置
 - 日期时间使用 `datetime.now(timezone.utc)` 替代已弃用的 `datetime.utcnow()`
+
+## 多端同步流程 (GitHub ↔ Hugging Face Space)
+
+仓库有两个 remote，**推送必须走 `scripts/sync.sh`**，不要裸 `git push`：
+
+| remote | 仓库 | 分支策略 | 写入方式 |
+|--------|------|---------|---------|
+| `origin` | https://github.com/EtheoBlank/ipo-audit-system | master 为稳定主线，feature 分支走 PR | 本地 `sync.sh push-github` |
+| `hf` | https://huggingface.co/spaces/EtheoZheng/EtheoBlank | `main` 是 Space 部署分支（推送即公开 rebuild） | 本地 `sync.sh push-hf` 或 GitHub Action `Sync to HF Space` |
+
+### 推荐工作流（PR 合到 master 之后）
+
+```bash
+# 1. 在 feature 分支开发, 推到 origin 走 PR
+git checkout -b feat/xxx
+git commit ...
+bash scripts/sync.sh push-github          # 等价于 git push origin feat/xxx
+
+# 2. GitHub 网页开 PR, CI 全绿后合并到 master
+
+# 3. 本地同步 master, 然后推 HF Space
+git checkout master && git pull
+bash scripts/sync.sh status               # 看 origin/master vs hf/main 谁领先
+bash scripts/sync.sh push-hf             # 默认 fast-forward, 安全
+# 如果 status 显示 ❌ 分叉 (origin/master 与 hf/main 无共同祖先):
+bash scripts/sync.sh push-hf --force-with-lease
+```
+
+### 不想本地推 HF？用 GitHub Action
+
+1. 一次性配置: GitHub 仓库 → Settings → Secrets and variables → Actions → **New repository secret**
+   - Name: `HF_TOKEN`
+   - Value: 去 https://huggingface.co/settings/tokens 生成（建议 **fine-grained**，只勾 `EtheoZheng/EtheoBlank` Space 的 write 权限）
+2. 日常同步: 仓库页 → Actions → **Sync to HF Space** → Run workflow → **勾上 `confirm_rebuild`** → Run
+3. Action 会自动跑：安全检查 → `uv sync` → smoke import → 比对 remote → 推 hf/main → 输出 Space URL
+
+### 安全护栏（三个强制约束）
+
+1. **绝不提交 `.env`**: `sync.sh` 和 `sync-hf.yml` 都会扫描 `.env` 文件 + `sk-` 字面量；CI 也会跑同样的检查
+2. **HF Token 永远在 GitHub Secret**: 不要贴在 issue / commit message / 文档里
+3. **HF Space 公开 rebuild 必须人工确认**: workflow 的 `confirm_rebuild` input 是 last-line 防御，别取消
+
+### 一次性初始化（老 `git_push.sh` 的用途）
+
+`scripts/git_push.sh` 是 **首次把仓库同步给 GitHub** 的批量脚本（分多个 commit 上传大段初始代码），现在仓库已有完整历史，**新工作用 `sync.sh`**。`git_push.sh` 保留仅作历史参考，不应再执行。
+
+### HF Space 一旦出错怎么回滚
+
+```bash
+# 找到上一个能跑的 commit
+git log --oneline hf/main | head -10
+
+# 强推回滚
+git push hf <previous-commit-sha>:main --force-with-lease
+```
+
+或用 GitHub Action 的 `force_with_lease` 选项重推旧 commit。

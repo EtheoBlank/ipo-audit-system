@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -37,26 +37,26 @@ logger = logging.getLogger(__name__)
 
 # 行业默认跌价比例（按库龄分层；销售清单无价时兜底）
 DEFAULT_AGING_RATES: dict[str, dict[str, float]] = {
-    "默认":     {"le_90": 0.00, "91_180": 0.05, "181_365": 0.15, "366_730": 0.50, "gt_730": 1.00},
-    "制造业":    {"le_90": 0.00, "91_180": 0.05, "181_365": 0.20, "366_730": 0.60, "gt_730": 1.00},
-    "医药生物":   {"le_90": 0.00, "91_180": 0.10, "181_365": 0.40, "366_730": 0.80, "gt_730": 1.00},
-    "零售":     {"le_90": 0.00, "91_180": 0.10, "181_365": 0.30, "366_730": 0.80, "gt_730": 1.00},
-    "信息技术":   {"le_90": 0.00, "91_180": 0.10, "181_365": 0.30, "366_730": 0.70, "gt_730": 1.00},
-    "化工":     {"le_90": 0.00, "91_180": 0.05, "181_365": 0.15, "366_730": 0.50, "gt_730": 1.00},
+    "默认": {"le_90": 0.00, "91_180": 0.05, "181_365": 0.15, "366_730": 0.50, "gt_730": 1.00},
+    "制造业": {"le_90": 0.00, "91_180": 0.05, "181_365": 0.20, "366_730": 0.60, "gt_730": 1.00},
+    "医药生物": {"le_90": 0.00, "91_180": 0.10, "181_365": 0.40, "366_730": 0.80, "gt_730": 1.00},
+    "零售": {"le_90": 0.00, "91_180": 0.10, "181_365": 0.30, "366_730": 0.80, "gt_730": 1.00},
+    "信息技术": {"le_90": 0.00, "91_180": 0.10, "181_365": 0.30, "366_730": 0.70, "gt_730": 1.00},
+    "化工": {"le_90": 0.00, "91_180": 0.05, "181_365": 0.15, "366_730": 0.50, "gt_730": 1.00},
 }
 
 
 # 行业默认估计销售费用率（销售费用 + 税金及附加 占含税收入的比例）。
 # 来源：参考主流上市公司年报近三年均值；用户应根据被审主体实际口径调整。
 DEFAULT_SELL_COST_RATES: dict[str, float] = {
-    "默认":      0.05,
-    "制造业":    0.06,
-    "医药生物":   0.07,
-    "零售":      0.05,
-    "信息技术":   0.06,
-    "化工":      0.08,
-    "建筑施工":   0.08,
-    "重型机械":   0.10,
+    "默认": 0.05,
+    "制造业": 0.06,
+    "医药生物": 0.07,
+    "零售": 0.05,
+    "信息技术": 0.06,
+    "化工": 0.08,
+    "建筑施工": 0.08,
+    "重型机械": 0.10,
 }
 
 
@@ -104,8 +104,8 @@ class ImpairmentRow:
     method: str
     note: str = ""
     # 转回拆分（CAS 1 第 21 条）：已售出部分应"转销营业成本"，仍在库部分才"转回资产减值损失"
-    reversal_to_cogs: float = 0.0          # 已售出部分对应的跌价（随销售转出营业成本）
-    reversal_to_loss: float = 0.0          # 仍在库部分对应的跌价（转回资产减值损失）
+    reversal_to_cogs: float = 0.0  # 已售出部分对应的跌价（随销售转出营业成本）
+    reversal_to_loss: float = 0.0  # 仍在库部分对应的跌价（转回资产减值损失）
 
     def to_db_kwargs(self) -> dict[str, Any]:
         return {
@@ -300,16 +300,27 @@ class InventoryAgingEngine:
         total_qty = 0.0
         count = 0
         for r in sales_records:
-            code = getattr(r, "product_code", "") or (r.get("product_code", "") if isinstance(r, dict) else "")
+            code = getattr(r, "product_code", "") or (
+                r.get("product_code", "") if isinstance(r, dict) else ""
+            )
             if str(code) != str(material_code):
                 continue
-            confirm = getattr(r, "revenue_confirm_date", None) or (r.get("revenue_confirm_date") if isinstance(r, dict) else None)
-            ship = getattr(r, "ship_date", None) or (r.get("ship_date") if isinstance(r, dict) else None)
+            confirm = getattr(r, "revenue_confirm_date", None) or (
+                r.get("revenue_confirm_date") if isinstance(r, dict) else None
+            )
+            ship = getattr(r, "ship_date", None) or (
+                r.get("ship_date") if isinstance(r, dict) else None
+            )
             ref_dt = _parse_dt(confirm) or _parse_dt(ship)
             if ref_dt is None or ref_dt <= period_end:
                 continue
-            qty = float(getattr(r, "quantity", 0) or (r.get("quantity", 0) if isinstance(r, dict) else 0))
-            rev = float(getattr(r, "revenue_amount", 0) or (r.get("revenue_amount", 0) if isinstance(r, dict) else 0))
+            qty = float(
+                getattr(r, "quantity", 0) or (r.get("quantity", 0) if isinstance(r, dict) else 0)
+            )
+            rev = float(
+                getattr(r, "revenue_amount", 0)
+                or (r.get("revenue_amount", 0) if isinstance(r, dict) else 0)
+            )
             if qty <= 0 or rev <= 0:
                 continue
             total_amount += rev
@@ -371,21 +382,25 @@ class InventoryAgingEngine:
         # 按 material_code 聚合
         groups: dict[str, list[dict[str, Any]]] = {}
         for m in cur:
-            d = m if isinstance(m, dict) else {
-                "material_code": getattr(m, "material_code", ""),
-                "material_name": getattr(m, "material_name", ""),
-                "category": getattr(m, "category", ""),
-                "opening_qty": getattr(m, "opening_qty", 0),
-                "opening_amount": getattr(m, "opening_amount", 0),
-                "inbound_qty": getattr(m, "inbound_qty", 0),
-                "inbound_amount": getattr(m, "inbound_amount", 0),
-                "outbound_qty": getattr(m, "outbound_qty", 0),
-                "outbound_amount": getattr(m, "outbound_amount", 0),
-                "ending_qty": getattr(m, "ending_qty", 0),
-                "ending_amount": getattr(m, "ending_amount", 0),
-                "unit_cost": getattr(m, "unit_cost", 0),
-                "inbound_date": getattr(m, "inbound_date", None),
-            }
+            d = (
+                m
+                if isinstance(m, dict)
+                else {
+                    "material_code": getattr(m, "material_code", ""),
+                    "material_name": getattr(m, "material_name", ""),
+                    "category": getattr(m, "category", ""),
+                    "opening_qty": getattr(m, "opening_qty", 0),
+                    "opening_amount": getattr(m, "opening_amount", 0),
+                    "inbound_qty": getattr(m, "inbound_qty", 0),
+                    "inbound_amount": getattr(m, "inbound_amount", 0),
+                    "outbound_qty": getattr(m, "outbound_qty", 0),
+                    "outbound_amount": getattr(m, "outbound_amount", 0),
+                    "ending_qty": getattr(m, "ending_qty", 0),
+                    "ending_amount": getattr(m, "ending_amount", 0),
+                    "unit_cost": getattr(m, "unit_cost", 0),
+                    "inbound_date": getattr(m, "inbound_date", None),
+                }
+            )
             code = str(d.get("material_code") or "").strip()
             if not code:
                 continue
@@ -393,7 +408,9 @@ class InventoryAgingEngine:
 
         rows: list[ImpairmentRow] = []
         for code, ms in groups.items():
-            name = next((str(m.get("material_name") or "") for m in ms if m.get("material_name")), "")
+            name = next(
+                (str(m.get("material_name") or "") for m in ms if m.get("material_name")), ""
+            )
             category = next((str(m.get("category") or "") for m in ms if m.get("category")), "")
             ending_qty = sum(float(m.get("ending_qty") or 0) for m in ms)
             ending_amount = sum(float(m.get("ending_amount") or 0) for m in ms)
@@ -403,25 +420,31 @@ class InventoryAgingEngine:
                 # 已无库存的物料：若上年有跌价 → 全额转回（全部走"已售/已耗用"路径，进营业成本）
                 opening = float(prior_impairments.get(code, 0.0))
                 if opening > 0:
-                    rows.append(ImpairmentRow(
-                        material_code=code,
-                        material_name=name,
-                        category=category,
-                        period_end=period_end.strftime("%Y-%m-%d"),
-                        ending_qty=0.0, book_unit_cost=0.0, book_amount=0.0,
-                        aging=AgingBucket(),
-                        nrv_unit_price=None, nrv_source="无", nrv_amount=0.0,
-                        estimated_sell_cost=0.0,
-                        impairment_current=0.0,
-                        impairment_opening=opening,
-                        impairment_reversal=opening,
-                        impairment_provision=0.0,
-                        net_impairment_change=-opening,
-                        method="reversal",
-                        note="期末已无库存，上年跌价全额转回",
-                        reversal_to_cogs=opening,
-                        reversal_to_loss=0.0,
-                    ))
+                    rows.append(
+                        ImpairmentRow(
+                            material_code=code,
+                            material_name=name,
+                            category=category,
+                            period_end=period_end.strftime("%Y-%m-%d"),
+                            ending_qty=0.0,
+                            book_unit_cost=0.0,
+                            book_amount=0.0,
+                            aging=AgingBucket(),
+                            nrv_unit_price=None,
+                            nrv_source="无",
+                            nrv_amount=0.0,
+                            estimated_sell_cost=0.0,
+                            impairment_current=0.0,
+                            impairment_opening=opening,
+                            impairment_reversal=opening,
+                            impairment_provision=0.0,
+                            net_impairment_change=-opening,
+                            method="reversal",
+                            note="期末已无库存，上年跌价全额转回",
+                            reversal_to_cogs=opening,
+                            reversal_to_loss=0.0,
+                        )
+                    )
                 continue
 
             aging = self.fifo_aging(ms, period_end)
@@ -497,30 +520,37 @@ class InventoryAgingEngine:
                 reversal_to_cogs = reversal * sold_ratio
                 reversal_to_loss = reversal - reversal_to_cogs
 
-            rows.append(ImpairmentRow(
-                material_code=code,
-                material_name=name,
-                category=category,
-                period_end=period_end.strftime("%Y-%m-%d"),
-                ending_qty=round(ending_qty, 4),
-                book_unit_cost=round(book_unit_cost, 4),
-                book_amount=round(ending_amount, 2),
-                aging=aging,
-                nrv_unit_price=round(nrv_unit, 4) if nrv_unit is not None else None,
-                nrv_source=nrv_src,
-                nrv_amount=round(nrv_amount, 2),
-                estimated_sell_cost=round(est_sell_cost, 2),
-                impairment_current=impairment_current,
-                impairment_opening=round(opening, 2),
-                impairment_reversal=round(reversal, 2),
-                impairment_provision=round(provision, 2),
-                net_impairment_change=round(provision - reversal, 2),
-                method=method,
-                note=(recon_note + ("；" if recon_note and nrv_unit is None else "") +
-                      ("无期末后销售样本，按库龄比例兜底" if nrv_unit is None else "")).strip("；").strip(),
-                reversal_to_cogs=round(reversal_to_cogs, 2),
-                reversal_to_loss=round(reversal_to_loss, 2),
-            ))
+            rows.append(
+                ImpairmentRow(
+                    material_code=code,
+                    material_name=name,
+                    category=category,
+                    period_end=period_end.strftime("%Y-%m-%d"),
+                    ending_qty=round(ending_qty, 4),
+                    book_unit_cost=round(book_unit_cost, 4),
+                    book_amount=round(ending_amount, 2),
+                    aging=aging,
+                    nrv_unit_price=round(nrv_unit, 4) if nrv_unit is not None else None,
+                    nrv_source=nrv_src,
+                    nrv_amount=round(nrv_amount, 2),
+                    estimated_sell_cost=round(est_sell_cost, 2),
+                    impairment_current=impairment_current,
+                    impairment_opening=round(opening, 2),
+                    impairment_reversal=round(reversal, 2),
+                    impairment_provision=round(provision, 2),
+                    net_impairment_change=round(provision - reversal, 2),
+                    method=method,
+                    note=(
+                        recon_note
+                        + ("；" if recon_note and nrv_unit is None else "")
+                        + ("无期末后销售样本，按库龄比例兜底" if nrv_unit is None else "")
+                    )
+                    .strip("；")
+                    .strip(),
+                    reversal_to_cogs=round(reversal_to_cogs, 2),
+                    reversal_to_loss=round(reversal_to_loss, 2),
+                )
+            )
 
         # 汇总
         summary = {

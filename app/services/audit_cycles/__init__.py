@@ -3,6 +3,7 @@
 每个循环只暴露最关键的几个静态方法, 详细 CRUD 由 API 路由层直接走 ORM.
 重点放在 "重算 / 自动判定 / 异常检测" 等核心审计能力.
 """
+
 from __future__ import annotations
 
 import logging
@@ -213,9 +214,7 @@ class DepreciationCalculator:
         return round((original_cost - salvage) / useful_life_months, 2)
 
     @staticmethod
-    def double_declining_monthly(
-        net_book_value: float, useful_life_months: int
-    ) -> float:
+    def double_declining_monthly(net_book_value: float, useful_life_months: int) -> float:
         if useful_life_months <= 0:
             return 0.0
         annual_rate = 2.0 / (useful_life_months / 12.0)
@@ -229,12 +228,18 @@ class DepreciationCalculator:
             return 0.0
         salvage = original_cost * (salvage_rate or 0)
         sum_years = useful_life_years * (useful_life_years + 1) / 2
-        return round((original_cost - salvage) * (useful_life_years - current_year + 1) / sum_years, 2)
+        return round(
+            (original_cost - salvage) * (useful_life_years - current_year + 1) / sum_years, 2
+        )
 
     @staticmethod
     async def recalc_asset(
-        db: AsyncSession, *, project_id: int, asset_id: int,
-        period_yyyymm: str, book_depreciation: float,
+        db: AsyncSession,
+        *,
+        project_id: int,
+        asset_id: int,
+        period_yyyymm: str,
+        book_depreciation: float,
     ) -> DepreciationRecalc:
         asset = (
             await db.execute(select(FixedAsset).where(FixedAsset.id == asset_id))
@@ -323,9 +328,7 @@ class RDCapitalizationAssessor:
         return all_met, missing
 
     @staticmethod
-    def rd_super_deduction(
-        rd_expense: float, manufacturing: bool = True
-    ) -> Dict[str, float]:
+    def rd_super_deduction(rd_expense: float, manufacturing: bool = True) -> Dict[str, float]:
         """研发费用加计扣除. 制造业 100%, 其他行业 75% (2026 政策, 实际按当年政策).
         IPO 项目按企业类型, MVP 用 100% / 200%."""
         rate = 1.0 if manufacturing else 0.75
@@ -369,9 +372,7 @@ class GoodwillImpairmentCalculator:
 
 class LeaseAmortizer:
     @staticmethod
-    def present_value(
-        payment: float, periods: int, periodic_rate: float
-    ) -> float:
+    def present_value(payment: float, periods: int, periodic_rate: float) -> float:
         """期初年金现值 (假设 payment 在期末)."""
         if periodic_rate <= 0 or periods <= 0:
             return round(payment * periods, 2)
@@ -380,7 +381,9 @@ class LeaseAmortizer:
 
     @staticmethod
     async def build_schedule(
-        db: AsyncSession, *, contract_id: int,
+        db: AsyncSession,
+        *,
+        contract_id: int,
     ) -> List[LeaseAmortizationSchedule]:
         contract = (
             await db.execute(select(LeaseContract).where(LeaseContract.id == contract_id))
@@ -389,11 +392,17 @@ class LeaseAmortizer:
             raise ValueError(f"租赁合同 {contract_id} 不存在")
 
         # 清旧
-        old = list((await db.execute(
-            select(LeaseAmortizationSchedule).where(
-                LeaseAmortizationSchedule.contract_id == contract_id
+        old = list(
+            (
+                await db.execute(
+                    select(LeaseAmortizationSchedule).where(
+                        LeaseAmortizationSchedule.contract_id == contract_id
+                    )
+                )
             )
-        )).scalars().all())
+            .scalars()
+            .all()
+        )
         for o in old:
             await db.delete(o)
 
@@ -494,8 +503,9 @@ class ECLCalculator:
         return {1: 0.01, 2: 0.10, 3: 0.50}.get(stage, 0.05)
 
     @staticmethod
-    def compute_ecl(receivable: float, stage: int, pd: Optional[float] = None,
-                   lgd: float = 0.45) -> float:
+    def compute_ecl(
+        receivable: float, stage: int, pd: Optional[float] = None, lgd: float = 0.45
+    ) -> float:
         pd_val = pd if pd is not None else ECLCalculator.default_pd_for_stage(stage)
         return round(receivable * pd_val * lgd, 2)
 
@@ -511,8 +521,13 @@ class SubsequentEventClassifier:
         """简化 — 资产负债表日已存在的情形为 adjusting (调整事项), 否则 non_adjusting."""
         # MVP: 关键词命中"销售退回 / 应收无法收回 / 诉讼判决 / 资产价值确定"等为 adjusting
         adjusting_keywords = [
-            "销售退回", "应收账款无法收回", "诉讼判决", "存货跌价", "成本结转",
-            "资产价值确定", "舞弊发现",
+            "销售退回",
+            "应收账款无法收回",
+            "诉讼判决",
+            "存货跌价",
+            "成本结转",
+            "资产价值确定",
+            "舞弊发现",
         ]
         if any(k in (event_description or "") for k in adjusting_keywords):
             return "adjusting"

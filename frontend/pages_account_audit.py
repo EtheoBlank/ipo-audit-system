@@ -1,4 +1,5 @@
 """长期资产发生额审定页面 (Pack A — 用户特别要求)."""
+
 from __future__ import annotations
 
 import io
@@ -35,15 +36,19 @@ def _pick_project() -> Optional[int]:
     if not projects:
         st.warning("尚未创建项目, 请先在 '📁 项目管理' 创建")
         return None
-    options = {f"{p['id']} - {p.get('name','')} / {p.get('company_name','')}": p["id"] for p in projects}
+    options = {
+        f"{p['id']} - {p.get('name', '')} / {p.get('company_name', '')}": p["id"] for p in projects
+    }
     label = st.selectbox("选择项目", list(options.keys()), key="aa_pick_project")
     return options[label]
 
 
 def _tab_scope(project_id: int) -> None:
     st.markdown("### 📋 长期资产科目范围")
-    st.caption("默认前缀已内置 (固定资产/在建工程/无形资产/长投/商誉/使用权资产等)。"
-               "如需追加 (include) 或排除 (exclude) 特定科目, 在下面操作。")
+    st.caption(
+        "默认前缀已内置 (固定资产/在建工程/无形资产/长投/商誉/使用权资产等)。"
+        "如需追加 (include) 或排除 (exclude) 特定科目, 在下面操作。"
+    )
 
     res = _api("GET", f"/api/account-audit/projects/{project_id}/effective-prefixes")
     if not res:
@@ -78,8 +83,10 @@ def _tab_scope(project_id: int) -> None:
 
 def _tab_initialize(project_id: int) -> None:
     st.markdown("### 🔄 从序时账初始化审定记录")
-    st.caption("把序时账里命中长期资产前缀的凭证逐笔抽出来, audited_amount 默认 = book_amount, "
-               "等待审计师录入审定数。已审定/争议/跳过的记录会被保留, 仅 pending 行可替换。")
+    st.caption(
+        "把序时账里命中长期资产前缀的凭证逐笔抽出来, audited_amount 默认 = book_amount, "
+        "等待审计师录入审定数。已审定/争议/跳过的记录会被保留, 仅 pending 行可替换。"
+    )
 
     cols = st.columns(3)
     period_end = cols[0].text_input("期末日期 YYYY-MM-DD", value=str(date.today()))
@@ -109,7 +116,9 @@ def _tab_overview(project_id: int) -> None:
     if st.button("🔍 刷新"):
         st.session_state["aa_overview_pe"] = period_end
     pe = st.session_state.get("aa_overview_pe", period_end)
-    res = _api("GET", f"/api/account-audit/projects/{project_id}/overview", params={"period_end": pe})
+    res = _api(
+        "GET", f"/api/account-audit/projects/{project_id}/overview", params={"period_end": pe}
+    )
     if not res:
         st.info("无数据, 请先初始化")
         return
@@ -126,25 +135,29 @@ def _tab_overview(project_id: int) -> None:
         st.info("无长期资产科目余额, 请先导入科目余额表")
         return
 
-    df = pd.DataFrame([
-        {
-            "科目编码": a["account_code"],
-            "科目名称": a["account_name"],
-            "期初(账面)": a["beginning_balance_book"],
-            "期初(审定)": a["beginning_balance_audited"],
-            "借方(账面)": a["debit_book_total"],
-            "借方(审定)": a["debit_audited_total"],
-            "贷方(账面)": a["credit_book_total"],
-            "贷方(审定)": a["credit_audited_total"],
-            "期末(账面)": a["ending_balance_book"],
-            "期末(审定)": a["ending_balance_audited"],
-            "待审": a["debit_pending_count"] + a["credit_pending_count"],
-            "已审": a["debit_audited_count"] + a["credit_audited_count"],
-            "争议": a["debit_disputed_count"] + a["credit_disputed_count"],
-            "恒等式": "✅" if a["is_balanced"] else f"❌ {round(a['identity_check_audited'], 2)}",
-        }
-        for a in accts
-    ])
+    df = pd.DataFrame(
+        [
+            {
+                "科目编码": a["account_code"],
+                "科目名称": a["account_name"],
+                "期初(账面)": a["beginning_balance_book"],
+                "期初(审定)": a["beginning_balance_audited"],
+                "借方(账面)": a["debit_book_total"],
+                "借方(审定)": a["debit_audited_total"],
+                "贷方(账面)": a["credit_book_total"],
+                "贷方(审定)": a["credit_audited_total"],
+                "期末(账面)": a["ending_balance_book"],
+                "期末(审定)": a["ending_balance_audited"],
+                "待审": a["debit_pending_count"] + a["credit_pending_count"],
+                "已审": a["debit_audited_count"] + a["credit_audited_count"],
+                "争议": a["debit_disputed_count"] + a["credit_disputed_count"],
+                "恒等式": "✅"
+                if a["is_balanced"]
+                else f"❌ {round(a['identity_check_audited'], 2)}",
+            }
+            for a in accts
+        ]
+    )
     st.dataframe(df, width="stretch", height=480)
 
     unbalanced = [a for a in accts if not a["is_balanced"]]
@@ -187,24 +200,26 @@ def _tab_movements(project_id: int) -> None:
     st.metric("命中条数", res.get("total", 0))
 
     # 用 data_editor 让用户行内修改
-    edit_df = pd.DataFrame([
-        {
-            "id": i["id"],
-            "科目": f"{i['account_code']} {i['account_name']}",
-            "凭证日期": i["voucher_date"],
-            "凭证号": i["voucher_no"],
-            "行": i["voucher_line_no"],
-            "方向": i["direction"],
-            "摘要": i.get("summary") or "",
-            "账面": i["book_amount"],
-            "审定": i["audited_amount"],
-            "调整": i["adjustment_amount"],
-            "调整原因": i.get("adjustment_reason") or "",
-            "底稿索引": i.get("working_paper_ref") or "",
-            "状态": i["status"],
-        }
-        for i in items
-    ])
+    edit_df = pd.DataFrame(
+        [
+            {
+                "id": i["id"],
+                "科目": f"{i['account_code']} {i['account_name']}",
+                "凭证日期": i["voucher_date"],
+                "凭证号": i["voucher_no"],
+                "行": i["voucher_line_no"],
+                "方向": i["direction"],
+                "摘要": i.get("summary") or "",
+                "账面": i["book_amount"],
+                "审定": i["audited_amount"],
+                "调整": i["adjustment_amount"],
+                "调整原因": i.get("adjustment_reason") or "",
+                "底稿索引": i.get("working_paper_ref") or "",
+                "状态": i["status"],
+            }
+            for i in items
+        ]
+    )
     edited = st.data_editor(
         edit_df,
         column_config={
@@ -241,13 +256,15 @@ def _tab_movements(project_id: int) -> None:
             ref_changed = (r["底稿索引"] or "") != (o["底稿索引"] or "")
             status_changed = r["状态"] != o["状态"]
             if audited_changed or reason_changed or ref_changed or status_changed:
-                changes.append({
-                    "id": int(r["id"]),
-                    "audited_amount": float(r["审定"]),
-                    "adjustment_reason": r["调整原因"] or None,
-                    "working_paper_ref": r["底稿索引"] or None,
-                    "status": r["状态"],
-                })
+                changes.append(
+                    {
+                        "id": int(r["id"]),
+                        "audited_amount": float(r["审定"]),
+                        "adjustment_reason": r["调整原因"] or None,
+                        "working_paper_ref": r["底稿索引"] or None,
+                        "status": r["状态"],
+                    }
+                )
         if not changes:
             st.info("没有改动")
         else:
@@ -275,16 +292,18 @@ def _tab_bulk_upload(project_id: int) -> None:
     f = st.file_uploader("选择文件", type=["xlsx", "xls", "csv"], key="aa_bulk_file")
 
     # 提供模板下载
-    sample = pd.DataFrame({
-        "account_code": ["1601", "1601"],
-        "voucher_no": ["JZ-2024-001", "JZ-2024-001"],
-        "voucher_line_no": [1, 2],
-        "direction": ["debit", "credit"],
-        "audited_amount": [10000.0, 0.0],
-        "adjustment_reason": ["核对发票确认", ""],
-        "working_paper_ref": ["E-1.1", "E-1.1"],
-        "note": ["", ""],
-    })
+    sample = pd.DataFrame(
+        {
+            "account_code": ["1601", "1601"],
+            "voucher_no": ["JZ-2024-001", "JZ-2024-001"],
+            "voucher_line_no": [1, 2],
+            "direction": ["debit", "credit"],
+            "audited_amount": [10000.0, 0.0],
+            "adjustment_reason": ["核对发票确认", ""],
+            "working_paper_ref": ["E-1.1", "E-1.1"],
+            "note": ["", ""],
+        }
+    )
     buf = io.BytesIO()
     sample.to_excel(buf, index=False)
     st.download_button(
@@ -356,14 +375,16 @@ def show_account_audit() -> None:
     if not project_id:
         return
 
-    tabs = st.tabs([
-        "📋 科目范围",
-        "🔄 初始化",
-        "📊 项目总览",
-        "📝 发生额审定",
-        "📤 批量上传",
-        "📥 导出",
-    ])
+    tabs = st.tabs(
+        [
+            "📋 科目范围",
+            "🔄 初始化",
+            "📊 项目总览",
+            "📝 发生额审定",
+            "📤 批量上传",
+            "📥 导出",
+        ]
+    )
     with tabs[0]:
         _tab_scope(project_id)
     with tabs[1]:

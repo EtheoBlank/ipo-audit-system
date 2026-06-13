@@ -1,4 +1,5 @@
 """报告模板 API (Pack A — Roadmap Phase 20)."""
+
 from __future__ import annotations
 
 import io
@@ -14,7 +15,6 @@ from fastapi import (
     HTTPException,
     Query,
     UploadFile,
-    status,
 )
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +36,6 @@ from app.models.db.report_template import (
 )
 from app.models.report_template import (
     ReportRenderRequest,
-    ReportTemplateCreate,
     ReportTemplateListResponse,
     ReportTemplateResponse,
     ReportTemplateUpdate,

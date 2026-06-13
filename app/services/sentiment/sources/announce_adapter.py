@@ -7,12 +7,11 @@ cninfo 提供公开的"上市公司公告"搜索 API 与 RSS 频道.
 实际生产: 该站点接口与反爬经常变; 适配器做的是"最简实现 + 优雅降级",
 不命中时静默返回空列表, 不抛错.
 """
+
 from __future__ import annotations
 
-import json
 import logging
 from typing import Optional
-from urllib.parse import urlencode
 
 from app.models.db_models import Project, SentimentSubject
 from app.services.sentiment.dedup import RawSentimentItem
@@ -84,6 +83,7 @@ class CninfoAnnounceAdapter(BaseSentimentSourceAdapter):
             title = self.clean_text(ann.get("announcementTitle", ""))
             # 去掉标题中的 <em> 标签 (cninfo 用它高亮)
             import re
+
             title = re.sub(r"</?em>", "", title)
             if not title:
                 continue
@@ -91,9 +91,13 @@ class CninfoAnnounceAdapter(BaseSentimentSourceAdapter):
             matched = next((q for q in queries if q in title), None)
             if not matched:
                 continue
-            ann_id = ann.get("announcementId", "")
-            sec_code = ann.get("secCode", project.stock_code or "")
-            url = f"http://static.cninfo.com.cn/finalpage/{ann.get('adjunctUrl', '')}" if ann.get("adjunctUrl") else None
+            ann.get("announcementId", "")
+            ann.get("secCode", project.stock_code or "")
+            url = (
+                f"http://static.cninfo.com.cn/finalpage/{ann.get('adjunctUrl', '')}"
+                if ann.get("adjunctUrl")
+                else None
+            )
             publish = self.norm_date(ann.get("announcementTime"))
             out.append(
                 RawSentimentItem(

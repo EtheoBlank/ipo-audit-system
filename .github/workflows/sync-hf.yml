@@ -1,0 +1,176 @@
+# 手动触发: GitHub → Hugging Face Space 同步
+#
+# 为什么用 workflow_dispatch 而不是 push 自动触发:
+#   * hf/main 是 Space 部署分支, 推送会立即公开 rebuild Space demo
+#   * 安全分类器拒绝任何未经用户明确授权的自动推
+#   * 强制勾选 confirm_rebuild 是最后一道闸, 防止误点
+#
+# 前置: Settings → Secrets and variables → Actions → New repository secret
+#   Name:  HF_TOKEN
+#   Value: https://huggingface.co/settings/tokens 生成 (建议 fine-grained,
+#          只勾选 EtheoZheng/EtheoBlank Space 的 write 权限)
+#
+# 用法:
+#   1. GitHub 仓库页 → Actions → "Sync to HF Space" → Run workflow
+#   2. 勾选 confirm_rebuild → 点绿色 Run workflow
+#   3. 看日志, 90 秒后 https://huggingface.co/spaces/EtheoZheng/EtheoBlank 公开 rebuild 完成
+#
+# 失败排查:
+#   * "Safety check failed": .env 进了 git 历史 → 必须先清历史再推
+#   * "smoke import failed": 本次 commit 引入了 ImportError, 先在本地 uv run python -c "from app.main import app"
+#   * "HF_TOKEN 失效": 去 huggingface.co 重新生成, 更新 GitHub Secret
+
+name: Sync to HF Space
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_rebuild:
+        description: '确认触发 HF Space 公开 rebuild (推送 hf/main 会立即重建公开 demo)'
+        type: boolean
+        required: true
+        default: false
+      force_with_lease:
+        description: '当 origin/master 与 hf/main 历史分叉时强推 (默认拒绝, 勾选后才允许)'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  # 同时只允许一个同步任务跑 (HF Space rebuild 排它)
+  group: sync-hf
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: inputs.confirm_rebuild == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production  # 可选: Settings → Environments 建一个 production, 加人工审批
+
+    steps:
+      - name: Checkout (full history for safety check)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # HF_TOKEN 有 Space write 权限, 但 origin 仍用默认 GITHUB_TOKEN
+          # 不需要额外的 token 配置
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.4.x"
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Safety check 1/2 — tracked files must not contain secrets
+        run: |
+          echo "检查 sk- 字面量..."
+          if grep -RIn --include='*.py' --include='*.md' --include='*.toml' --include='*.example' \
+              -E 'sk-[a-f0-9]{20,}' . \
+              | grep -v '\.venv/' \
+              | grep -v 'node_modules/' \
+              | grep -v 'CLAUDE\.md' \
+              | grep -v 'HF_SYNC' \
+              | grep -v 'sync-hf\.yml'; then
+            echo "❌ 检测到疑似真实 API key" >&2
+            exit 1
+          fi
+          echo "✅ 无 sk- 字面量"
+
+      - name: Safety check 2/2 — git history must never contain .env
+        run: |
+          echo "检查 .env 是否在 git 历史里出现过..."
+          if git log --all --full-history --oneline -- .env | grep -q .; then
+            echo "❌ .env found in git history — must be purged with git filter-repo first" >&2
+            git log --all --full-history --oneline -- .env | head -5
+            exit 1
+          fi
+          echo "✅ 历史干净"
+
+      - name: Smoke import (catch ImportError before triggering HF rebuild)
+        run: |
+          uv run python -c "from app.main import app; print(f'OK, {len(app.routes)} routes')"
+
+      - name: Compare origin/master vs hf/main
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          # 加 hf remote (URL 里嵌入 token)
+          git remote remove hf 2>/dev/null || true
+          git remote add hf "https://oauth2:${HF_TOKEN}@huggingface.co/spaces/EtheoZheng/EtheoBlank"
+
+          git fetch origin master
+          git fetch hf main
+
+          HF_AHEAD=$(git rev-list --count origin/master ^hf/main || echo 0)
+          HF_BEHIND=$(git rev-list --count hf/main ^origin/master || echo 0)
+
+          echo "origin/master 比 hf/main 领先: ${HF_AHEAD}"
+          echo "hf/main 比 origin/master 领先: ${HF_BEHIND}"
+
+          if [ "${HF_AHEAD}" = "0" ] && [ "${HF_BEHIND}" = "0" ]; then
+            echo "✅ 两边已对齐, 无需推送"
+            exit 0
+          fi
+
+          if [ "${HF_BEHIND}" != "0" ]; then
+            if [ "${{ inputs.force_with_lease }}" != "true" ]; then
+              echo "❌ hf/main 领先 ${HF_BEHIND} 个 commit, 默认拒绝 push (避免覆盖 HF 端独有 commit)" >&2
+              echo "" >&2
+              echo "hf/main 独有的 commit:" >&2
+              git log --oneline origin/master..hf/main | head -10 >&2
+              echo "" >&2
+              echo "如确认要覆盖, 重新触发 workflow 并勾选 force_with_lease" >&2
+              exit 1
+            fi
+            echo "⚠️ hf/main 领先 ${HF_BEHIND} 个 commit, 使用 --force-with-lease 强推"
+          fi
+
+          # 把决策写到 env 给下一步用
+          echo "FORCE_NEEDED=$([ "${HF_BEHIND}" != "0" ] && echo true || echo false)" >> "$GITHUB_ENV"
+
+      - name: Push to HF Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ "${FORCE_NEEDED:-false}" = "true" ]; then
+            echo "执行: git push --force-with-lease hf master:main"
+            git push --force-with-lease hf master:main
+          else
+            echo "执行: git push hf master:main"
+            git push hf master:main
+          fi
+
+      - name: Verify HF build started
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          # 给 HF 几秒钟启动 build
+          sleep 5
+          echo "查看 Space 状态: https://huggingface.co/spaces/EtheoZheng/EtheoBlank"
+          echo "Build 日志: https://huggingface.co/spaces/EtheoZheng/EtheoBlank/logs"
+          curl -fsS "https://huggingface.co/api/spaces/EtheoZheng/EtheoBlank" \
+            -H "Authorization: Bearer ${HF_TOKEN}" \
+            | head -c 500
+          echo ""
+
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "### ✅ HF Space 同步已触发"
+            echo ""
+            echo "- **commit 范围**: origin/master 比 hf/main 领先 ${HF_AHEAD:-?} 个 commit"
+            echo "- **Space URL**: https://huggingface.co/spaces/EtheoZheng/EtheoBlank"
+            echo "- **构建日志**: https://huggingface.co/spaces/EtheoZheng/EtheoBlank/logs"
+            echo "- **冷启时间**: ~90 秒"
+            echo ""
+            echo "验证清单:"
+            echo "1. \`curl https://etheozheng-etheoblank.hf.space/health\` 应返 JSON"
+            echo "2. 浏览器打开 Space URL, sidebar 菜单应可见"
+          } >> "$GITHUB_STEP_SUMMARY"

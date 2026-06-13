@@ -1,4 +1,5 @@
 """Pydantic schemas for Related Parties (Pack B)."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -118,6 +119,17 @@ class DetectorRunRequest(BaseModel):
     enable_chrono_scan: bool = True
     enable_customer_overlap: bool = True
     enable_prospectus_compare: bool = False
+    enable_ai_inference: bool = Field(
+        default=False,
+        description="启用 DeepSeek AI 推断兜底通道. 需要 DEEPSEEK_API_KEY. "
+        "AI 通道单独打分, 命中后仍走候选 → confirm 流程.",
+    )
+    ai_max_candidates: int = Field(
+        default=30,
+        ge=1,
+        le=100,
+        description="AI 通道最多返回多少候选 (防 token 爆炸).",
+    )
     keywords_extra: Optional[List[str]] = None
 
 
@@ -290,8 +302,13 @@ class RelatedPartyReportRequest(BaseModel):
     period_end: str
     include_sections: List[str] = Field(
         default_factory=lambda: [
-            "summary", "main_data", "transactions", "capital_occupation",
-            "peer_competition", "disclosure_gap", "remediation",
+            "summary",
+            "main_data",
+            "transactions",
+            "capital_occupation",
+            "peer_competition",
+            "disclosure_gap",
+            "remediation",
         ]
     )
     output_format: str = Field(default="docx", pattern=r"^(docx|xlsx)$")

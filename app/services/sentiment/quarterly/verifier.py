@@ -1,9 +1,8 @@
 """季度报告双数据源对账 — financial_input vs 简报/事件中数字."""
+
 from __future__ import annotations
 
-import json
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -15,9 +14,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ConsistencyFlag:
     """一对数字的比对结果."""
+
     financial_field: str
     financial_value: Any
-    matched_in: str               # "events" / "briefings" / "none"
+    matched_in: str  # "events" / "briefings" / "none"
     matched_value: Any
     consistent: bool
     note: str = ""
@@ -27,7 +27,7 @@ class ConsistencyFlag:
 class QuarterlyVerificationReport:
     passed: bool
     consistency_flags: list[ConsistencyFlag] = field(default_factory=list)
-    briefing_verify_report: Optional[Any] = None    # 引用 BriefingVerifier 产物
+    briefing_verify_report: Optional[Any] = None  # 引用 BriefingVerifier 产物
     issue_count: int = 0
     error_count: int = 0
     note: str = ""
@@ -80,7 +80,9 @@ class QuarterlyVerifier:
 
         # 1) 对每个 financial 字段, 扫描所有 events + briefings 文本, 看是否有提及
         events_text = self._flatten_texts(events, fields=["title", "content_text"])
-        briefings_text = self._flatten_texts(briefings, fields=["ai_summary", "audit_verification_json"])
+        briefings_text = self._flatten_texts(
+            briefings, fields=["ai_summary", "audit_verification_json"]
+        )
 
         for field_name, value in financial_input.items():
             if value is None:
@@ -100,14 +102,16 @@ class QuarterlyVerifier:
                     matched_in, matched_val, note = "none", None, "无舆情印证"
 
             consistent = matched_in != "mismatch"
-            flags.append(ConsistencyFlag(
-                financial_field=field_name,
-                financial_value=value,
-                matched_in=matched_in,
-                matched_value=matched_val,
-                consistent=consistent,
-                note=note,
-            ))
+            flags.append(
+                ConsistencyFlag(
+                    financial_field=field_name,
+                    financial_value=value,
+                    matched_in=matched_in,
+                    matched_value=matched_val,
+                    consistent=consistent,
+                    note=note,
+                )
+            )
 
         # 2) 简报侧的常规校验 (复用 BriefingVerifier)
         ev_dicts = [
@@ -158,11 +162,11 @@ class QuarterlyVerifier:
                 forms.extend([f"{f:g}", f"{f:,.2f}", f"{f:.2f}", f"{f:,}"])
             # 百分比 (0~1 之间)
             if 0 < f < 1:
-                forms.append(f"{f*100:.2f}%")
-                forms.append(f"{f*100:.1f}%")
-                forms.append(f"{f*100:.0f}%")
+                forms.append(f"{f * 100:.2f}%")
+                forms.append(f"{f * 100:.1f}%")
+                forms.append(f"{f * 100:.0f}%")
             # 100 倍 (被当作 %)
-            forms.append(f"{f*100:.1f}%")
+            forms.append(f"{f * 100:.1f}%")
             # 整数部分 + 浮点表示
             if f >= 1:
                 forms.append(f"{f:.0f}")

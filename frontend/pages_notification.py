@@ -1,4 +1,5 @@
 """通知中心页面 (Pack A)."""
+
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -37,12 +38,16 @@ _SEVERITY_BADGE = {
 
 
 def show_notifications() -> None:
-    st.markdown('<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">🔔 通知中心</p>',
-                unsafe_allow_html=True)
+    st.markdown(
+        '<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">🔔 通知中心</p>',
+        unsafe_allow_html=True,
+    )
 
     # 头部摘要
     counts = _api("GET", "/api/notifications/unread") or {
-        "total_unread": 0, "by_module": {}, "by_severity": {}
+        "total_unread": 0,
+        "by_module": {},
+        "by_severity": {},
     }
     cols = st.columns(5)
     cols[0].metric("未读总数", counts.get("total_unread", 0))
@@ -56,7 +61,10 @@ def show_notifications() -> None:
         by_mod = counts.get("by_module") or {}
         if by_mod:
             df = pd.DataFrame(
-                [{"模块": _MODULE_LABELS.get(k, k), "code": k, "未读数": v} for k, v in by_mod.items()]
+                [
+                    {"模块": _MODULE_LABELS.get(k, k), "code": k, "未读数": v}
+                    for k, v in by_mod.items()
+                ]
             ).sort_values("未读数", ascending=False)
             st.dataframe(df, width="stretch")
         else:
@@ -81,7 +89,9 @@ def show_notifications() -> None:
         params["severity"] = severity_filter
 
     res = _api("GET", "/api/notifications/list", params=params) or {
-        "total": 0, "unread": 0, "items": []
+        "total": 0,
+        "unread": 0,
+        "items": [],
     }
     items = res.get("items", [])
 
@@ -90,15 +100,15 @@ def show_notifications() -> None:
         if st.button("✅ 标记本页全部已读"):
             ids = [int(i["id"]) for i in items if not i["is_read"]]
             if ids:
-                r = _api("POST", "/api/notifications/mark-read",
-                         json={"ids": ids, "mark_all": False})
+                r = _api(
+                    "POST", "/api/notifications/mark-read", json={"ids": ids, "mark_all": False}
+                )
                 if r:
                     st.success(f"已标记 {r.get('updated', 0)} 条")
                     st.rerun()
     with cleft:
         if st.button("📭 全部标记已读"):
-            r = _api("POST", "/api/notifications/mark-read",
-                     json={"mark_all": True})
+            r = _api("POST", "/api/notifications/mark-read", json={"mark_all": True})
             if r:
                 st.success(f"已标记 {r.get('updated', 0)} 条")
                 st.rerun()
@@ -125,7 +135,6 @@ def show_notifications() -> None:
                     st.code(it["payload"])
             if not it.get("is_read"):
                 if st.button(f"标记已读", key=f"mr_{it['id']}"):
-                    r = _api("POST", "/api/notifications/mark-read",
-                             json={"ids": [it["id"]]})
+                    r = _api("POST", "/api/notifications/mark-read", json={"ids": [it["id"]]})
                     if r:
                         st.rerun()

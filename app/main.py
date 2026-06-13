@@ -48,11 +48,7 @@ _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 def _exclude_paths() -> set:
-    return {
-        p.strip()
-        for p in (settings.AUDIT_LOG_EXCLUDE_PATHS or "").split(",")
-        if p.strip()
-    }
+    return {p.strip() for p in (settings.AUDIT_LOG_EXCLUDE_PATHS or "").split(",") if p.strip()}
 
 
 class AuditLogMiddleware(BaseHTTPMiddleware):
@@ -104,7 +100,9 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                         path=path,
                         ip=ip,
                         user_agent=ua,
-                        status_code=getattr(response, "status_code", None) if error_detail is None else 500,
+                        status_code=getattr(response, "status_code", None)
+                        if error_detail is None
+                        else 500,
                         summary=f"{request.method} {path}",
                         error_detail=error_detail,
                     )
@@ -128,14 +126,11 @@ async def lifespan(app: FastAPI):
             "please-generate-a-random-secret-with-secrets-token-urlsafe-48-bytes",
             "",
         }
-        if (
-            settings.JWT_SECRET in _DEV_JWT_DEFAULTS
-            or len(settings.JWT_SECRET or "") < 32
-        ):
+        if settings.JWT_SECRET in _DEV_JWT_DEFAULTS or len(settings.JWT_SECRET or "") < 32:
             logger.error(
                 "❌ 生产模式 (DEBUG=False) + AUTH_ENABLED=true, 但 JWT_SECRET "
                 "仍是 dev 默认值或长度不足 32 字节。请在 .env 设置强随机串后再启动: "
-                "python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+                'python -c "import secrets; print(secrets.token_urlsafe(48))"'
             )
             raise RuntimeError(
                 "JWT_SECRET must be set to a strong random string (>=32 bytes) in production"
@@ -143,6 +138,7 @@ async def lifespan(app: FastAPI):
         # 启动自检: encode → decode roundtrip
         try:
             from app.services.auth.jwt import create_access_token, decode_token
+
             _t = create_access_token(user_id=0, username="__startup_check__", role="admin")
             _p = decode_token(_t)
             assert _p.get("sub") == "0", "JWT roundtrip 自检失败"
@@ -155,6 +151,7 @@ async def lifespan(app: FastAPI):
     # Pack A — Auth bootstrap (创建默认事务所 + 内置角色/权限; admin 仅在 AUTH_ENABLED=true 创建)
     try:
         from app.services.auth import bootstrap_auth
+
         await bootstrap_auth()
     except Exception as exc:  # noqa: BLE001
         logger.exception("Auth bootstrap 启动失败 (非致命): %s", exc)
@@ -162,6 +159,7 @@ async def lifespan(app: FastAPI):
     # 舆情跟踪调度器 (APScheduler) — v0.2 新增
     try:
         from app.services.sentiment.scheduler import start_scheduler
+
         await start_scheduler()
     except Exception as exc:  # 调度器挂掉不能让整个 app 起不来
         logger.exception("舆情调度器启动失败: %s", exc)
@@ -170,6 +168,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     try:
         from app.services.sentiment.scheduler import stop_scheduler
+
         await stop_scheduler()
     except Exception:
         logger.exception("舆情调度器停止失败")
@@ -217,17 +216,17 @@ def create_app() -> FastAPI:
 
     # CORS middleware — restrict origins in production
     allowed_origins = [
-        origin.strip()
-        for origin in settings.CORS_ORIGINS.split(",")
-        if origin.strip()
+        origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()
     ]
     if settings.DEBUG:
         # In debug mode, also allow localhost on any port for dev convenience
-        allowed_origins.extend([
-            "http://localhost:8501",
-            "http://127.0.0.1:8501",
-            "http://localhost:3000",
-        ])
+        allowed_origins.extend(
+            [
+                "http://localhost:8501",
+                "http://127.0.0.1:8501",
+                "http://localhost:3000",
+            ]
+        )
         allowed_origins = list(set(allowed_origins))
 
     app.add_middleware(

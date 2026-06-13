@@ -1,4 +1,5 @@
 """季度报告 .docx 导出 — 复用简报 word_exporter 的 Markdown 解析."""
+
 from __future__ import annotations
 
 import hashlib
@@ -31,6 +32,7 @@ class QuarterlyReportWordExporter:
         version_no: Optional[int] = None,
     ) -> tuple[Path, str]:
         from app.models.db_models import SENTIMENT_PERIOD_TYPE_LABELS
+
         label = SENTIMENT_PERIOD_TYPE_LABELS.get(period_type, period_type)
         # 把 markdown 灌给 delegated, 但文件名前缀用 project_id+period
         suffix = f"_v{version_no}" if version_no and version_no > 1 else ""
@@ -38,6 +40,7 @@ class QuarterlyReportWordExporter:
         # 简化: 自己写一个最小 export
         from docx import Document
         from docx.shared import Pt
+
         doc = Document()
         style = doc.styles["Normal"]
         style.font.size = Pt(10.5)
@@ -49,7 +52,9 @@ class QuarterlyReportWordExporter:
         path = self.output_dir / fname
         doc.save(str(path))
         digest = self._sha256_file(path)
-        logger.info("QuarterlyReportWordExporter: %s -> %s (sha256=%s)", company_name, path, digest[:12])
+        logger.info(
+            "QuarterlyReportWordExporter: %s -> %s (sha256=%s)", company_name, path, digest[:12]
+        )
         return path, digest
 
     @staticmethod

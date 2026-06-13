@@ -44,6 +44,7 @@
       POST   /scheduler/stop                      停止
       POST   /scheduler/scan/now                  立即扫描
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -61,39 +62,29 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.api._helpers import get_or_404
 from app.core.database import get_db
 from app.models.db_models import (
-    IllegalStateTransition,
     NoLlmConfigured,
     Project,
     SENTIMENT_DOC_STATUS_APPROVED,
     SENTIMENT_DOC_STATUS_DRAFT,
     SENTIMENT_DOC_STATUS_FROZEN,
-    SENTIMENT_DOC_STATUS_LABELS,
     SENTIMENT_DOC_STATUS_REJECTED,
     SENTIMENT_DOC_STATUS_REVIEW,
     SENTIMENT_DOC_STATUS_TRANSITIONS,
-    SENTIMENT_EVENT_STATUS_ATTACHED,
     SENTIMENT_EVENT_STATUS_IGNORED,
-    SENTIMENT_EVENT_STATUS_READ,
     SENTIMENT_NOTIFY_BRIEFING_REJECTED,
     SENTIMENT_NOTIFY_BRIEFING_READY,
-    SENTIMENT_NOTIFY_NEW_EVENT,
     SENTIMENT_NOTIFY_REPORT_APPROVED,
     SENTIMENT_NOTIFY_REPORT_READY,
     SENTIMENT_NOTIFY_REPORT_REJECTED,
     SENTIMENT_PERIOD_TYPE_LABELS,
-    SENTIMENT_SEVERITY_LABELS,
-    SENTIMENT_SEVERITY_NOTICE,
-    SENTIMENT_SEVERITY_WARN,
-    SENTIMENT_SEVERITY_CRITICAL,
     SentimentDailyBriefing,
     SentimentDailyBriefingRevision,
     SentimentEvent,
     SentimentNotification,
     SentimentQuarterlyReport,
-    SentimentQuarterlyReportRevision,
     SentimentSource,
     SentimentSubject,
 )
@@ -126,13 +117,11 @@ from app.services.sentiment.dedup import compute_content_hash
 from app.services.sentiment.notifier import mark_all_read, mark_read
 from app.services.sentiment.quarterly.aggregator import aggregate_window, lock_references
 from app.services.sentiment.quarterly.financial_input import (
-    REQUIRED_FIELDS,
     FinancialInput,
     save_financial_input,
 )
 from app.services.sentiment.quarterly.generator import QuarterlyReportGenerator
 from app.services.sentiment.quarterly.trigger import (
-    QuarterlyPeriodSpec,
     create_or_get_report,
 )
 from app.services.sentiment.quarterly.verifier import QuarterlyVerifier
@@ -143,6 +132,8 @@ from app.services.sentiment.scheduler import (
     start_scheduler,
     stop_scheduler,
 )
+from app.models.db.auth import User
+from app.services.auth import get_current_user, get_current_user_optional
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sentiment", tags=["舆情跟踪"])
@@ -162,13 +153,6 @@ def _validate_transition(current: str, target: str) -> None:
         )
 
 
-async def _get_or_404(db: AsyncSession, model, pk: int, label: str = "对象"):
-    obj = await db.get(model, pk)
-    if not obj:
-        raise HTTPException(status_code=404, detail=f"{label} (id={pk}) 不存在")
-    return obj
-
-
 # ============================================================
 #  SentimentSubject — 搜索别名
 # ============================================================
@@ -178,6 +162,7 @@ async def _get_or_404(db: AsyncSession, model, pk: int, label: str = "对象"):
 async def list_subjects(
     project_id: int = Query(...),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     res = await db.execute(
         select(SentimentSubject).where(SentimentSubject.project_id == project_id)
@@ -187,10 +172,12 @@ async def list_subjects(
 
 @router.post("/subjects", response_model=SentimentSubjectResponse, status_code=201)
 async def create_subject(
-    body: SentimentSubjectCreate, db: AsyncSession = Depends(get_db),
+    body: SentimentSubjectCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     # 校验 project 存在
-    await _get_or_404(db, Project, body.project_id, "项目")
+    await get_or_404(db, Project, body.project_id, "项目")
     sub = SentimentSubject(**body.model_dump())
     db.add(sub)
     try:
@@ -204,9 +191,12 @@ async def create_subject(
 
 @router.put("/subjects/{subject_id}", response_model=SentimentSubjectResponse)
 async def update_subject(
-    subject_id: int, body: SentimentSubjectUpdate, db: AsyncSession = Depends(get_db),
+    subject_id: int,
+    body: SentimentSubjectUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    sub = await _get_or_404(db, SentimentSubject, subject_id, "别名")
+    sub = await get_or_404(db, SentimentSubject, subject_id, "别名")
     for k, v in body.model_dump(exclude_none=True).items():
         setattr(sub, k, v)
     await db.commit()
@@ -216,9 +206,11 @@ async def update_subject(
 
 @router.delete("/subjects/{subject_id}", status_code=204)
 async def delete_subject(
-    subject_id: int, db: AsyncSession = Depends(get_db),
+    subject_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    sub = await _get_or_404(db, SentimentSubject, subject_id, "别名")
+    sub = await get_or_404(db, SentimentSubject, subject_id, "别名")
     sub.is_active = False
     await db.commit()
 
@@ -229,16 +221,22 @@ async def delete_subject(
 
 
 @router.get("/sources", response_model=list[SentimentSourceResponse])
-async def list_sources(db: AsyncSession = Depends(get_db)):
+async def list_sources(
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     res = await db.execute(select(SentimentSource).order_by(SentimentSource.id))
     return res.scalars().all()
 
 
 @router.put("/sources/{source_id}", response_model=SentimentSourceResponse)
 async def toggle_source(
-    source_id: int, body: SentimentSourceToggle, db: AsyncSession = Depends(get_db),
+    source_id: int,
+    body: SentimentSourceToggle,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    src = await _get_or_404(db, SentimentSource, source_id, "信源")
+    src = await get_or_404(db, SentimentSource, source_id, "信源")
     src.is_enabled = body.is_enabled
     await db.commit()
     await db.refresh(src)
@@ -255,9 +253,10 @@ async def list_unread(
     project_id: Optional[int] = None,
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """返回未读通知 + 总数 (供前端红点)."""
-    from sqlalchemy import func, update
+    from sqlalchemy import func
 
     q = select(SentimentNotification).where(SentimentNotification.is_read == False)  # noqa: E712
     if project_id is not None:
@@ -281,7 +280,11 @@ async def list_unread(
 
 
 @router.post("/notifications/{notification_id}/read")
-async def read_one(notification_id: int, db: AsyncSession = Depends(get_db)):
+async def read_one(
+    notification_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     ok = await mark_read(db, notification_id)
     if not ok:
         raise HTTPException(status_code=404, detail="通知不存在或已读")
@@ -290,7 +293,11 @@ async def read_one(notification_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/notifications/read-all")
-async def read_all(project_id: Optional[int] = None, db: AsyncSession = Depends(get_db)):
+async def read_all(
+    project_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     n = await mark_all_read(db, project_id=project_id)
     await db.commit()
     return {"ok": True, "count": n}
@@ -311,6 +318,7 @@ async def list_events(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     q = select(SentimentEvent)
     if project_id is not None:
@@ -330,13 +338,21 @@ async def list_events(
 
 
 @router.get("/events/{event_id}", response_model=SentimentEventResponse)
-async def get_event(event_id: int, db: AsyncSession = Depends(get_db)):
-    return await _get_or_404(db, SentimentEvent, event_id, "事件")
+async def get_event(
+    event_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    return await get_or_404(db, SentimentEvent, event_id, "事件")
 
 
 @router.post("/events/{event_id}/ignore", response_model=SentimentEventResponse)
-async def ignore_event(event_id: int, db: AsyncSession = Depends(get_db)):
-    ev = await _get_or_404(db, SentimentEvent, event_id, "事件")
+async def ignore_event(
+    event_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    ev = await get_or_404(db, SentimentEvent, event_id, "事件")
     ev.review_status = SENTIMENT_EVENT_STATUS_IGNORED
     await db.commit()
     await db.refresh(ev)
@@ -344,8 +360,12 @@ async def ignore_event(event_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/events/import", response_model=SentimentEventResponse, status_code=201)
-async def import_event(body: SentimentEventImport, db: AsyncSession = Depends(get_db)):
-    await _get_or_404(db, Project, body.project_id, "项目")
+async def import_event(
+    body: SentimentEventImport,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    await get_or_404(db, Project, body.project_id, "项目")
     ch = compute_content_hash(
         source_code="manual",
         title=body.title,
@@ -392,6 +412,7 @@ async def list_briefings(
     date_to: Optional[str] = None,
     status: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     q = select(SentimentDailyBriefing)
     if project_id is not None:
@@ -408,16 +429,21 @@ async def list_briefings(
 
 
 @router.get("/briefings/{briefing_id}", response_model=SentimentBriefingResponse)
-async def get_briefing(briefing_id: int, db: AsyncSession = Depends(get_db)):
-    return await _get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+async def get_briefing(
+    briefing_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    return await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
 
 
 @router.post("/briefings/generate", response_model=SentimentBriefingResponse)
 async def generate_briefing(
     body: SentimentBriefingGenerateRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    project = await _get_or_404(db, Project, body.project_id, "项目")
+    project = await get_or_404(db, Project, body.project_id, "项目")
     briefing_date = body.briefing_date or _utcnow().strftime("%Y-%m-%d")
 
     # 幂等检查 (除非 force=True)
@@ -434,6 +460,7 @@ async def generate_briefing(
 
     # 拉事件
     from app.services.sentiment.briefing.detector import BriefingDetector
+
     bd = BriefingDetector()
     # 用 detector 的窗口拉事件
     event_count = await bd._count_relevant_events(db, project.id, briefing_date)
@@ -441,18 +468,24 @@ async def generate_briefing(
         raise HTTPException(status_code=400, detail="窗口内无事件, 不生成")
 
     res = await db.execute(
-        select(SentimentEvent).where(
+        select(SentimentEvent)
+        .where(
             SentimentEvent.project_id == project.id,
             SentimentEvent.publish_date == briefing_date,
             SentimentEvent.review_status != SENTIMENT_EVENT_STATUS_IGNORED,
-        ).order_by(SentimentEvent.severity.desc())
+        )
+        .order_by(SentimentEvent.severity.desc())
     )
     events = res.scalars().all()
     events_dict = [
         {
-            "id": e.id, "title": e.title, "content_text": e.content_text,
-            "publisher": e.publisher, "publish_date": e.publish_date,
-            "severity": e.severity, "url": e.url,
+            "id": e.id,
+            "title": e.title,
+            "content_text": e.content_text,
+            "publisher": e.publisher,
+            "publish_date": e.publish_date,
+            "severity": e.severity,
+            "url": e.url,
         }
         for e in events
     ]
@@ -514,10 +547,14 @@ async def generate_briefing(
             brief = res3.scalar_one()
     brief.ai_summary = content.markdown
     brief.event_snapshot_json = json.dumps(content.event_snapshot, ensure_ascii=False)
-    brief.risk_assessment_json = json.dumps(content.extraction.severity_breakdown, ensure_ascii=False)
+    brief.risk_assessment_json = json.dumps(
+        content.extraction.severity_breakdown, ensure_ascii=False
+    )
     brief.audit_verification_json = json.dumps(report.to_dict(), ensure_ascii=False)
-    brief.verification_failed = (not report.passed)
-    brief.verification_message = "; ".join(f"[{i.issue_type}] {i.detail}" for i in report.issues) or None
+    brief.verification_failed = not report.passed
+    brief.verification_message = (
+        "; ".join(f"[{i.issue_type}] {i.detail}" for i in report.issues) or None
+    )
     brief.event_count = len(events_dict)
     brief.status = SENTIMENT_DOC_STATUS_DRAFT
 
@@ -525,7 +562,10 @@ async def generate_briefing(
     try:
         exporter = BriefingWordExporter()
         path, sha256 = exporter.export(
-            project.id, briefing_date, project.company_name, content.markdown,
+            project.id,
+            briefing_date,
+            project.company_name,
+            content.markdown,
         )
         brief.word_report_path = str(path)
         brief.word_report_sha256 = sha256
@@ -542,6 +582,7 @@ async def generate_briefing(
 
     # 通知
     from app.services.sentiment.notifier import create_notification
+
     await create_notification(
         db,
         notification_type=SENTIMENT_NOTIFY_BRIEFING_READY,
@@ -559,8 +600,9 @@ async def submit_briefing(
     briefing_id: int,
     body: SentimentBriefingReviewRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    brief = await _get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
     if brief.is_locked:
         raise HTTPException(status_code=400, detail="简报已锁定, 不可修改状态")
     if brief.verification_failed:
@@ -582,8 +624,9 @@ async def approve_briefing(
     briefing_id: int,
     body: SentimentBriefingReviewRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    brief = await _get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
     if brief.is_locked:
         raise HTTPException(status_code=400, detail="简报已锁定, 不可修改状态")
     # 状态机: review -> approved (校验) -> frozen (立即)
@@ -608,8 +651,9 @@ async def reject_briefing(
     briefing_id: int,
     body: SentimentBriefingRejectRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    brief = await _get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
     if brief.is_locked:
         raise HTTPException(status_code=400, detail="简报已锁定, 不可修改状态")
     _validate_transition(brief.status, SENTIMENT_DOC_STATUS_REJECTED)
@@ -621,6 +665,7 @@ async def reject_briefing(
     await db.refresh(brief)
     # 通知提交人
     from app.services.sentiment.notifier import create_notification
+
     await create_notification(
         db,
         notification_type=SENTIMENT_NOTIFY_BRIEFING_REJECTED,
@@ -637,9 +682,10 @@ async def recall_briefing(
     briefing_id: int,
     body: SentimentBriefingReviewRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """审阅人撤回 (review -> draft). 与 /revise 不同: /revise 是基于 locked 创建新版本."""
-    brief = await _get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
     if brief.is_locked:
         raise HTTPException(status_code=400, detail="简报已锁定, 不可撤回")
     _validate_transition(brief.status, SENTIMENT_DOC_STATUS_DRAFT)
@@ -659,9 +705,10 @@ async def revise_briefing(
     briefing_id: int,
     body: SentimentBriefingReviseRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """基于现有简报创建一份新版本 (draft). 老版本冻结在 revision 表."""
-    brief = await _get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
     if not brief.is_locked:
         raise HTTPException(status_code=400, detail="仅已锁定的简报可修订 (基于旧版新建)")
 
@@ -669,13 +716,16 @@ async def revise_briefing(
     rev = SentimentDailyBriefingRevision(
         briefing_id=brief.id,
         version_no=1,  # 简化: 每份 brief 维护自己的版本号
-        snapshot_json=json.dumps({
-            "ai_summary": brief.ai_summary,
-            "event_snapshot_json": brief.event_snapshot_json,
-            "audit_verification_json": brief.audit_verification_json,
-            "word_report_path": brief.word_report_path,
-            "word_report_sha256": brief.word_report_sha256,
-        }, ensure_ascii=False),
+        snapshot_json=json.dumps(
+            {
+                "ai_summary": brief.ai_summary,
+                "event_snapshot_json": brief.event_snapshot_json,
+                "audit_verification_json": brief.audit_verification_json,
+                "word_report_path": brief.word_report_path,
+                "word_report_sha256": brief.word_report_sha256,
+            },
+            ensure_ascii=False,
+        ),
         change_note=body.change_note,
         changed_by=body.reviser,
     )
@@ -695,8 +745,12 @@ async def revise_briefing(
 
 
 @router.get("/briefings/{briefing_id}/download")
-async def download_briefing(briefing_id: int, db: AsyncSession = Depends(get_db)):
-    brief = await _get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+async def download_briefing(
+    briefing_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
     if not brief.word_report_path or not Path(brief.word_report_path).exists():
         raise HTTPException(status_code=404, detail="Word 文档不存在")
     # SHA-256 校验
@@ -718,8 +772,12 @@ async def download_briefing(briefing_id: int, db: AsyncSession = Depends(get_db)
 
 
 @router.get("/briefings/{briefing_id}/verify")
-async def reverify_briefing(briefing_id: int, db: AsyncSession = Depends(get_db)):
-    brief = await _get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+async def reverify_briefing(
+    briefing_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
     if not brief.ai_summary:
         raise HTTPException(status_code=400, detail="简报无 ai_summary, 无法核验")
     # 拉对应事件
@@ -731,14 +789,22 @@ async def reverify_briefing(briefing_id: int, db: AsyncSession = Depends(get_db)
     )
     events = res.scalars().all()
     events_dict = [
-        {"id": e.id, "title": e.title, "content_text": e.content_text, "publisher": e.publisher, "publish_date": e.publish_date}
+        {
+            "id": e.id,
+            "title": e.title,
+            "content_text": e.content_text,
+            "publisher": e.publisher,
+            "publish_date": e.publish_date,
+        }
         for e in events
     ]
     v = BriefingVerifier()
     report = v.verify(brief.ai_summary, events_dict)
     brief.audit_verification_json = json.dumps(report.to_dict(), ensure_ascii=False)
-    brief.verification_failed = (not report.passed)
-    brief.verification_message = "; ".join(f"[{i.issue_type}] {i.detail}" for i in report.issues) or None
+    brief.verification_failed = not report.passed
+    brief.verification_message = (
+        "; ".join(f"[{i.issue_type}] {i.detail}" for i in report.issues) or None
+    )
     await db.commit()
     return report.to_dict()
 
@@ -752,29 +818,41 @@ async def reverify_briefing(briefing_id: int, db: AsyncSession = Depends(get_db)
 async def list_reports(
     project_id: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     q = select(SentimentQuarterlyReport)
     if project_id is not None:
         q = q.where(SentimentQuarterlyReport.project_id == project_id)
-    q = q.order_by(SentimentQuarterlyReport.fiscal_year.desc(), SentimentQuarterlyReport.period_type)
+    q = q.order_by(
+        SentimentQuarterlyReport.fiscal_year.desc(), SentimentQuarterlyReport.period_type
+    )
     res = await db.execute(q)
     return res.scalars().all()
 
 
 @router.get("/reports/{report_id}", response_model=SentimentQuarterlyReportResponse)
-async def get_report(report_id: int, db: AsyncSession = Depends(get_db)):
-    return await _get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+async def get_report(
+    report_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    return await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
 
 
 @router.post("/reports", response_model=SentimentQuarterlyReportResponse, status_code=201)
 async def create_report(
-    body: SentimentQuarterlyCreateRequest, db: AsyncSession = Depends(get_db),
+    body: SentimentQuarterlyCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if body.period_type not in SENTIMENT_PERIOD_TYPE_LABELS:
-        raise HTTPException(status_code=400, detail=f"period_type 必须是 Q1/H1/Q3/ANNUAL")
-    await _get_or_404(db, Project, body.project_id, "项目")
+        raise HTTPException(status_code=400, detail="period_type 必须是 Q1/H1/Q3/ANNUAL")
+    await get_or_404(db, Project, body.project_id, "项目")
     rep = await create_or_get_report(
-        db, body.project_id, body.period_type, body.fiscal_year,
+        db,
+        body.project_id,
+        body.period_type,
+        body.fiscal_year,
         trigger_type=body.trigger_type,
     )
     return rep
@@ -785,8 +863,9 @@ async def upload_financials(
     report_id: int,
     body: SentimentQuarterlyFinancialInput,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    rep = await _get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+    rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
     if rep.is_locked:
         raise HTTPException(status_code=400, detail="报告已锁定, 不可修改")
 
@@ -812,14 +891,18 @@ async def upload_financials(
 
 
 @router.post("/reports/{report_id}/generate", response_model=SentimentQuarterlyReportResponse)
-async def generate_report(report_id: int, db: AsyncSession = Depends(get_db)):
-    rep = await _get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+async def generate_report(
+    report_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
     if rep.is_locked:
         raise HTTPException(status_code=400, detail="报告已锁定, 不可重新生成")
     if not rep.financial_input_json:
         raise HTTPException(status_code=400, detail="请先通过 /financials 上传季报数据")
 
-    project = await _get_or_404(db, Project, rep.project_id, "项目")
+    project = await get_or_404(db, Project, rep.project_id, "项目")
     fin = FinancialInput.from_json(rep.financial_input_json)
 
     # 聚合窗口
@@ -837,8 +920,12 @@ async def generate_report(report_id: int, db: AsyncSession = Depends(get_db)):
     ]
     events = [
         {
-            "id": e.id, "title": e.title, "content_text": e.content_text,
-            "severity": e.severity, "publish_date": e.publish_date, "url": e.url,
+            "id": e.id,
+            "title": e.title,
+            "content_text": e.content_text,
+            "severity": e.severity,
+            "publish_date": e.publish_date,
+            "url": e.url,
         }
         for e in events_orm
     ]
@@ -870,7 +957,7 @@ async def generate_report(report_id: int, db: AsyncSession = Depends(get_db)):
 
     rep.ai_report_md = content.markdown
     rep.ai_report_verification_json = json.dumps(verify.to_dict(), ensure_ascii=False)
-    rep.verification_failed = (not verify.passed)
+    rep.verification_failed = not verify.passed
     rep.verification_message = f"consistency_errors={verify.error_count}"
     rep.amount_snapshot = json.dumps(fin.data, ensure_ascii=False)
     rep.status = SENTIMENT_DOC_STATUS_DRAFT
@@ -879,8 +966,11 @@ async def generate_report(report_id: int, db: AsyncSession = Depends(get_db)):
     try:
         exp = QuarterlyReportWordExporter()
         path, sha256 = exp.export(
-            rep.project_id, rep.period_type, rep.fiscal_year,
-            project.company_name, content.markdown,
+            rep.project_id,
+            rep.period_type,
+            rep.fiscal_year,
+            project.company_name,
+            content.markdown,
         )
         rep.word_report_path = str(path)
         rep.word_report_sha256 = sha256
@@ -892,6 +982,7 @@ async def generate_report(report_id: int, db: AsyncSession = Depends(get_db)):
 
     # 通知
     from app.services.sentiment.notifier import create_notification
+
     await create_notification(
         db,
         notification_type=SENTIMENT_NOTIFY_REPORT_READY,
@@ -905,10 +996,12 @@ async def generate_report(report_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/reports/{report_id}/submit", response_model=SentimentQuarterlyReportResponse)
 async def submit_report(
-    report_id: int, body: SentimentQuarterlyReviewRequest,
+    report_id: int,
+    body: SentimentQuarterlyReviewRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    rep = await _get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+    rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
     if rep.is_locked:
         raise HTTPException(status_code=400, detail="报告已锁定")
     if rep.verification_failed:
@@ -924,10 +1017,12 @@ async def submit_report(
 
 @router.post("/reports/{report_id}/approve", response_model=SentimentQuarterlyReportResponse)
 async def approve_report(
-    report_id: int, body: SentimentQuarterlyReviewRequest,
+    report_id: int,
+    body: SentimentQuarterlyReviewRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    rep = await _get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+    rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
     if rep.is_locked:
         raise HTTPException(status_code=400, detail="报告已锁定")
     _validate_transition(rep.status, SENTIMENT_DOC_STATUS_APPROVED)
@@ -944,6 +1039,7 @@ async def approve_report(
     await db.refresh(rep)
 
     from app.services.sentiment.notifier import create_notification
+
     await create_notification(
         db,
         notification_type=SENTIMENT_NOTIFY_REPORT_APPROVED,
@@ -956,10 +1052,12 @@ async def approve_report(
 
 @router.post("/reports/{report_id}/reject", response_model=SentimentQuarterlyReportResponse)
 async def reject_report(
-    report_id: int, body: SentimentQuarterlyRejectRequest,
+    report_id: int,
+    body: SentimentQuarterlyRejectRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    rep = await _get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+    rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
     if rep.is_locked:
         raise HTTPException(status_code=400, detail="报告已锁定")
     _validate_transition(rep.status, SENTIMENT_DOC_STATUS_REJECTED)
@@ -971,6 +1069,7 @@ async def reject_report(
     await db.refresh(rep)
 
     from app.services.sentiment.notifier import create_notification
+
     await create_notification(
         db,
         notification_type=SENTIMENT_NOTIFY_REPORT_REJECTED,
@@ -983,8 +1082,12 @@ async def reject_report(
 
 
 @router.get("/reports/{report_id}/download")
-async def download_report(report_id: int, db: AsyncSession = Depends(get_db)):
-    rep = await _get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+async def download_report(
+    report_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
     if not rep.word_report_path or not Path(rep.word_report_path).exists():
         raise HTTPException(status_code=404, detail="Word 文档不存在")
     if rep.word_report_sha256:
@@ -1005,8 +1108,12 @@ async def download_report(report_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/reports/{report_id}/verify")
-async def reverify_report(report_id: int, db: AsyncSession = Depends(get_db)):
-    rep = await _get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+async def reverify_report(
+    report_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
     if not rep.ai_report_md or not rep.financial_input_json:
         raise HTTPException(status_code=400, detail="报告无内容或无财务数据, 无法核验")
     fin = FinancialInput.from_json(rep.financial_input_json)
@@ -1018,7 +1125,13 @@ async def reverify_report(report_id: int, db: AsyncSession = Depends(get_db)):
         )
     )
     events = [
-        {"id": e.id, "title": e.title, "content_text": e.content_text, "severity": e.severity, "publish_date": e.publish_date}
+        {
+            "id": e.id,
+            "title": e.title,
+            "content_text": e.content_text,
+            "severity": e.severity,
+            "publish_date": e.publish_date,
+        }
         for e in res.scalars().all()
     ]
     res2 = await db.execute(
@@ -1029,13 +1142,17 @@ async def reverify_report(report_id: int, db: AsyncSession = Depends(get_db)):
         )
     )
     briefings = [
-        {"id": b.id, "ai_summary": b.ai_summary or "", "audit_verification_json": b.audit_verification_json or ""}
+        {
+            "id": b.id,
+            "ai_summary": b.ai_summary or "",
+            "audit_verification_json": b.audit_verification_json or "",
+        }
         for b in res2.scalars().all()
     ]
     v = QuarterlyVerifier()
     report = v.verify(rep.ai_report_md, fin.data, events, briefings)
     rep.ai_report_verification_json = json.dumps(report.to_dict(), ensure_ascii=False)
-    rep.verification_failed = (not report.passed)
+    rep.verification_failed = not report.passed
     rep.verification_message = f"consistency_errors={report.error_count}"
     await db.commit()
     return report.to_dict()
@@ -1047,36 +1164,47 @@ async def reverify_report(report_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/scheduler/status")
-async def scheduler_status():
+async def scheduler_status(
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     s = get_scheduler()
     if s is None or not s.running:
         return {"running": False, "jobs": []}
     out = []
     for job in s.get_jobs():
-        out.append({
-            "id": job.id,
-            "name": job.name,
-            "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
-            "max_instances": job.max_instances,
-            "coalesce": job.coalesce,
-        })
+        out.append(
+            {
+                "id": job.id,
+                "name": job.name,
+                "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+                "max_instances": job.max_instances,
+                "coalesce": job.coalesce,
+            }
+        )
     return {"running": True, "jobs": out}
 
 
 @router.post("/scheduler/start")
-async def sched_start():
+async def sched_start(
+    current_user: User = Depends(get_current_user),
+):
     await start_scheduler()
     return {"ok": True}
 
 
 @router.post("/scheduler/stop")
-async def sched_stop():
+async def sched_stop(
+    current_user: User = Depends(get_current_user),
+):
     await stop_scheduler()
     return {"ok": True}
 
 
 @router.post("/scheduler/scan/now")
-async def sched_scan_now(body: Optional[SentimentScanRequest] = None):
+async def sched_scan_now(
+    body: Optional[SentimentScanRequest] = None,
+    current_user: User = Depends(get_current_user),
+):
     pid = body.project_id if body else None
     result = await scan_now(pid)
     return result

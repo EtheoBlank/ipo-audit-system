@@ -1,4 +1,5 @@
 """API routes for project management."""
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -17,10 +18,20 @@ from app.models.db_models import (
     IMPORT_KIND_BANK_STATEMENTS,
 )
 from app.models.audit import (
-    ProjectCreate, ProjectUpdate, ProjectResponse,
-    AccountBalanceCreate, AccountBalanceResponse,
-    ChronologicalAccountCreate, ChronologicalAccountResponse,
-    BankStatementCreate, BankStatementResponse,
+    ProjectCreate,
+    ProjectUpdate,
+    ProjectResponse,
+    AccountBalanceResponse,
+    ChronologicalAccountResponse,
+    BankStatementResponse,
+)
+from app.models.db.auth import User
+from app.services.auth import (
+    ensure_project_in_firm,
+    get_current_user,
+    get_current_user_optional,
+    project_default_firm_id,
+    scope_projects_to_firm,
 )
 from app.services.excel_parser import ExcelParser
 
@@ -37,24 +48,29 @@ async def _trigger_work_plan_on_import(
     try:
         from app.services.team_management import team_management_service
 
-        await team_management_service.on_accounts_imported(
-            db, project_id, import_kind, count
-        )
+        await team_management_service.on_accounts_imported(db, project_id, import_kind, count)
     except Exception:  # noqa: BLE001
         # 主流程不应被工作计划的失败拖垮
         import logging
-        logging.getLogger(__name__).exception(
-            "账套导入钩子触发工作计划生成失败，不影响主流程"
-        )
+
+        logging.getLogger(__name__).exception("账套导入钩子触发工作计划生成失败，不影响主流程")
 
 
 @router.post("/", response_model=ProjectResponse)
 async def create_project(
     project: ProjectCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Create a new audit project."""
-    db_project = Project(**project.model_dump())
+    payload = project.model_dump()
+    # 多租户硬隔离: 创建项目时若 user 有 firm_id 且 payload 未显式指定, 自动落 firm.
+    # admin 角色 / AUTH_ENABLED=false 时跳过.
+    if "firm_id" not in payload or payload.get("firm_id") is None:
+        default_firm = project_default_firm_id(current_user)
+        if default_firm is not None:
+            payload["firm_id"] = default_firm
+    db_project = Project(**payload)
     db.add(db_project)
     await db.commit()
     await db.refresh(db_project)
@@ -67,11 +83,14 @@ async def list_projects(
     limit: int = 100,
     status: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """List all audit projects."""
     query = select(Project)
     if status:
         query = query.where(Project.status == status)
+    # 多租户硬隔离: 按当前 user.firm_id 过滤 (admin 不过滤)
+    query = scope_projects_to_firm(query, current_user)
     query = query.offset(skip).limit(limit)
 
     result = await db.execute(query)
@@ -82,13 +101,11 @@ async def list_projects(
 async def get_project(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Get project by ID."""
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
-    return project
+    # 多租户硬隔离: 跨事务所访问抛 403
+    return await ensure_project_in_firm(db, project_id, current_user)
 
 
 @router.put("/{project_id}", response_model=ProjectResponse)
@@ -96,12 +113,10 @@ async def update_project(
     project_id: int,
     project_update: ProjectUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Update project information."""
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    project = await ensure_project_in_firm(db, project_id, current_user)
 
     for key, value in project_update.model_dump(exclude_unset=True).items():
         setattr(project, key, value)
@@ -115,12 +130,10 @@ async def update_project(
 async def delete_project(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Delete a project."""
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    project = await ensure_project_in_firm(db, project_id, current_user)
 
     await db.delete(project)
     await db.commit()
@@ -132,8 +145,12 @@ async def delete_project(
 async def upload_account_balances(
     project_id: int,
     file: UploadFile = File(...),
-    erp_type: str = Query("标准模板", description="ERP系统类型: 金蝶K3 Cloud, 金蝶云星空, 用友NC, 用友U8, 用友YonBIP, SAP, SAP ECC, 标准模板"),
+    erp_type: str = Query(
+        "标准模板",
+        description="ERP系统类型: 金蝶K3 Cloud, 金蝶云星空, 用友NC, 用友U8, 用友YonBIP, SAP, SAP ECC, 标准模板",
+    ),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload and parse account balance Excel file with ERP type auto-detection.
 
@@ -144,10 +161,8 @@ async def upload_account_balances(
     """
     from app.services.erp_adapters import ERPAdapterFactory, ERPType
 
-    # Verify project exists
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    if not result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="项目不存在")
+    # 多租户硬隔离: 校验项目归属
+    await ensure_project_in_firm(db, project_id, current_user)
 
     # Get ERP adapter
     # Map erp_type string to ERPType enum
@@ -196,9 +211,7 @@ async def upload_account_balances(
         balances.append(balance)
 
     await db.commit()
-    await _trigger_work_plan_on_import(
-        db, project_id, IMPORT_KIND_ACCOUNT_BALANCES, len(balances)
-    )
+    await _trigger_work_plan_on_import(db, project_id, IMPORT_KIND_ACCOUNT_BALANCES, len(balances))
     return {"message": f"成功导入 {len(balances)} 条科目余额记录"}
 
 
@@ -206,11 +219,11 @@ async def upload_account_balances(
 async def get_account_balances(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Get account balances for a project."""
-    result = await db.execute(
-        select(AccountBalance).where(AccountBalance.project_id == project_id)
-    )
+    await ensure_project_in_firm(db, project_id, current_user)
+    result = await db.execute(select(AccountBalance).where(AccountBalance.project_id == project_id))
     return result.scalars().all()
 
 
@@ -220,11 +233,10 @@ async def upload_chronological_accounts(
     project_id: int,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload and parse chronological account Excel file."""
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    if not result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="项目不存在")
+    await ensure_project_in_firm(db, project_id, current_user)
 
     df = await ExcelParser.parse_chronological_account(file)
 
@@ -239,24 +251,28 @@ async def upload_chronological_accounts(
             debit_amount=float(row.get("debit_amount", 0)),
             credit_amount=float(row.get("credit_amount", 0)),
             summary=str(row.get("summary", "")) if row.get("summary") else None,
-            auxiliary_accounting=str(row.get("auxiliary_accounting", "")) if row.get("auxiliary_accounting") else None,
+            auxiliary_accounting=str(row.get("auxiliary_accounting", ""))
+            if row.get("auxiliary_accounting")
+            else None,
         )
         db.add(account)
         accounts.append(account)
 
     await db.commit()
-    await _trigger_work_plan_on_import(
-        db, project_id, IMPORT_KIND_CHRONOLOGICAL, len(accounts)
-    )
+    await _trigger_work_plan_on_import(db, project_id, IMPORT_KIND_CHRONOLOGICAL, len(accounts))
     return {"message": f"成功导入 {len(accounts)} 条序时账记录"}
 
 
-@router.get("/{project_id}/chronological-accounts", response_model=List[ChronologicalAccountResponse])
+@router.get(
+    "/{project_id}/chronological-accounts", response_model=List[ChronologicalAccountResponse]
+)
 async def get_chronological_accounts(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Get chronological accounts for a project."""
+    await ensure_project_in_firm(db, project_id, current_user)
     result = await db.execute(
         select(ChronologicalAccount).where(ChronologicalAccount.project_id == project_id)
     )
@@ -269,11 +285,10 @@ async def upload_bank_statements(
     project_id: int,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload and parse bank statement Excel file."""
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    if not result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="项目不存在")
+    await ensure_project_in_firm(db, project_id, current_user)
 
     df = await ExcelParser.parse_bank_statement(file)
 
@@ -293,9 +308,7 @@ async def upload_bank_statements(
         statements.append(statement)
 
     await db.commit()
-    await _trigger_work_plan_on_import(
-        db, project_id, IMPORT_KIND_BANK_STATEMENTS, len(statements)
-    )
+    await _trigger_work_plan_on_import(db, project_id, IMPORT_KIND_BANK_STATEMENTS, len(statements))
     return {"message": f"成功导入 {len(statements)} 条银行对账单记录"}
 
 
@@ -303,9 +316,9 @@ async def upload_bank_statements(
 async def get_bank_statements(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Get bank statements for a project."""
-    result = await db.execute(
-        select(BankStatement).where(BankStatement.project_id == project_id)
-    )
+    await ensure_project_in_firm(db, project_id, current_user)
+    result = await db.execute(select(BankStatement).where(BankStatement.project_id == project_id))
     return result.scalars().all()

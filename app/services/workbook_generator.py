@@ -1,11 +1,9 @@
 """Workbook generation service for audit workpapers."""
+
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-from openpyxl.utils.dataframe import dataframe_to_rows
-from openpyxl.chart import BarChart, LineChart, Reference
 from pathlib import Path
-from datetime import datetime
 from typing import Iterable, Optional, Sequence
 
 from app.core.config import settings
@@ -60,7 +58,9 @@ class WorkbookGenerator:
             "header_font": Font(name="微软雅黑", size=11, bold=True, color="FFFFFF"),
             "header_fill": PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid"),
             "subheader_font": Font(name="微软雅黑", size=10, bold=True),
-            "subheader_fill": PatternFill(start_color="D6DCE5", end_color="D6DCE5", fill_type="solid"),
+            "subheader_fill": PatternFill(
+                start_color="D6DCE5", end_color="D6DCE5", fill_type="solid"
+            ),
             "title_font": Font(name="微软雅黑", size=14, bold=True),
             "normal_font": Font(name="微软雅黑", size=10),
             "thin_border": Border(
@@ -115,7 +115,16 @@ class WorkbookGenerator:
         ws.row_dimensions[1].height = 30
 
         # Headers
-        headers = ["科目编码", "科目名称", "期初余额", "借方发生额", "贷方发生额", "期末余额", "余额方向", "备注"]
+        headers = [
+            "科目编码",
+            "科目名称",
+            "期初余额",
+            "借方发生额",
+            "贷方发生额",
+            "期末余额",
+            "余额方向",
+            "备注",
+        ]
         for col, header in enumerate(headers, 1):
             ws.cell(row=2, column=col, value=header)
             self._apply_header_style(ws, 2, col)
@@ -212,9 +221,7 @@ class WorkbookGenerator:
         ]
 
         # Filter income/expense accounts
-        revenue_accounts = account_balances[
-            account_balances["account_code"].str.startswith(("5", "6", "7"), na=False)
-        ]
+        account_balances[account_balances["account_code"].str.startswith(("5", "6", "7"), na=False)]
 
         for row_idx, (item_name, item_code) in enumerate(income_items, 3):
             ws.cell(row=row_idx, column=1, value=item_name)
@@ -266,19 +273,6 @@ class WorkbookGenerator:
         ws.row_dimensions[2].height = 25
 
         # Balance sheet structure
-        assets_items = [
-            ("流动资产合计", "1000"),
-            ("非流动资产合计", "2000"),
-            ("资产总计", "0000"),
-        ]
-
-        liabilities_items = [
-            ("流动负债合计", "3000"),
-            ("非流动负债合计", "4000"),
-            ("负债合计", "0000"),
-            ("所有者权益合计", "5000"),
-            ("负债和所有者权益总计", "0000"),
-        ]
 
         output_path = self.output_dir / f"资产负债表_{self.fiscal_year}.xlsx"
         wb.save(output_path)
@@ -349,19 +343,29 @@ class WorkbookGenerator:
         # Headers - including consolidation columns if provided
         if consolidation_balances is not None:
             headers = [
-                "科目编码", "科目名称",
-                "期初借方(单)", "期初贷方(单)",
-                "本期借方(单)", "本期贷方(单)",
-                "期末借方(单)", "期末贷方(单)",
-                "期末借方(合)", "期末贷方(合)",
-                "内部抵销(资产)", "内部抵销(负债)",
+                "科目编码",
+                "科目名称",
+                "期初借方(单)",
+                "期初贷方(单)",
+                "本期借方(单)",
+                "本期贷方(单)",
+                "期末借方(单)",
+                "期末贷方(单)",
+                "期末借方(合)",
+                "期末贷方(合)",
+                "内部抵销(资产)",
+                "内部抵销(负债)",
             ]
         else:
             headers = [
-                "科目编码", "科目名称",
-                "期初借方", "期初贷方",
-                "本期借方", "本期贷方",
-                "期末借方", "期末贷方",
+                "科目编码",
+                "科目名称",
+                "期初借方",
+                "期初贷方",
+                "本期借方",
+                "本期贷方",
+                "期末借方",
+                "期末贷方",
             ]
 
         for col, header in enumerate(headers, 1):
@@ -370,19 +374,29 @@ class WorkbookGenerator:
         ws.row_dimensions[2].height = 30
 
         # Calculate trial balance for standalone
-        debit_total_begin = account_balances[account_balances["balance_direction"] == "借"]["beginning_balance"].sum()
-        credit_total_begin = account_balances[account_balances["balance_direction"] == "贷"]["beginning_balance"].sum()
+        debit_total_begin = account_balances[account_balances["balance_direction"] == "借"][
+            "beginning_balance"
+        ].sum()
+        credit_total_begin = account_balances[account_balances["balance_direction"] == "贷"][
+            "beginning_balance"
+        ].sum()
         debit_total_current = account_balances["debit_amount"].sum()
         credit_total_current = account_balances["credit_amount"].sum()
-        debit_total_end = account_balances[account_balances["balance_direction"] == "借"]["ending_balance"].sum()
-        credit_total_end = account_balances[account_balances["balance_direction"] == "贷"]["ending_balance"].sum()
+        debit_total_end = account_balances[account_balances["balance_direction"] == "借"][
+            "ending_balance"
+        ].sum()
+        credit_total_end = account_balances[account_balances["balance_direction"] == "贷"][
+            "ending_balance"
+        ].sum()
 
         # Calculate consolidation totals if provided
         cons_debit_end = 0
         cons_credit_end = 0
         if consolidation_balances is not None:
             cons_debit = consolidation_balances[consolidation_balances["balance_direction"] == "借"]
-            cons_credit = consolidation_balances[consolidation_balances["balance_direction"] == "贷"]
+            cons_credit = consolidation_balances[
+                consolidation_balances["balance_direction"] == "贷"
+            ]
             cons_debit_end = cons_debit["ending_balance"].sum()
             cons_credit_end = cons_credit["ending_balance"].sum()
 
@@ -400,8 +414,12 @@ class WorkbookGenerator:
         if consolidation_balances is not None:
             ws.cell(row=summary_row, column=9, value=cons_debit_end)
             ws.cell(row=summary_row, column=10, value=cons_credit_end)
-            ws.cell(row=summary_row, column=11, value=debit_total_end - cons_debit_end)  # 内部抵销资产
-            ws.cell(row=summary_row, column=12, value=credit_total_end - cons_credit_end)  # 内部抵销负债
+            ws.cell(
+                row=summary_row, column=11, value=debit_total_end - cons_debit_end
+            )  # 内部抵销资产
+            ws.cell(
+                row=summary_row, column=12, value=credit_total_end - cons_credit_end
+            )  # 内部抵销负债
 
         # Apply summary style
         for col in range(1, len(headers) + 1):
@@ -418,7 +436,9 @@ class WorkbookGenerator:
         if consolidation_balances is not None:
             cons_is_balanced = abs(cons_debit_end - cons_credit_end) < 0.01
             ws.cell(row=check_row + 1, column=1, value="合并平衡状态")
-            ws.cell(row=check_row + 1, column=2, value="✅ 平衡" if cons_is_balanced else "❌ 不平衡")
+            ws.cell(
+                row=check_row + 1, column=2, value="✅ 平衡" if cons_is_balanced else "❌ 不平衡"
+            )
 
             ws.cell(row=check_row + 2, column=1, value="内部交易抵销金额")
             ws.cell(row=check_row + 2, column=3, value=debit_total_end - cons_debit_end)
@@ -429,7 +449,9 @@ class WorkbookGenerator:
         if consolidation_balances is not None:
             col_widths.extend([12, 12, 12, 12])
         for idx, width in enumerate(col_widths, 1):
-            ws.column_dimensions[chr(64 + idx) if idx <= 26 else "A" + chr(64 + idx - 26)].width = width
+            ws.column_dimensions[
+                chr(64 + idx) if idx <= 26 else "A" + chr(64 + idx - 26)
+            ].width = width
 
         # Freeze panes
         ws.freeze_panes = "A3"
@@ -488,7 +510,7 @@ class WorkbookGenerator:
 
             kb_refs = n.get("references_kb") or []
             kb_text = "\n".join(
-                f"《{x.get('book_title','')}》"
+                f"《{x.get('book_title', '')}》"
                 + (f" / {x['chapter']}" if x.get("chapter") else "")
                 + (f" / 第{x['page']}页" if x.get("page") else "")
                 + f"  相似度 {x.get('score', 0):.2f}"
@@ -498,7 +520,7 @@ class WorkbookGenerator:
 
             reg_refs = n.get("references_regulations") or []
             reg_text = "\n".join(
-                f"《{x.get('title','')}》"
+                f"《{x.get('title', '')}》"
                 + (f" ({x['document_no']})" if x.get("document_no") else "")
                 + (f"  {x['publish_date']}" if x.get("publish_date") else "")
                 for x in reg_refs
@@ -573,7 +595,9 @@ class WorkbookGenerator:
         ws_sum.title = "余额汇总"
         ws_sum.merge_cells("A1:G1")
         title = ws_sum["A1"]
-        title.value = f"{self.company_name} - {account_code} {account_name} 长期资产底稿 (期末 {period_end})"
+        title.value = (
+            f"{self.company_name} - {account_code} {account_name} 长期资产底稿 (期末 {period_end})"
+        )
         title.font = styles["title_font"]
         title.alignment = styles["center_align"]
         ws_sum.row_dimensions[1].height = 30
@@ -629,18 +653,14 @@ class WorkbookGenerator:
         ws_sum.cell(row=check_row + 1, column=2, value=round(identity_audited, 2))
         balanced_book = abs(identity_book) < 0.01
         balanced_audited = abs(identity_audited) < 0.01
-        ws_sum.cell(
-            row=check_row, column=4, value="✅ 平衡" if balanced_book else "❌ 不平衡"
-        )
+        ws_sum.cell(row=check_row, column=4, value="✅ 平衡" if balanced_book else "❌ 不平衡")
         ws_sum.cell(
             row=check_row + 1, column=4, value="✅ 平衡" if balanced_audited else "❌ 不平衡"
         )
         if not balanced_audited:
             for c in range(1, 8):
                 cell = ws_sum.cell(row=check_row + 1, column=c)
-                cell.fill = PatternFill(
-                    start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"
-                )
+                cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
 
         # 列宽
         for idx, w in enumerate([26, 18, 18, 18, 12, 12, 30], 1):
@@ -660,9 +680,16 @@ class WorkbookGenerator:
             ws.row_dimensions[1].height = 28
 
             detail_headers = [
-                "凭证日期", "凭证号", "摘要", "对方科目",
-                "账面金额", "审定金额", "审计调整",
-                "调整原因", "底稿索引", "审定状态",
+                "凭证日期",
+                "凭证号",
+                "摘要",
+                "对方科目",
+                "账面金额",
+                "审定金额",
+                "审计调整",
+                "调整原因",
+                "底稿索引",
+                "审定状态",
             ]
             for col, h in enumerate(detail_headers, 1):
                 ws.cell(row=2, column=col, value=h)
@@ -696,8 +723,16 @@ class WorkbookGenerator:
             # 合计行
             last = len(source_rows) + 3
             ws.cell(row=last, column=1, value="合计")
-            ws.cell(row=last, column=5, value=sum(float(r.get("book_amount", 0) or 0) for r in source_rows))
-            ws.cell(row=last, column=6, value=sum(float(r.get("audited_amount", 0) or 0) for r in source_rows))
+            ws.cell(
+                row=last,
+                column=5,
+                value=sum(float(r.get("book_amount", 0) or 0) for r in source_rows),
+            )
+            ws.cell(
+                row=last,
+                column=6,
+                value=sum(float(r.get("audited_amount", 0) or 0) for r in source_rows),
+            )
             ws.cell(
                 row=last,
                 column=7,
@@ -779,9 +814,12 @@ class WorkbookGenerator:
             wb.save(output_path)
         except (OSError, IOError, PermissionError) as exc:
             import logging
+
             logging.getLogger(__name__).exception(
                 "保存长期资产底稿失败 (account=%s, period=%s): %s",
-                account_code, period_end, exc,
+                account_code,
+                period_end,
+                exc,
             )
             raise IOError(
                 f"无法保存底稿到 {output_path}: {exc}. 请检查磁盘空间和目录权限."

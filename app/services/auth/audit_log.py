@@ -1,4 +1,5 @@
 """Audit Log — 记录 + 查询 (仅 append, 不允许 UPDATE/DELETE)."""
+
 from __future__ import annotations
 
 import json
@@ -68,9 +69,7 @@ async def record_audit_log(
       - 敏感字段过滤由调用方负责 (例 ``payload=payload.model_dump(exclude={'password'})``)
     """
     try:
-        payload_str = _truncate(
-            _serialize(payload), settings.AUDIT_LOG_PAYLOAD_MAX_CHARS
-        )
+        payload_str = _truncate(_serialize(payload), settings.AUDIT_LOG_PAYLOAD_MAX_CHARS)
         log = AuditLog(
             user_id=user_id,
             user_display=user_display,
@@ -181,8 +180,10 @@ async def query_audit_logs(
     stmt = select(AuditLog)
     if where_clause is not None:
         stmt = stmt.where(where_clause)
-    stmt = stmt.order_by(desc(AuditLog.created_at)).offset(max(0, int(skip))).limit(
-        max(1, min(500, int(limit)))
+    stmt = (
+        stmt.order_by(desc(AuditLog.created_at))
+        .offset(max(0, int(skip)))
+        .limit(max(1, min(500, int(limit))))
     )
     items = list((await db.execute(stmt)).scalars().all())
     return {"total": total, "items": items}

@@ -1,4 +1,5 @@
 """Auth API — login/logout/refresh/me + Users / Firms / Roles / Permissions / Audit Logs / Approvals."""
+
 from __future__ import annotations
 
 import logging
@@ -8,11 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.database import get_db
 from app.models.auth import (
     AccessTokenResponse,
     ApprovalDecision,
+    ApprovalWithdrawRequest,
     ApprovalWorkflowCreate,
     ApprovalWorkflowResponse,
     AuditLogListResponse,
@@ -35,7 +36,6 @@ from app.models.auth import (
     UserUpdate,
 )
 from app.models.db.auth import (
-    APPROVAL_STATUS_PENDING,
     AUDIT_ACTION_APPROVE,
     AUDIT_ACTION_CREATE,
     AUDIT_ACTION_DELETE,
@@ -44,7 +44,6 @@ from app.models.db.auth import (
     AUDIT_ACTION_REJECT,
     AUDIT_ACTION_UPDATE,
     ApprovalWorkflow,
-    AuditLog,
     Firm,
     Permission,
     Role,
@@ -55,20 +54,21 @@ from app.models.db.auth import (
 )
 from app.services.auth import (
     AccountLockedError,
+    ApprovalConflict,
     ApprovalEngine,
     AuthenticationError,
     DEFAULT_FIVE_LEVEL_FLOW,
     InvalidApprovalAction,
+    audit_log_stats,
     change_password as svc_change_password,
     get_current_user,
-    has_permission,
     hash_password,
     login as svc_login,
     query_audit_logs,
     record_audit_log,
     refresh_access_token as svc_refresh,
-    require_permission,
     require_role,
+    rotate_audit_logs,
 )
 from app.services.auth.approval import StepSpec
 from app.services.auth.service import reset_password as svc_reset_password
@@ -172,9 +172,7 @@ async def change_my_password(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        await svc_change_password(
-            db, current_user, payload.old_password, payload.new_password
-        )
+        await svc_change_password(db, current_user, payload.old_password, payload.new_password)
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     await record_audit_log(
@@ -343,6 +341,7 @@ async def list_users(
     if keyword:
         # P0 修复 — 转义 LIKE 通配符防全表扫描 DoS
         from app.services.auth.audit_log import _escape_like
+
         kw = keyword[:200]
         like = f"%{_escape_like(kw)}%"
         stmt = stmt.where(
@@ -395,6 +394,7 @@ async def update_user(
     # 防自我提权 — 不允许把自己 role 提升到超出当前级别
     if "role" in data and user.id == current_user.id:
         from app.services.auth.rbac import role_at_least
+
         if role_at_least(data["role"], current_user.role) and data["role"] != current_user.role:
             raise HTTPException(
                 status_code=403,
@@ -552,11 +552,9 @@ async def assign_role_permissions(
         raise HTTPException(status_code=404, detail="role 不存在")
     # 清旧
     existing = list(
-        (
-            await db.execute(
-                select(RolePermission).where(RolePermission.role_id == role_id)
-            )
-        ).scalars().all()
+        (await db.execute(select(RolePermission).where(RolePermission.role_id == role_id)))
+        .scalars()
+        .all()
     )
     for rp in existing:
         await db.delete(rp)
@@ -609,6 +607,62 @@ async def list_audit_logs(
 
 
 # ============================================================
+#  Audit Log 运维 (admin) — 归档 / 统计
+# ============================================================
+
+
+@router.get("/audit-logs/stats")
+async def get_audit_log_stats(
+    current_user: User = Depends(require_role(ROLE_ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """返回 AuditLog 行数 / 时间跨度 / firm 分布 — 给 ops 判断要不要归档."""
+    return await audit_log_stats(db)
+
+
+@router.post("/audit-logs/rotate")
+async def rotate_audit_log_archive(
+    months: int = Query(6, ge=1, le=120, description="保留近 N 月数据 (默认 6, 之前归档)"),
+    confirm: bool = Query(False, description="必须 True 才真正归档 + 删除; 否则 dry-run"),
+    batch_size: int = Query(5000, ge=100, le=20000),
+    current_user: User = Depends(require_role(ROLE_ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """把 N 月前的 AuditLog 行复制到 ``audit_logs_archive`` + 原表删除.
+
+    安全:
+      - 仅 admin 可调
+      - 默认 dry-run (confirm=False) — 只返回"会删多少行"
+      - 真删除走 raw SQL, 绕开 SQLAlchemy event 的 before_delete 拦截 (归档场景例外)
+      - 删除后写一条 AuditLog 自身记录 (action=audit_log_rotate)
+
+    建议在维护窗口跑, 避免并发写 AuditLog.
+    """
+    result = await rotate_audit_logs(
+        db,
+        months=months,
+        confirm=confirm,
+        batch_size=batch_size,
+    )
+    # 记录归档动作本身 (rotate 完成才记, 避免 rotate 失败也产生噪音)
+    if confirm and result.get("archived", 0) > 0:
+        await record_audit_log(
+            db,
+            user_id=getattr(current_user, "id", None),
+            user_display=getattr(current_user, "full_name", None),
+            user_role=getattr(current_user, "role", None),
+            firm_id=getattr(current_user, "firm_id", None),
+            action="audit_log_rotate",
+            resource_type="audit_log",
+            summary=(
+                f"归档 {result.get('archived')} 行 (cutoff={result.get('cutoff')}); months={months}"
+            ),
+            payload=result,
+        )
+    return result
+
+
+# ============================================================
 #  Approval Workflow
 # ============================================================
 
@@ -644,13 +698,21 @@ async def create_approval(
     # P0 修复 — 校验关联项目存在
     if payload.project_id is not None:
         from app.models.db_models import Project as _Project
+
         proj = (
             await db.execute(select(_Project).where(_Project.id == payload.project_id))
         ).scalar_one_or_none()
         if proj is None:
             raise HTTPException(status_code=404, detail=f"项目 {payload.project_id} 不存在")
     steps = (
-        [StepSpec(step_no=s.step_no, required_role=s.required_role, approver_user_id=s.approver_user_id) for s in payload.steps]
+        [
+            StepSpec(
+                step_no=s.step_no,
+                required_role=s.required_role,
+                approver_user_id=s.approver_user_id,
+            )
+            for s in payload.steps
+        ]
         if payload.steps
         else DEFAULT_FIVE_LEVEL_FLOW
     )
@@ -739,7 +801,11 @@ async def decide_approval(
             action=payload.action,
             comment=payload.comment,
             delegate_to_user_id=payload.delegate_to_user_id,
+            expected_version=payload.expected_version,
         )
+    except ApprovalConflict as exc:
+        # 并发审批 — 走 409 Conflict, 让前端提示用户刷新后重试
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except InvalidApprovalAction as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     action_map = {"approve": AUDIT_ACTION_APPROVE, "reject": AUDIT_ACTION_REJECT}
@@ -751,7 +817,7 @@ async def decide_approval(
         action=action_map.get(payload.action, AUDIT_ACTION_UPDATE),
         resource_type="auth.approval_workflow",
         resource_id=workflow_id,
-        summary=f"审批 {payload.action} (step={wf.current_step}, status={wf.status})",
+        summary=f"审批 {payload.action} (step={wf.current_step}, status={wf.status}, version={wf.version})",
         payload=payload.model_dump(),
     )
     return ApprovalWorkflowResponse.model_validate(wf)
@@ -760,13 +826,20 @@ async def decide_approval(
 @router.post("/approvals/{workflow_id}/withdraw", response_model=ApprovalWorkflowResponse)
 async def withdraw_approval(
     workflow_id: int,
+    payload: Optional[ApprovalWithdrawRequest] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    expected_version = payload.expected_version if payload else None
     try:
         wf = await ApprovalEngine.withdraw(
-            db, workflow_id=workflow_id, actor=current_user
+            db,
+            workflow_id=workflow_id,
+            actor=current_user,
+            expected_version=expected_version,
         )
+    except ApprovalConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except InvalidApprovalAction as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await record_audit_log(
@@ -777,6 +850,6 @@ async def withdraw_approval(
         action=AUDIT_ACTION_UPDATE,
         resource_type="auth.approval_workflow",
         resource_id=workflow_id,
-        summary="撤回审批",
+        summary=f"撤回审批 (version={wf.version})",
     )
     return ApprovalWorkflowResponse.model_validate(wf)

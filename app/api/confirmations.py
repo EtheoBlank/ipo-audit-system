@@ -37,17 +37,17 @@ from __future__ import annotations
 import io
 import json
 import logging
-import re
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api._helpers import get_or_404, get_project_or_404
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.confirmation import (
@@ -90,7 +90,6 @@ from app.models.db_models import (
     RESPONSE_REJECT,
     RESPONSE_STATUS_LABELS,
     RESPONSE_UNCLEAR,
-    Project,
 )
 from app.services.confirmation import (
     ConfirmationExporter,
@@ -100,6 +99,8 @@ from app.services.confirmation import (
     LetterGenerationError,
     ResponseParseError,
 )
+from app.models.db.auth import User
+from app.services.auth import get_current_user, get_current_user_optional
 from app.services.sales_ledger.deepseek_client import DeepSeekClient
 
 logger = logging.getLogger(__name__)
@@ -118,12 +119,16 @@ def _deepseek_client() -> DeepSeekClient:
     )
 
 
-async def _get_project_or_404(db: AsyncSession, project_id: int) -> Project:
-    res = await db.execute(select(Project).where(Project.id == project_id))
-    proj = res.scalar_one_or_none()
-    if not proj:
-        raise HTTPException(status_code=404, detail="项目不存在")
-    return proj
+async def _get_case_or_404(db: AsyncSession, case_id: int) -> ConfirmationCase:
+    return await get_or_404(db, ConfirmationCase, case_id, label="案卷")
+
+
+async def _get_item_or_404(db: AsyncSession, item_id: int) -> ConfirmationItem:
+    return await get_or_404(db, ConfirmationItem, item_id, label="函证对象")
+
+
+async def _get_letter_or_404(db: AsyncSession, letter_id: int) -> ConfirmationLetter:
+    return await get_or_404(db, ConfirmationLetter, letter_id, label="发函记录")
 
 
 def _letter_generator() -> ConfirmationLetterGenerator:
@@ -163,7 +168,9 @@ PARTY_TYPE_LETTER_PREFIX: dict[str, str] = {
 
 
 @router.get("/subjects", response_model=SubjectCatalogueResponse)
-async def get_subjects():
+async def get_subjects(
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     """返回函证涉及的全部科目清单 + 银行模板字段 + 状态/类型字典。"""
     subjects = [
         SubjectInfo(
@@ -198,8 +205,9 @@ async def get_subjects():
 async def list_cases(
     project_id: int = Query(..., description="项目 ID"),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     res = await db.execute(
         select(ConfirmationCase)
         .where(ConfirmationCase.project_id == project_id)
@@ -212,8 +220,9 @@ async def list_cases(
 async def create_case(
     req: ConfirmationCaseCreateRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    await _get_project_or_404(db, req.project_id)
+    await get_project_or_404(db, req.project_id)
     case = ConfirmationCase(
         project_id=req.project_id,
         case_name=req.case_name,
@@ -232,11 +241,9 @@ async def create_case(
 async def get_case(
     case_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    res = await db.execute(select(ConfirmationCase).where(ConfirmationCase.id == case_id))
-    case = res.scalar_one_or_none()
-    if not case:
-        raise HTTPException(status_code=404, detail="案卷不存在")
+    case = await _get_case_or_404(db, case_id)
     return case
 
 
@@ -245,6 +252,7 @@ async def lock_case(
     case_id: int,
     req: LockCaseRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """锁定案卷 — 一旦确定发函,锁定后统计表与发函日期不再变化。
 
@@ -254,28 +262,29 @@ async def lock_case(
       3) send_letter 时固化 subject_matters_snapshot / book_balance_snapshot,
          后续 update_item 不影响已发函追溯
     """
-    res = await db.execute(select(ConfirmationCase).where(ConfirmationCase.id == case_id))
-    case = res.scalar_one_or_none()
-    if not case:
-        raise HTTPException(status_code=404, detail="案卷不存在")
+    case = await _get_case_or_404(db, case_id)
     if case.is_locked:
         raise HTTPException(status_code=400, detail="案卷已锁定,不可重复锁定")
 
     # 一次拉取所有 item, 避免重复 SELECT
-    res = await db.execute(
-        select(ConfirmationItem).where(ConfirmationItem.case_id == case_id)
-    )
+    res = await db.execute(select(ConfirmationItem).where(ConfirmationItem.case_id == case_id))
     items = list(res.scalars().all())
     if not items:
         raise HTTPException(status_code=400, detail="案卷下没有函证对象,无法锁定")
 
     # 检查重发: 已发函且未作废的 item 不允许再进入确认态
-    active_letters = (await db.execute(
-        select(ConfirmationLetter).where(
-            ConfirmationLetter.case_id == case_id,
-            ConfirmationLetter.letter_status == "sent",
+    active_letters = (
+        (
+            await db.execute(
+                select(ConfirmationLetter).where(
+                    ConfirmationLetter.case_id == case_id,
+                    ConfirmationLetter.letter_status == "sent",
+                )
+            )
         )
-    )).scalars().all()
+        .scalars()
+        .all()
+    )
     if active_letters:
         raise HTTPException(
             status_code=400,
@@ -299,23 +308,27 @@ async def lock_case(
 async def unlock_case(
     case_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """解锁 — 仅当案卷下无任何已发函(letter_status='sent')且无回函时才允许。
 
     同时清理 item.sent_letter_id / response_id 残留引用(例如作废 letter 后的悬空指针)。
     """
-    res = await db.execute(select(ConfirmationCase).where(ConfirmationCase.id == case_id))
-    case = res.scalar_one_or_none()
-    if not case:
-        raise HTTPException(status_code=404, detail="案卷不存在")
+    case = await _get_case_or_404(db, case_id)
 
     # 严格检查: 任何已发函 (sent) 或回函 (response) 都不允许解锁
-    active_letters = (await db.execute(
-        select(ConfirmationLetter).where(
-            ConfirmationLetter.case_id == case_id,
-            ConfirmationLetter.letter_status == "sent",
+    active_letters = (
+        (
+            await db.execute(
+                select(ConfirmationLetter).where(
+                    ConfirmationLetter.case_id == case_id,
+                    ConfirmationLetter.letter_status == "sent",
+                )
+            )
         )
-    )).scalars().all()
+        .scalars()
+        .all()
+    )
     if active_letters:
         raise HTTPException(
             status_code=400,
@@ -323,11 +336,13 @@ async def unlock_case(
         )
 
     # 任何 response (回函) 都不允许解锁
-    response_count = (await db.execute(
-        select(func.count(ConfirmationResponse.id))
-        .join(ConfirmationLetter, ConfirmationResponse.letter_id == ConfirmationLetter.id)
-        .where(ConfirmationLetter.case_id == case_id)
-    )).scalar() or 0
+    response_count = (
+        await db.execute(
+            select(func.count(ConfirmationResponse.id))
+            .join(ConfirmationLetter, ConfirmationResponse.letter_id == ConfirmationLetter.id)
+            .where(ConfirmationLetter.case_id == case_id)
+        )
+    ).scalar() or 0
     if response_count:
         raise HTTPException(
             status_code=400,
@@ -339,9 +354,7 @@ async def unlock_case(
     case.locked_by = None
     case.lock_reason = None
     # 清理 item 的悬空引用 + 退回 confirmed → draft
-    res = await db.execute(
-        select(ConfirmationItem).where(ConfirmationItem.case_id == case_id)
-    )
+    res = await db.execute(select(ConfirmationItem).where(ConfirmationItem.case_id == case_id))
     for it in res.scalars().all():
         if it.status == ITEM_STATUS_CONFIRMED:
             it.status = ITEM_STATUS_DRAFT
@@ -365,12 +378,10 @@ async def generate_stats(
     case_id: int,
     req: GenerateStatsRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """从账套自动生成函证对象清单。"""
-    res = await db.execute(select(ConfirmationCase).where(ConfirmationCase.id == case_id))
-    case = res.scalar_one_or_none()
-    if not case:
-        raise HTTPException(status_code=404, detail="案卷不存在")
+    case = await _get_case_or_404(db, case_id)
 
     builder = ConfirmationStatsBuilder(db)
     try:
@@ -400,6 +411,7 @@ async def generate_stats(
 async def list_items(
     case_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     res = await db.execute(
         select(ConfirmationItem)
@@ -429,6 +441,7 @@ async def update_item(
     item_id: int,
     payload: dict[str, Any],
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """手工修改函证对象。
 
@@ -437,14 +450,13 @@ async def update_item(
       - 未锁定: 上述 + subject_matters / amount / account 等可改
       - party_name / party_id / sent_letter_id / response_id / version / status 任何时候都不可改
     """
-    res = await db.execute(select(ConfirmationItem).where(ConfirmationItem.id == item_id))
-    item = res.scalar_one_or_none()
-    if not item:
-        raise HTTPException(status_code=404, detail="函证对象不存在")
+    item = await _get_item_or_404(db, item_id)
 
     res = await db.execute(select(ConfirmationCase).where(ConfirmationCase.id == item.case_id))
     case = res.scalar_one_or_none()
-    allowed = ITEM_LOCKED_ALLOWED_FIELDS if (case and case.is_locked) else ITEM_UNLOCKED_ALLOWED_FIELDS
+    allowed = (
+        ITEM_LOCKED_ALLOWED_FIELDS if (case and case.is_locked) else ITEM_UNLOCKED_ALLOWED_FIELDS
+    )
 
     # 拒绝白名单外的字段
     rejected = [k for k in payload if k not in allowed]
@@ -474,6 +486,7 @@ async def send_letter(
     item_id: int,
     req: SendLetterRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """生成询证函并锁定发函记录。
 
@@ -485,10 +498,7 @@ async def send_letter(
       4) try/except 兜底: 失败时回滚 item 状态 (避免脏数据)
       5) 乐观锁: item.version 自增
     """
-    res = await db.execute(select(ConfirmationItem).where(ConfirmationItem.id == item_id))
-    item = res.scalar_one_or_none()
-    if not item:
-        raise HTTPException(status_code=404, detail="函证对象不存在")
+    item = await _get_item_or_404(db, item_id)
     res = await db.execute(select(ConfirmationCase).where(ConfirmationCase.id == item.case_id))
     case = res.scalar_one_or_none()
     if not case:
@@ -497,13 +507,17 @@ async def send_letter(
         raise HTTPException(status_code=400, detail="案卷尚未锁定,无法发函。请先『确定发函』。")
     # 状态机: 收到回函后(partial/responded/rejected/mismatch)不能再发函, 必须先作废旧 letter
     if item.status in (
-        ITEM_STATUS_SENT, ITEM_STATUS_RESPONDED, ITEM_STATUS_PARTIAL,
-        ITEM_STATUS_MISMATCH, ITEM_STATUS_REJECTED, ITEM_STATUS_VOIDED,
+        ITEM_STATUS_SENT,
+        ITEM_STATUS_RESPONDED,
+        ITEM_STATUS_PARTIAL,
+        ITEM_STATUS_MISMATCH,
+        ITEM_STATUS_REJECTED,
+        ITEM_STATUS_VOIDED,
     ):
         raise HTTPException(
             status_code=400,
             detail=f"函证对象当前状态为 {item.status},不可发函。"
-                   f"若要重新发函,请先作废旧发函 (POST /letters/{{id}}/void)。",
+            f"若要重新发函,请先作废旧发函 (POST /letters/{{id}}/void)。",
         )
 
     # 1) 选模板
@@ -554,8 +568,13 @@ async def send_letter(
             current_deposit=item.book_balance if item.party_type == PARTY_TYPE_BANK else 0.0,
             transaction_amount=0.0,
             repayment_amount=0.0,
-            direction=("应收账款" if item.party_type == "customer" else
-                       "应付账款" if item.party_type == "supplier" else "其他往来"),
+            direction=(
+                "应收账款"
+                if item.party_type == "customer"
+                else "应付账款"
+                if item.party_type == "supplier"
+                else "其他往来"
+            ),
             transaction_verb=("销售" if item.party_type == "customer" else "采购"),
             repayment_verb=("回款" if item.party_type == "customer" else "付款"),
             unsettled_invoice_count=0,
@@ -577,12 +596,14 @@ async def send_letter(
     }
 
     # 计算 seq (同 case+item 下的发函序号)
-    seq = (await db.execute(
-        select(func.count(ConfirmationLetter.id)).where(
-            ConfirmationLetter.case_id == case.id,
-            ConfirmationLetter.item_id == item.id,
+    seq = (
+        await db.execute(
+            select(func.count(ConfirmationLetter.id)).where(
+                ConfirmationLetter.case_id == case.id,
+                ConfirmationLetter.item_id == item.id,
+            )
         )
-    )).scalar() or 0
+    ).scalar() or 0
     seq += 1
 
     letter = ConfirmationLetter(
@@ -599,8 +620,11 @@ async def send_letter(
         recipient=req.recipient or item.party_name,
         recipient_address=req.recipient_address,
         courier_no=req.courier_no,
-        expected_reply_date=(datetime.combine(req.expected_reply_date, datetime.min.time())
-                             if req.expected_reply_date else None),
+        expected_reply_date=(
+            datetime.combine(req.expected_reply_date, datetime.min.time())
+            if req.expected_reply_date
+            else None
+        ),
         content_snapshot=content_text,
         amount_snapshot=json.dumps(amount_snapshot, ensure_ascii=False),
         file_path=str(path),
@@ -641,11 +665,9 @@ async def send_letter(
 async def get_letter(
     letter_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    res = await db.execute(select(ConfirmationLetter).where(ConfirmationLetter.id == letter_id))
-    letter = res.scalar_one_or_none()
-    if not letter:
-        raise HTTPException(status_code=404, detail="发函记录不存在")
+    letter = await _get_letter_or_404(db, letter_id)
     return letter
 
 
@@ -653,11 +675,9 @@ async def get_letter(
 async def download_letter(
     letter_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    res = await db.execute(select(ConfirmationLetter).where(ConfirmationLetter.id == letter_id))
-    letter = res.scalar_one_or_none()
-    if not letter:
-        raise HTTPException(status_code=404, detail="发函记录不存在")
+    letter = await _get_letter_or_404(db, letter_id)
     if not letter.file_path:
         raise HTTPException(status_code=404, detail="发函文件未生成")
     p = Path(letter.file_path)
@@ -673,14 +693,19 @@ async def download_letter(
         raise HTTPException(status_code=404, detail="发函文件已丢失")
     # RFC 5987 文件名编码 (中文支持)
     import urllib.parse
+
     encoded_name = urllib.parse.quote(p.name, safe="")
-    media_type = "application/pdf" if letter.file_format == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    media_type = (
+        "application/pdf"
+        if letter.file_format == "pdf"
+        else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
     return StreamingResponse(
         io.BytesIO(target.read_bytes()),
         media_type=media_type,
         headers={
             "Content-Disposition": (
-                f"attachment; filename=\"letter_{letter_id}.{letter.file_format or 'docx'}\"; "
+                f'attachment; filename="letter_{letter_id}.{letter.file_format or "docx"}"; '
                 f"filename*=UTF-8''{encoded_name}"
             ),
         },
@@ -692,6 +717,7 @@ async def void_letter(
     letter_id: int,
     payload: dict[str, Any],
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """作废发函。
 
@@ -701,10 +727,7 @@ async def void_letter(
       3) 清理已生成的 docx/pdf 文件
       4) 退回 item.status 到 confirmed (允许重新发函, seq 自增不会撞)
     """
-    res = await db.execute(select(ConfirmationLetter).where(ConfirmationLetter.id == letter_id))
-    letter = res.scalar_one_or_none()
-    if not letter:
-        raise HTTPException(status_code=404, detail="发函记录不存在")
+    letter = await _get_letter_or_404(db, letter_id)
     if letter.letter_status == "voided":
         raise HTTPException(status_code=400, detail="发函已作废, 不可重复作废")
 
@@ -720,9 +743,7 @@ async def void_letter(
 
     letter.letter_status = "voided"
     # 退回 item 状态
-    res = await db.execute(
-        select(ConfirmationItem).where(ConfirmationItem.id == letter.item_id)
-    )
+    res = await db.execute(select(ConfirmationItem).where(ConfirmationItem.id == letter.item_id))
     item = res.scalar_one_or_none()
     if item:
         item.status = ITEM_STATUS_CONFIRMED
@@ -749,28 +770,24 @@ async def void_letter(
 async def remind_letter(
     letter_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """催办 — 增加催办次数。
 
     P0 修复: 必须 letter_status='sent' AND item.status 在 (SENT, NO_REPLY) 之一。
     收到回函(partial/responded/reject)后催办无意义。
     """
-    res = await db.execute(select(ConfirmationLetter).where(ConfirmationLetter.id == letter_id))
-    letter = res.scalar_one_or_none()
-    if not letter:
-        raise HTTPException(status_code=404, detail="发函记录不存在")
+    letter = await _get_letter_or_404(db, letter_id)
     if letter.letter_status != "sent":
         raise HTTPException(status_code=400, detail="发函状态非 'sent', 不可催办")
     # 检查 item 状态
-    res = await db.execute(
-        select(ConfirmationItem).where(ConfirmationItem.id == letter.item_id)
-    )
+    res = await db.execute(select(ConfirmationItem).where(ConfirmationItem.id == letter.item_id))
     item = res.scalar_one_or_none()
     if not item or item.status not in (ITEM_STATUS_SENT, ITEM_STATUS_NO_REPLY):
         raise HTTPException(
             status_code=400,
             detail=f"函证对象状态为 {item.status if item else 'unknown'},"
-                   f"不可催办 (已回函/已作废的函证不需要催办)。",
+            f"不可催办 (已回函/已作废的函证不需要催办)。",
         )
     letter.reminder_count = (letter.reminder_count or 0) + 1
     letter.last_reminded_at = datetime.now(timezone.utc)
@@ -789,6 +806,7 @@ async def submit_response(
     letter_id: int,
     req: ConfirmationResponseInput,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """手工录入回函。
 
@@ -798,10 +816,7 @@ async def submit_response(
       3) 增加 IntegrityError 兜底 (并发创建 response 时)
       4) mismatch 状态映射到 ITEM_STATUS_MISMATCH (新增), 不再 fallback 到 PARTIAL
     """
-    res = await db.execute(select(ConfirmationLetter).where(ConfirmationLetter.id == letter_id))
-    letter = res.scalar_one_or_none()
-    if not letter:
-        raise HTTPException(status_code=404, detail="发函记录不存在")
+    letter = await _get_letter_or_404(db, letter_id)
     if letter.letter_status != "sent":
         raise HTTPException(status_code=400, detail="发函尚未发出,不能录入回函")
 
@@ -825,14 +840,19 @@ async def submit_response(
             if not resp:
                 raise HTTPException(status_code=500, detail="回函并发创建失败, 请重试")
 
-    resp.received_date = (datetime.combine(req.received_date, datetime.min.time())
-                          if req.received_date else datetime.now(timezone.utc))
+    resp.received_date = (
+        datetime.combine(req.received_date, datetime.min.time())
+        if req.received_date
+        else datetime.now(timezone.utc)
+    )
     resp.response_method = req.response_method
     resp.response_status = req.response_status
     resp.amount_confirmed = req.amount_confirmed
     resp.difference_reason = req.difference_reason
     resp.response_summary = req.response_summary
-    resp.subjects_detail = json.dumps(req.subjects_detail, ensure_ascii=False) if req.subjects_detail else None
+    resp.subjects_detail = (
+        json.dumps(req.subjects_detail, ensure_ascii=False) if req.subjects_detail else None
+    )
     resp.auditor_note = req.auditor_note
     resp.is_manually_confirmed = True
     resp.confirmed_by = req.confirmed_by or "审计师"
@@ -872,6 +892,7 @@ async def upload_response_photo(
     file: UploadFile = File(...),
     auto_confirm: bool = Form(True, description="AI 解析后是否自动按解析结果回填"),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """上传回函照片 → OCR + AI 解析 → 回填。
 
@@ -882,10 +903,7 @@ async def upload_response_photo(
       4) 顶层 try/except 兜底, 失败时 db.rollback()
       5) mismatch 状态显式映射到 ITEM_STATUS_MISMATCH
     """
-    res = await db.execute(select(ConfirmationLetter).where(ConfirmationLetter.id == letter_id))
-    letter = res.scalar_one_or_none()
-    if not letter:
-        raise HTTPException(status_code=404, detail="发函记录不存在")
+    letter = await _get_letter_or_404(db, letter_id)
     if letter.letter_status != "sent":
         raise HTTPException(
             status_code=400,
@@ -896,15 +914,16 @@ async def upload_response_photo(
     if len(content) > settings.MAX_UPLOAD_SIZE:
         raise HTTPException(
             status_code=413,
-            detail=f"文件过大 ({len(content)/1024/1024:.1f}MB),"
-                   f"上限 {settings.MAX_UPLOAD_SIZE/1024/1024:.0f}MB。",
+            detail=f"文件过大 ({len(content) / 1024 / 1024:.1f}MB),"
+            f"上限 {settings.MAX_UPLOAD_SIZE / 1024 / 1024:.0f}MB。",
         )
     processor = _response_processor()
 
     path = None
     try:
         path, ocr_engine, ocr_text, parsed = await processor.process_upload(
-            content, file.filename or "response.jpg",
+            content,
+            file.filename or "response.jpg",
             expected_book_amount=letter.item.book_balance if letter.item else 0.0,
         )
     except ResponseParseError as exc:
@@ -945,18 +964,22 @@ async def upload_response_photo(
         ocr_engine=ocr_engine,
         ocr_text=ocr_text,
         parsed_data=json.dumps(parsed.ai_extracted, ensure_ascii=False)
-            if parsed.ai_extracted else None,
+        if parsed.ai_extracted
+        else None,
         match_status="parsed",
         matched_amount=parsed.amount_confirmed or None,
         matched_subjects=json.dumps(parsed.subjects_detail, ensure_ascii=False)
-            if parsed.subjects_detail else None,
+        if parsed.subjects_detail
+        else None,
         processed_at=datetime.now(timezone.utc),
     )
     db.add(photo)
 
     # 回填 response
     resp.raw_text = ocr_text
-    resp.ai_extracted = json.dumps(parsed.ai_extracted, ensure_ascii=False) if parsed.ai_extracted else None
+    resp.ai_extracted = (
+        json.dumps(parsed.ai_extracted, ensure_ascii=False) if parsed.ai_extracted else None
+    )
     if auto_confirm:
         resp.response_status = parsed.response_status
         resp.amount_confirmed = parsed.amount_confirmed
@@ -964,7 +987,11 @@ async def upload_response_photo(
         resp.difference_reason = parsed.difference_reason
         resp.received_date = parsed.received_date or datetime.now(timezone.utc)
         resp.response_method = parsed.response_method
-        resp.subjects_detail = json.dumps(parsed.subjects_detail, ensure_ascii=False) if parsed.subjects_detail else None
+        resp.subjects_detail = (
+            json.dumps(parsed.subjects_detail, ensure_ascii=False)
+            if parsed.subjects_detail
+            else None
+        )
         resp.response_summary = parsed.response_summary
         resp.version = (resp.version or 0) + 1
         # 推进 item 状态 (P0: 显式映射 mismatch)
@@ -1013,6 +1040,7 @@ async def upload_response_photo(
 async def get_response(
     letter_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     res = await db.execute(
         select(ConfirmationResponse).where(ConfirmationResponse.letter_id == letter_id)
@@ -1043,7 +1071,9 @@ async def get_response(
             "received_date": resp.received_date.isoformat() if resp.received_date else None,
             "response_method": resp.response_method,
             "response_status": resp.response_status,
-            "response_status_label": RESPONSE_STATUS_LABELS.get(resp.response_status, resp.response_status),
+            "response_status_label": RESPONSE_STATUS_LABELS.get(
+                resp.response_status, resp.response_status
+            ),
             "amount_confirmed": resp.amount_confirmed,
             "amount_difference": resp.amount_difference,
             "difference_reason": resp.difference_reason,
@@ -1067,23 +1097,17 @@ async def get_response(
 async def get_summary(
     case_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    res = await db.execute(select(ConfirmationCase).where(ConfirmationCase.id == case_id))
-    case = res.scalar_one_or_none()
-    if not case:
-        raise HTTPException(status_code=404, detail="案卷不存在")
+    case = await _get_case_or_404(db, case_id)
 
-    res = await db.execute(
-        select(ConfirmationItem).where(ConfirmationItem.case_id == case_id)
-    )
+    res = await db.execute(select(ConfirmationItem).where(ConfirmationItem.case_id == case_id))
     items = list(res.scalars().all())
-    res = await db.execute(
-        select(ConfirmationLetter).where(ConfirmationLetter.case_id == case_id)
-    )
+    res = await db.execute(select(ConfirmationLetter).where(ConfirmationLetter.case_id == case_id))
     letters = list(res.scalars().all())
     res = await db.execute(
-        select(ConfirmationResponse).join(ConfirmationLetter,
-            ConfirmationResponse.letter_id == ConfirmationLetter.id)
+        select(ConfirmationResponse)
+        .join(ConfirmationLetter, ConfirmationResponse.letter_id == ConfirmationLetter.id)
         .where(ConfirmationLetter.case_id == case_id)
     )
     responses = list(res.scalars().all())
@@ -1097,9 +1121,14 @@ async def get_summary(
         response_status_summary[r.response_status] += 1
 
     # 按 party_type
-    by_type: dict[str, dict[str, Any]] = defaultdict(lambda: {
-        "items": 0, "amount": 0.0, "sent": 0, "responded": 0,
-    })
+    by_type: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "items": 0,
+            "amount": 0.0,
+            "sent": 0,
+            "responded": 0,
+        }
+    )
     for it in items:
         d = by_type[it.party_type]
         d["items"] += 1
@@ -1113,15 +1142,17 @@ async def get_summary(
 
     by_type_list = []
     for k, d in by_type.items():
-        by_type_list.append({
-            "party_type": k,
-            "party_type_label": PARTY_TYPE_LABELS.get(k, k),
-            "items": d["items"],
-            "amount": round(d["amount"], 2),
-            "sent": d["sent"],
-            "responded": d["responded"],
-            "response_rate": round(d["responded"] / d["sent"], 4) if d["sent"] else 0,
-        })
+        by_type_list.append(
+            {
+                "party_type": k,
+                "party_type_label": PARTY_TYPE_LABELS.get(k, k),
+                "items": d["items"],
+                "amount": round(d["amount"], 2),
+                "sent": d["sent"],
+                "responded": d["responded"],
+                "response_rate": round(d["responded"] / d["sent"], 4) if d["sent"] else 0,
+            }
+        )
     by_type_list.sort(key=lambda x: -x["amount"])
 
     sent_count = len(letters)
@@ -1143,7 +1174,9 @@ async def get_summary(
                 "party_type_label": PARTY_TYPE_LABELS.get(it.party_type, it.party_type),
                 "book_balance": it.book_balance,
                 "sent_date": l.sent_date.isoformat() if l and l.sent_date else None,
-                "expected_reply_date": l.expected_reply_date.isoformat() if l and l.expected_reply_date else None,
+                "expected_reply_date": l.expected_reply_date.isoformat()
+                if l and l.expected_reply_date
+                else None,
                 "reminder_count": l.reminder_count if l else 0,
             }
             if it.status == ITEM_STATUS_NO_REPLY:
@@ -1178,24 +1211,18 @@ async def get_summary(
 async def export_case(
     case_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """导出函证工作簿 (多 Sheet Excel)。"""
-    res = await db.execute(select(ConfirmationCase).where(ConfirmationCase.id == case_id))
-    case = res.scalar_one_or_none()
-    if not case:
-        raise HTTPException(status_code=404, detail="案卷不存在")
+    case = await _get_case_or_404(db, case_id)
 
-    res = await db.execute(
-        select(ConfirmationItem).where(ConfirmationItem.case_id == case_id)
-    )
+    res = await db.execute(select(ConfirmationItem).where(ConfirmationItem.case_id == case_id))
     items = list(res.scalars().all())
-    res = await db.execute(
-        select(ConfirmationLetter).where(ConfirmationLetter.case_id == case_id)
-    )
+    res = await db.execute(select(ConfirmationLetter).where(ConfirmationLetter.case_id == case_id))
     letters = list(res.scalars().all())
     res = await db.execute(
-        select(ConfirmationResponse).join(ConfirmationLetter,
-            ConfirmationResponse.letter_id == ConfirmationLetter.id)
+        select(ConfirmationResponse)
+        .join(ConfirmationLetter, ConfirmationResponse.letter_id == ConfirmationLetter.id)
         .where(ConfirmationLetter.case_id == case_id)
     )
     responses = list(res.scalars().all())

@@ -3,6 +3,7 @@
 Re-exports the high-level service classes for convenient imports:
     from app.services.team_management import TeamManagementService
 """
+
 from app.services.team_management.service import (
     TeamManagementService,
     team_management_service,

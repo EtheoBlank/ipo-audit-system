@@ -1,15 +1,21 @@
 """综合报告API - 第六阶段."""
+
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import List, Optional
+from typing import Optional
 
 from app.core.database import get_db
-from app.models.db_models import Project, AccountBalance, ChronologicalAccount
-from app.models.audit import ApiResponse
+from app.models.db_models import AccountBalance
+from app.models.db.auth import User
+from app.services.auth import (
+    ensure_project_in_firm,
+    get_current_user,
+    get_current_user_optional,
+)
 from app.services.report_generator import (
     ComprehensiveReportGenerator,
     InteractiveReportGenerator,
@@ -28,18 +34,14 @@ router = APIRouter(prefix="/api/reports", tags=["综合报告"])
 async def generate_word_report(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """生成Word格式综合报告."""
-    # 获取项目信息
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    # 多租户硬隔离
+    project = await ensure_project_in_firm(db, project_id, current_user)
 
     # 获取科目余额
-    result = await db.execute(
-        select(AccountBalance).where(AccountBalance.project_id == project_id)
-    )
+    result = await db.execute(select(AccountBalance).where(AccountBalance.project_id == project_id))
     balances = result.scalars().all()
 
     if not balances:
@@ -58,7 +60,9 @@ async def generate_word_report(
 
     financial_data = {
         "total_assets": df_balances["ending_balance"].sum(),
-        "revenue": df_balances[df_balances["account_code"].str.startswith("5")]["credit_amount"].sum(),
+        "revenue": df_balances[df_balances["account_code"].str.startswith("5")][
+            "credit_amount"
+        ].sum(),
         "registered_capital": 0,
         "net_profit": 0,
         "gross_margin": 0,
@@ -74,7 +78,9 @@ async def generate_word_report(
     return StreamingResponse(
         iter([report_bytes]),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f"attachment; filename=审计报告_{project.fiscal_year}.docx"},
+        headers={
+            "Content-Disposition": f"attachment; filename=审计报告_{project.fiscal_year}.docx"
+        },
     )
 
 
@@ -82,16 +88,12 @@ async def generate_word_report(
 async def generate_pdf_report(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """生成PDF格式综合报告."""
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    project = await ensure_project_in_firm(db, project_id, current_user)
 
-    result = await db.execute(
-        select(AccountBalance).where(AccountBalance.project_id == project_id)
-    )
+    result = await db.execute(select(AccountBalance).where(AccountBalance.project_id == project_id))
     balances = result.scalars().all()
 
     if not balances:
@@ -109,7 +111,9 @@ async def generate_pdf_report(
 
     financial_data = {
         "total_assets": df_balances["ending_balance"].sum(),
-        "revenue": df_balances[df_balances["account_code"].str.startswith("5")]["credit_amount"].sum(),
+        "revenue": df_balances[df_balances["account_code"].str.startswith("5")][
+            "credit_amount"
+        ].sum(),
     }
 
     risk_analysis = {"risk_level": "中", "risk_points": []}
@@ -130,16 +134,12 @@ async def generate_pdf_report(
 async def get_dashboard_data(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """获取交互式仪表盘数据."""
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    project = await ensure_project_in_firm(db, project_id, current_user)
 
-    result = await db.execute(
-        select(AccountBalance).where(AccountBalance.project_id == project_id)
-    )
+    result = await db.execute(select(AccountBalance).where(AccountBalance.project_id == project_id))
     balances = result.scalars().all()
 
     df_balances = account_balances_to_df(balances)
@@ -147,12 +147,18 @@ async def get_dashboard_data(
     # 检测异常
     anomalies = []
     risk_identifier = RiskIdentifier()
-    anomalies.extend(risk_identifier.identify_revenue_recognition_risk(df_balances.to_dict("records")))
-    anomalies.extend(risk_identifier.identify_goodwill_impairment_risk(df_balances.to_dict("records")))
+    anomalies.extend(
+        risk_identifier.identify_revenue_recognition_risk(df_balances.to_dict("records"))
+    )
+    anomalies.extend(
+        risk_identifier.identify_goodwill_impairment_risk(df_balances.to_dict("records"))
+    )
 
     anomaly_detector = AnomalyDetector()
     anomalies.extend(anomaly_detector.detect_round_number_anomalies(df_balances.to_dict("records")))
-    anomalies.extend(anomaly_detector.detect_balance_direction_anomalies(df_balances.to_dict("records")))
+    anomalies.extend(
+        anomaly_detector.detect_balance_direction_anomalies(df_balances.to_dict("records"))
+    )
 
     # 试算平衡
     engine = TrialBalanceEngine()
@@ -174,14 +180,17 @@ async def get_dashboard_data(
 
     financial_data = {
         "total_assets": df_balances["ending_balance"].sum(),
-        "revenue": df_balances[df_balances["account_code"].str.startswith("5")]["credit_amount"].sum(),
+        "revenue": df_balances[df_balances["account_code"].str.startswith("5")][
+            "credit_amount"
+        ].sum(),
     }
 
     dashboard_data = InteractiveReportGenerator.generate_dashboard_data(
-        project_info, financial_data,
+        project_info,
+        financial_data,
         {"risk_level": "中", "risk_points": [], "scores": {}},
         trial_balance_data,
-        anomalies
+        anomalies,
     )
 
     return dashboard_data
@@ -191,11 +200,10 @@ async def get_dashboard_data(
 async def get_anomalies(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """获取异常检测结果."""
-    result = await db.execute(
-        select(AccountBalance).where(AccountBalance.project_id == project_id)
-    )
+    result = await db.execute(select(AccountBalance).where(AccountBalance.project_id == project_id))
     balances = result.scalars().all()
 
     df_balances = account_balances_to_df(balances)
@@ -203,12 +211,20 @@ async def get_anomalies(
     anomalies = []
 
     risk_identifier = RiskIdentifier()
-    anomalies.extend(risk_identifier.identify_revenue_recognition_risk(df_balances.to_dict("records")))
-    anomalies.extend(risk_identifier.identify_goodwill_impairment_risk(df_balances.to_dict("records")))
+    anomalies.extend(
+        risk_identifier.identify_revenue_recognition_risk(df_balances.to_dict("records"))
+    )
+    anomalies.extend(
+        risk_identifier.identify_goodwill_impairment_risk(df_balances.to_dict("records"))
+    )
 
     anomaly_detector = AnomalyDetector()
     anomalies.extend(anomaly_detector.detect_round_number_anomalies(df_balances.to_dict("records")))
-    anomalies.extend(anomaly_detector.detect_balance_direction_anomalies(df_balances.to_dict("records")))
-    anomalies.extend(anomaly_detector.detect_zero_activity_anomalies(df_balances.to_dict("records")))
+    anomalies.extend(
+        anomaly_detector.detect_balance_direction_anomalies(df_balances.to_dict("records"))
+    )
+    anomalies.extend(
+        anomaly_detector.detect_zero_activity_anomalies(df_balances.to_dict("records"))
+    )
 
     return {"anomalies": anomalies, "total_count": len(anomalies)}

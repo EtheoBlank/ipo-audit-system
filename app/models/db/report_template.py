@@ -8,6 +8,7 @@
   - ``ReportTemplate`` 是审计报告 / 管理建议书 / 穿行报告 等纯文档输出模板,
     走 docxtpl 简单变量替换
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -54,13 +55,13 @@ def _utcnow() -> datetime:
 
 
 # === 模板类型 ===
-REPORT_TYPE_AUDIT_REPORT = "audit_report"          # 审计报告
+REPORT_TYPE_AUDIT_REPORT = "audit_report"  # 审计报告
 REPORT_TYPE_MANAGEMENT_LETTER = "management_letter"  # 管理建议书
-REPORT_TYPE_WALKTHROUGH = "walkthrough_report"       # 内控穿行报告
+REPORT_TYPE_WALKTHROUGH = "walkthrough_report"  # 内控穿行报告
 REPORT_TYPE_SENTIMENT_BRIEFING = "sentiment_briefing"  # 舆情简报
-REPORT_TYPE_RELATED_PARTY = "related_party_report"   # 关联方专项报告 (Pack B)
-REPORT_TYPE_COMPREHENSIVE = "comprehensive_report"   # 综合报告
-REPORT_TYPE_CUSTOM = "custom"                       # 自定义
+REPORT_TYPE_RELATED_PARTY = "related_party_report"  # 关联方专项报告 (Pack B)
+REPORT_TYPE_COMPREHENSIVE = "comprehensive_report"  # 综合报告
+REPORT_TYPE_CUSTOM = "custom"  # 自定义
 
 ALL_REPORT_TYPES = [
     REPORT_TYPE_AUDIT_REPORT,
@@ -81,6 +82,7 @@ REPORT_FORMAT_PDF = "pdf"
 
 class ReportTemplate(Base):
     """报告模板 (事务所定制). 一行 = 一个版本."""
+
     __tablename__ = "report_templates"
     __table_args__ = (
         UniqueConstraint("firm_id", "template_code", "version", name="uq_report_template_version"),
@@ -96,7 +98,9 @@ class ReportTemplate(Base):
     template_name: Mapped[str] = mapped_column(String(200), nullable=False)
     report_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     version: Mapped[str] = mapped_column(String(20), default="v1", nullable=False)
-    output_format: Mapped[str] = mapped_column(String(10), default=REPORT_FORMAT_DOCX, nullable=False)
+    output_format: Mapped[str] = mapped_column(
+        String(10), default=REPORT_FORMAT_DOCX, nullable=False
+    )
 
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     placeholder_schema: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 字符串
@@ -120,6 +124,7 @@ class ReportTemplate(Base):
 
 class ReportRenderHistory(Base):
     """报告渲染历史 — 谁在何时用哪个模板渲染了哪个项目的什么内容."""
+
     __tablename__ = "report_render_history"
     __table_args__ = (
         Index("ix_render_history_template", "template_id", "created_at"),
@@ -144,4 +149,6 @@ class ReportRenderHistory(Base):
 
     rendered_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     rendered_by_display: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_utcnow, nullable=False, index=True
+    )

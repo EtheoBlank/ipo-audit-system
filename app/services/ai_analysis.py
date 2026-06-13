@@ -1,4 +1,5 @@
 """AI-powered risk analysis service for IPO Audit System."""
+
 import httpx
 import json
 from typing import List, Dict, Optional
@@ -34,7 +35,11 @@ class AIAnalysisService:
         payload = {
             "model": "abab6.5s-chat",
             "messages": [
-                {"role": "system", "content": system_prompt or "你是一位专业的IPO审计专家，帮助识别财务风险和监管关注点。"},
+                {
+                    "role": "system",
+                    "content": system_prompt
+                    or "你是一位专业的IPO审计专家，帮助识别财务风险和监管关注点。",
+                },
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.7,
@@ -73,7 +78,8 @@ class AIAnalysisService:
 
         # Prepare data summary
         total_revenue = sum(
-            ab.get("debit_amount", 0) for ab in account_balances
+            ab.get("debit_amount", 0)
+            for ab in account_balances
             if "5" in ab.get("account_code", "")[:1]
         )
 
@@ -159,9 +165,9 @@ class AIAnalysisService:
 作为IPO审计专家，请为以下公司匹配合适的监管案例：
 
 公司信息:
--名称: {company_info.get('name', '')}
+-名称: {company_info.get("name", "")}
 - 行业: {industry}
-- 关键词: {', '.join(keywords)}
+- 关键词: {", ".join(keywords)}
 
 请分析该公司可能面临的监管关注点，并推荐相关的监管案例。
 

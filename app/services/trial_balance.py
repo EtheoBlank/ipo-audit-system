@@ -1,6 +1,7 @@
 """Trial balance service for IPO Audit System."""
+
 import pandas as pd
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 
 
 class TrialBalanceService:
@@ -8,8 +9,7 @@ class TrialBalanceService:
 
     @staticmethod
     def check_balance(
-        account_balances: pd.DataFrame,
-        consolidation_balances: Optional[pd.DataFrame] = None
+        account_balances: pd.DataFrame, consolidation_balances: Optional[pd.DataFrame] = None
     ) -> Dict:
         """Check if trial balance is balanced.
 
@@ -38,23 +38,35 @@ class TrialBalanceService:
         current_diff = abs(total_debit_current - total_credit_current)
         ending_diff = abs(total_debit_ending - total_credit_ending)
 
-        is_balanced = (beginning_diff < 0.01 and
-                      current_diff < 0.01 and
-                      ending_diff < 0.01)
+        is_balanced = beginning_diff < 0.01 and current_diff < 0.01 and ending_diff < 0.01
 
         result = {
             "is_balanced": is_balanced,
             "standalone": {
-                "beginning": {"debit": total_debit_begin, "credit": total_credit_begin, "difference": beginning_diff},
-                "current_period": {"debit": total_debit_current, "credit": total_credit_current, "difference": current_diff},
-                "ending": {"debit": total_debit_ending, "credit": total_credit_ending, "difference": ending_diff},
+                "beginning": {
+                    "debit": total_debit_begin,
+                    "credit": total_credit_begin,
+                    "difference": beginning_diff,
+                },
+                "current_period": {
+                    "debit": total_debit_current,
+                    "credit": total_credit_current,
+                    "difference": current_diff,
+                },
+                "ending": {
+                    "debit": total_debit_ending,
+                    "credit": total_credit_ending,
+                    "difference": ending_diff,
+                },
             },
         }
 
         # Consolidation balance check if provided
         if consolidation_balances is not None:
             cons_debit = consolidation_balances[consolidation_balances["balance_direction"] == "借"]
-            cons_credit = consolidation_balances[consolidation_balances["balance_direction"] == "贷"]
+            cons_credit = consolidation_balances[
+                consolidation_balances["balance_direction"] == "贷"
+            ]
 
             cons_debit_end = cons_debit["ending_balance"].sum()
             cons_credit_end = cons_credit["ending_balance"].sum()
@@ -64,11 +76,15 @@ class TrialBalanceService:
 
             result["consolidation"] = {
                 "is_balanced": cons_is_balanced,
-                "ending": {"debit": cons_debit_end, "credit": cons_credit_end, "difference": cons_diff},
+                "ending": {
+                    "debit": cons_debit_end,
+                    "credit": cons_credit_end,
+                    "difference": cons_diff,
+                },
             }
 
             # Calculate elimination entries (抵销分录)
-            #合并报表与单体报表的差异 = 内部交易抵销金额
+            # 合并报表与单体报表的差异 = 内部交易抵销金额
             internal_elimination = {
                 "asset_elimination": total_debit_ending - cons_debit_end,
                 "liability_elimination": total_credit_ending - cons_credit_end,
@@ -87,17 +103,25 @@ class TrialBalanceService:
         Returns:
             List of account summaries
         """
-        summary = account_balances.groupby(["account_code", "account_name", "balance_direction"]).agg({
-            "beginning_balance": "sum",
-            "debit_amount": "sum",
-            "credit_amount": "sum",
-            "ending_balance": "sum",
-        }).reset_index()
+        summary = (
+            account_balances.groupby(["account_code", "account_name", "balance_direction"])
+            .agg(
+                {
+                    "beginning_balance": "sum",
+                    "debit_amount": "sum",
+                    "credit_amount": "sum",
+                    "ending_balance": "sum",
+                }
+            )
+            .reset_index()
+        )
 
         return summary.to_dict("records")
 
     @staticmethod
-    def identify_unusual_balances(account_balances: pd.DataFrame, threshold: float = 0.01) -> List[Dict]:
+    def identify_unusual_balances(
+        account_balances: pd.DataFrame, threshold: float = 0.01
+    ) -> List[Dict]:
         """Identify unusual account balances that may need attention.
 
         Args:
@@ -113,7 +137,11 @@ class TrialBalanceService:
             issues = []
 
             # Check for large ending balance with no activity
-            if row["ending_balance"] != 0 and row["debit_amount"] == 0 and row["credit_amount"] == 0:
+            if (
+                row["ending_balance"] != 0
+                and row["debit_amount"] == 0
+                and row["credit_amount"] == 0
+            ):
                 issues.append("期末余额有数据但本期无发生额")
 
             # Check for abnormal balance direction
@@ -127,12 +155,14 @@ class TrialBalanceService:
                 issues.append("期末余额为整万，可能存在估计")
 
             if issues:
-                unusual.append({
-                    "account_code": row["account_code"],
-                    "account_name": row["account_name"],
-                    "ending_balance": row["ending_balance"],
-                    "issues": issues,
-                })
+                unusual.append(
+                    {
+                        "account_code": row["account_code"],
+                        "account_name": row["account_name"],
+                        "ending_balance": row["ending_balance"],
+                        "issues": issues,
+                    }
+                )
 
         return unusual
 

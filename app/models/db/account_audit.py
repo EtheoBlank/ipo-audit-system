@@ -16,13 +16,13 @@
   - 在底稿生成时校验恒等式: 期初审定 + 借方审定 - 贷方审定 = 期末审定
   - 不平时高亮提示
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
-    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -99,10 +99,10 @@ DEFAULT_LONG_TERM_ASSET_PREFIXES: tuple[str, ...] = (
 
 
 # === 发生额审定状态 ===
-MOVEMENT_AUDIT_STATUS_PENDING = "pending"      # 待审定 (初始)
-MOVEMENT_AUDIT_STATUS_AUDITED = "audited"      # 已审定
-MOVEMENT_AUDIT_STATUS_DISPUTED = "disputed"    # 有争议, 需复核
-MOVEMENT_AUDIT_STATUS_SKIPPED = "skipped"      # 排除 (例如重大错报无关)
+MOVEMENT_AUDIT_STATUS_PENDING = "pending"  # 待审定 (初始)
+MOVEMENT_AUDIT_STATUS_AUDITED = "audited"  # 已审定
+MOVEMENT_AUDIT_STATUS_DISPUTED = "disputed"  # 有争议, 需复核
+MOVEMENT_AUDIT_STATUS_SKIPPED = "skipped"  # 排除 (例如重大错报无关)
 ALL_MOVEMENT_AUDIT_STATUSES = [
     MOVEMENT_AUDIT_STATUS_PENDING,
     MOVEMENT_AUDIT_STATUS_AUDITED,
@@ -123,6 +123,7 @@ class AccountMovementAudit(Base):
     复合定位), 不强制 FK — 因为审计调整后底稿可能基于不同版本的序时账,
     导致序时账数据被替换时审定记录仍要保留。
     """
+
     __tablename__ = "account_movement_audits"
     __table_args__ = (
         # 同一项目同一凭证同一行同一科目同一方向只能审定一次
@@ -193,6 +194,7 @@ class LongTermAssetScopeOverride(Base):
 
     每条记录 = 一次"加" 或 "减" 一个科目前缀
     """
+
     __tablename__ = "long_term_asset_scope_overrides"
     __table_args__ = (
         UniqueConstraint("project_id", "account_prefix", name="uq_lta_scope_project_prefix"),

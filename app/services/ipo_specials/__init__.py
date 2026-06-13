@@ -1,4 +1,5 @@
 """Pack D — 一档剩余 + 三档 IPO 专属 核心服务函数."""
+
 from __future__ import annotations
 
 import logging
@@ -44,11 +45,11 @@ class WalkthroughSampler:
         top_30 = sorted_by_amount[: max(1, len(sorted_by_amount) // 3)]
         if cycle_code == "sales":
             # 简化: 前 3 笔大额 + 后 2 笔 (假设末尾按日期排序)
-            cutoff = items[-min(2, len(items)):]
+            cutoff = items[-min(2, len(items)) :]
             samples = top_30[:n] + cutoff[:2]
         else:
             samples = top_30[:n]
-        return samples[:n + 2]
+        return samples[: n + 2]
 
     @staticmethod
     def to_mermaid_flowchart(steps: List[Dict[str, Any]]) -> str:
@@ -82,6 +83,7 @@ class RevenueCutoffTester:
     ) -> Tuple[str, int]:
         """判断截止性 — early / late / normal + 偏差天数."""
         from datetime import datetime
+
         try:
             pe_dt = datetime.strptime(period_end, "%Y-%m-%d")
         except Exception:
@@ -93,7 +95,11 @@ class RevenueCutoffTester:
         except Exception:
             pass
         try:
-            rc_dt = datetime.strptime(revenue_confirm_date, "%Y-%m-%d") if revenue_confirm_date else None
+            rc_dt = (
+                datetime.strptime(revenue_confirm_date, "%Y-%m-%d")
+                if revenue_confirm_date
+                else None
+            )
         except Exception:
             pass
 
@@ -209,12 +215,14 @@ class OverlapDetector:
                     continue
                 score = OverlapDetector.fuzzy_score(cust, sup)
                 if score >= fuzzy_threshold:
-                    overlaps.append({
-                        "customer_name": cust,
-                        "supplier_name": sup,
-                        "fuzzy_score": score,
-                        "match_type": "exact" if score == 1.0 else "fuzzy",
-                    })
+                    overlaps.append(
+                        {
+                            "customer_name": cust,
+                            "supplier_name": sup,
+                            "fuzzy_score": score,
+                            "match_type": "exact" if score == 1.0 else "fuzzy",
+                        }
+                    )
         return overlaps
 
 
@@ -255,6 +263,7 @@ class FeedbackSLAMonitor:
     @staticmethod
     def days_to_deadline(deadline: str, today: Optional[str] = None) -> int:
         from datetime import date, datetime
+
         if today is None:
             today_dt = date.today()
         else:

@@ -196,7 +196,9 @@ class SalesLedgerSynthesizer:
         }
 
     @staticmethod
-    def coerce_dates(rec: dict[str, Any]) -> tuple[Optional[datetime], Optional[datetime], Optional[datetime]]:
+    def coerce_dates(
+        rec: dict[str, Any],
+    ) -> tuple[Optional[datetime], Optional[datetime], Optional[datetime]]:
         ship = _parse_date(rec.get("ship_date"))
         receipt = _parse_date(rec.get("receipt_date"))
         confirm = _parse_date(rec.get("revenue_confirm_date"))

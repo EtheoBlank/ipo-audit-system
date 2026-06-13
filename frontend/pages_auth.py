@@ -1,4 +1,5 @@
 """认证与权限管理页面 (Pack A)."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -79,7 +80,8 @@ def _tab_me() -> None:
                     st.error(err)
                 else:
                     res = _api(
-                        "POST", "/api/auth/me/change-password",
+                        "POST",
+                        "/api/auth/me/change-password",
                         json={"old_password": old, "new_password": new},
                     )
                     if res:
@@ -118,9 +120,16 @@ def _tab_users() -> None:
     if rows:
         df = pd.DataFrame(rows)
         cols_show = [
-            "id", "username", "full_name", "role", "firm_id",
-            "is_active", "is_locked", "failed_login_count",
-            "last_login_at", "created_at",
+            "id",
+            "username",
+            "full_name",
+            "role",
+            "firm_id",
+            "is_active",
+            "is_locked",
+            "failed_login_count",
+            "last_login_at",
+            "created_at",
         ]
         cols_show = [c for c in cols_show if c in df.columns]
         st.dataframe(df[cols_show], width="stretch")
@@ -208,7 +217,9 @@ def _tab_roles_permissions() -> None:
         rows = _api("GET", "/api/auth/permissions") or []
         if rows:
             df = pd.DataFrame(rows)
-            module = st.selectbox("按模块筛选", [""] + sorted(df["module"].dropna().unique().tolist()))
+            module = st.selectbox(
+                "按模块筛选", [""] + sorted(df["module"].dropna().unique().tolist())
+            )
             if module:
                 df = df[df["module"] == module]
             st.dataframe(df, width="stretch")
@@ -219,7 +230,19 @@ def _tab_audit_logs() -> None:
     cols = st.columns(5)
     action = cols[0].selectbox(
         "动作",
-        ["", "create", "update", "delete", "login", "logout", "approve", "reject", "export", "import", "http"],
+        [
+            "",
+            "create",
+            "update",
+            "delete",
+            "login",
+            "logout",
+            "approve",
+            "reject",
+            "export",
+            "import",
+            "http",
+        ],
     )
     resource_type = cols[1].text_input("资源类型")
     keyword = cols[2].text_input("关键词")
@@ -244,9 +267,17 @@ def _tab_audit_logs() -> None:
     if items:
         df = pd.DataFrame(items)
         cols_show = [
-            "id", "created_at", "user_display", "user_role",
-            "action", "resource_type", "resource_id",
-            "method", "path", "status_code", "summary",
+            "id",
+            "created_at",
+            "user_display",
+            "user_role",
+            "action",
+            "resource_type",
+            "resource_id",
+            "method",
+            "path",
+            "status_code",
+            "summary",
         ]
         cols_show = [c for c in cols_show if c in df.columns]
         st.dataframe(df[cols_show], width="stretch", height=480)
@@ -265,18 +296,20 @@ def _tab_approvals() -> None:
         params["status"] = status_filter
     rows = _api("GET", "/api/auth/approvals", params=params) or []
     if rows:
-        df = pd.DataFrame([
-            {
-                "id": r["id"],
-                "title": r["title"],
-                "resource": f"{r['resource_type']}/{r['resource_id']}",
-                "current_step": f"{r['current_step']}/{r['total_steps']}",
-                "status": r["status"],
-                "initiator": r.get("initiator_display") or "-",
-                "created_at": r["created_at"],
-            }
-            for r in rows
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "id": r["id"],
+                    "title": r["title"],
+                    "resource": f"{r['resource_type']}/{r['resource_id']}",
+                    "current_step": f"{r['current_step']}/{r['total_steps']}",
+                    "status": r["status"],
+                    "initiator": r.get("initiator_display") or "-",
+                    "created_at": r["created_at"],
+                }
+                for r in rows
+            ]
+        )
         st.dataframe(df, width="stretch")
 
         sel_id = st.number_input("审批流 ID", min_value=0, step=1, value=0)
@@ -287,15 +320,21 @@ def _tab_approvals() -> None:
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     if st.button("✅ 通过", key=f"appr_{sel_id}"):
-                        res = _api("POST", f"/api/auth/approvals/{sel_id}/decide",
-                                   json={"action": "approve"})
+                        res = _api(
+                            "POST",
+                            f"/api/auth/approvals/{sel_id}/decide",
+                            json={"action": "approve"},
+                        )
                         if res:
                             st.success("已通过")
                             st.rerun()
                 with c2:
                     if st.button("❌ 拒绝", key=f"rej_{sel_id}"):
-                        res = _api("POST", f"/api/auth/approvals/{sel_id}/decide",
-                                   json={"action": "reject"})
+                        res = _api(
+                            "POST",
+                            f"/api/auth/approvals/{sel_id}/decide",
+                            json={"action": "reject"},
+                        )
                         if res:
                             st.warning("已拒绝")
                             st.rerun()
@@ -311,21 +350,25 @@ def _tab_approvals() -> None:
 
 def show_auth() -> None:
     """对外入口."""
-    st.markdown('<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">🔐 系统管理 (认证 / 用户 / 审计轨迹)</p>',
-                unsafe_allow_html=True)
+    st.markdown(
+        '<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">🔐 系统管理 (认证 / 用户 / 审计轨迹)</p>',
+        unsafe_allow_html=True,
+    )
 
     if not st.session_state.get("auth_token"):
         _login_form()
         return
 
-    tabs = st.tabs([
-        "👤 我的信息",
-        "👥 用户",
-        "🏢 事务所",
-        "🛡️ 角色与权限",
-        "📜 审计轨迹",
-        "✍️ 审批流",
-    ])
+    tabs = st.tabs(
+        [
+            "👤 我的信息",
+            "👥 用户",
+            "🏢 事务所",
+            "🛡️ 角色与权限",
+            "📜 审计轨迹",
+            "✍️ 审批流",
+        ]
+    )
     with tabs[0]:
         _tab_me()
     with tabs[1]:

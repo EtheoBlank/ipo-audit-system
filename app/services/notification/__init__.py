@@ -1,4 +1,5 @@
 """Notification service — 通用通知中心 (push / mark_read / unread_count)."""
+
 from __future__ import annotations
 
 import json
@@ -120,7 +121,9 @@ class NotificationService:
             # 用户专属 + 广播给所有人 (user_id IS NULL)
             conds.append(or_(Notification.user_id == user_id, Notification.user_id.is_(None)))
         if project_id is not None:
-            conds.append(or_(Notification.project_id == project_id, Notification.project_id.is_(None)))
+            conds.append(
+                or_(Notification.project_id == project_id, Notification.project_id.is_(None))
+            )
         if module:
             conds.append(Notification.module == module)
         if severity:
@@ -145,9 +148,11 @@ class NotificationService:
         list_stmt = select(Notification)
         if where_clause is not None:
             list_stmt = list_stmt.where(where_clause)
-        list_stmt = list_stmt.order_by(desc(Notification.created_at)).offset(
-            max(0, int(skip))
-        ).limit(max(1, min(500, int(limit))))
+        list_stmt = (
+            list_stmt.order_by(desc(Notification.created_at))
+            .offset(max(0, int(skip)))
+            .limit(max(1, min(500, int(limit))))
+        )
         items = list((await db.execute(list_stmt)).scalars().all())
         return {"total": total, "unread": unread, "items": items}
 
@@ -163,15 +168,14 @@ class NotificationService:
         if user_id is not None:
             conds.append(or_(Notification.user_id == user_id, Notification.user_id.is_(None)))
         if project_id is not None:
-            conds.append(or_(Notification.project_id == project_id, Notification.project_id.is_(None)))
+            conds.append(
+                or_(Notification.project_id == project_id, Notification.project_id.is_(None))
+            )
         where_clause = and_(*conds)
 
         total = int(
-            (
-                await db.execute(
-                    select(func.count(Notification.id)).where(where_clause)
-                )
-            ).scalar_one() or 0
+            (await db.execute(select(func.count(Notification.id)).where(where_clause))).scalar_one()
+            or 0
         )
 
         # by module
@@ -216,9 +220,7 @@ class NotificationService:
         if module:
             conds.append(Notification.module == module)
         stmt = (
-            update(Notification)
-            .where(and_(*conds))
-            .values(is_read=True, read_at=_utcnow_naive())
+            update(Notification).where(and_(*conds)).values(is_read=True, read_at=_utcnow_naive())
         )
         result = await db.execute(stmt)
         await db.commit()

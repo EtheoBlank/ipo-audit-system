@@ -1,4 +1,5 @@
 """报告模板管理页面 (Pack A — Phase 20)."""
+
 from __future__ import annotations
 
 import json
@@ -30,8 +31,9 @@ def _tab_list() -> None:
     st.markdown("### 📋 模板清单")
     cols = st.columns(3)
     report_type = cols[0].selectbox(
-        "类型", ["全部"] + list(_REPORT_TYPE_LABELS.keys()),
-        format_func=lambda k: "全部" if k == "全部" else _REPORT_TYPE_LABELS[k]
+        "类型",
+        ["全部"] + list(_REPORT_TYPE_LABELS.keys()),
+        format_func=lambda k: "全部" if k == "全部" else _REPORT_TYPE_LABELS[k],
     )
     active_filter = cols[1].selectbox("状态", ["全部", "active", "inactive"])
     firm_id = cols[2].number_input("事务所 ID (0=全部)", min_value=0, step=1, value=0)
@@ -47,22 +49,24 @@ def _tab_list() -> None:
     res = _api("GET", "/api/report-templates", params=params) or {"total": 0, "items": []}
     items = res.get("items", [])
     if items:
-        df = pd.DataFrame([
-            {
-                "ID": t["id"],
-                "代码": t["template_code"],
-                "名称": t["template_name"],
-                "类型": _REPORT_TYPE_LABELS.get(t["report_type"], t["report_type"]),
-                "版本": t["version"],
-                "格式": t["output_format"],
-                "事务所": t.get("firm_id") or "-",
-                "状态": "✅" if t["is_active"] else "🚫",
-                "大小(KB)": round((t["template_size"] or 0) / 1024, 1),
-                "创建人": t.get("created_by_display") or "-",
-                "更新时间": t.get("updated_at"),
-            }
-            for t in items
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "ID": t["id"],
+                    "代码": t["template_code"],
+                    "名称": t["template_name"],
+                    "类型": _REPORT_TYPE_LABELS.get(t["report_type"], t["report_type"]),
+                    "版本": t["version"],
+                    "格式": t["output_format"],
+                    "事务所": t.get("firm_id") or "-",
+                    "状态": "✅" if t["is_active"] else "🚫",
+                    "大小(KB)": round((t["template_size"] or 0) / 1024, 1),
+                    "创建人": t.get("created_by_display") or "-",
+                    "更新时间": t.get("updated_at"),
+                }
+                for t in items
+            ]
+        )
         st.dataframe(df, width="stretch", height=400)
     else:
         st.info("无模板, 请上传")
@@ -177,7 +181,10 @@ def _tab_preview_render() -> None:
                 if not fname.endswith(ext):
                     fname += ext
                 st.download_button(
-                    "💾 下载渲染结果", data=content, file_name=fname, mime=mime,
+                    "💾 下载渲染结果",
+                    data=content,
+                    file_name=fname,
+                    mime=mime,
                 )
 
 

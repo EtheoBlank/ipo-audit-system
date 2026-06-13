@@ -1,4 +1,5 @@
 """Related Parties API (Pack B). /api/related-parties/*"""
+
 from __future__ import annotations
 
 import logging
@@ -8,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api._helpers import get_project_or_404
 from app.core.database import get_db
 from app.models.db.auth import (
     AUDIT_ACTION_CREATE,
@@ -24,7 +26,6 @@ from app.models.db.notification import (
     NOTIF_SEVERITY_WARN,
 )
 from app.models.db.related_parties import (
-    DISCLOSURE_GAP_CRITICAL,
     PeerCompetitionAssessment,
     ProspectusDisclosureGap,
     RelatedParty,
@@ -32,7 +33,6 @@ from app.models.db.related_parties import (
     RelatedPartyRelation,
     RelatedPartyTransaction,
 )
-from app.models.db_models import Project
 from app.models.related_parties import (
     CapitalOccupationCreate,
     CapitalOccupationResponse,
@@ -72,13 +72,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/related-parties", tags=["关联方专项"])
 
 
-async def _get_project_or_404(db: AsyncSession, project_id: int) -> Project:
-    p = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
-    if p is None:
-        raise HTTPException(404, f"项目 {project_id} 不存在")
-    return p
-
-
 # ============================================================
 #  主数据 CRUD
 # ============================================================
@@ -91,7 +84,7 @@ async def create_party(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     rp = RelatedParty(
         project_id=project_id,
         **payload.model_dump(),
@@ -127,7 +120,7 @@ async def list_parties(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     conds = [RelatedParty.project_id == project_id]
     if party_type:
         conds.append(RelatedParty.party_type == party_type)
@@ -135,11 +128,20 @@ async def list_parties(
         conds.append(RelatedParty.is_confirmed == is_confirmed)
     if keyword:
         from app.services.auth.audit_log import _escape_like
+
         like = f"%{_escape_like(keyword[:200])}%"
         conds.append(RelatedParty.name.ilike(like, escape="\\"))
     where = and_(*conds)
-    total = int((await db.execute(select(func.count(RelatedParty.id)).where(where))).scalar_one() or 0)
-    stmt = select(RelatedParty).where(where).order_by(desc(RelatedParty.created_at)).offset(skip).limit(limit)
+    total = int(
+        (await db.execute(select(func.count(RelatedParty.id)).where(where))).scalar_one() or 0
+    )
+    stmt = (
+        select(RelatedParty)
+        .where(where)
+        .order_by(desc(RelatedParty.created_at))
+        .offset(skip)
+        .limit(limit)
+    )
     rows = list((await db.execute(stmt)).scalars().all())
     return RelatedPartyListResponse(
         total=total, items=[RelatedPartyResponse.model_validate(r) for r in rows]
@@ -153,7 +155,9 @@ async def update_party(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    rp = (await db.execute(select(RelatedParty).where(RelatedParty.id == party_id))).scalar_one_or_none()
+    rp = (
+        await db.execute(select(RelatedParty).where(RelatedParty.id == party_id))
+    ).scalar_one_or_none()
     if rp is None:
         raise HTTPException(404, "关联方不存在")
     for k, v in payload.model_dump(exclude_unset=True).items():
@@ -180,7 +184,9 @@ async def delete_party(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    rp = (await db.execute(select(RelatedParty).where(RelatedParty.id == party_id))).scalar_one_or_none()
+    rp = (
+        await db.execute(select(RelatedParty).where(RelatedParty.id == party_id))
+    ).scalar_one_or_none()
     if rp is None:
         raise HTTPException(404, "关联方不存在")
     pid, name = rp.project_id, rp.name
@@ -212,7 +218,7 @@ async def create_relation(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     rel = RelatedPartyRelation(project_id=project_id, **payload.model_dump())
     db.add(rel)
     await db.commit()
@@ -231,7 +237,9 @@ async def list_relations(
             await db.execute(
                 select(RelatedPartyRelation).where(RelatedPartyRelation.project_id == project_id)
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     return [RelationResponse.model_validate(r) for r in rows]
 
@@ -248,7 +256,7 @@ async def run_detector(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     req = payload or DetectorRunRequest(project_id=project_id)
     req.project_id = project_id
     result = await RelatedPartyDetector.run(
@@ -289,7 +297,7 @@ async def create_transaction(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     tx = RelatedPartyTransaction(project_id=project_id, **payload.model_dump())
     db.add(tx)
     await db.commit()
@@ -315,9 +323,13 @@ async def list_transactions(
         conds.append(RelatedPartyTransaction.period_end == period_end)
     if transaction_type:
         conds.append(RelatedPartyTransaction.transaction_type == transaction_type)
-    stmt = select(RelatedPartyTransaction).where(and_(*conds)).order_by(
-        desc(RelatedPartyTransaction.created_at)
-    ).offset(skip).limit(limit)
+    stmt = (
+        select(RelatedPartyTransaction)
+        .where(and_(*conds))
+        .order_by(desc(RelatedPartyTransaction.created_at))
+        .offset(skip)
+        .limit(limit)
+    )
     rows = list((await db.execute(stmt)).scalars().all())
     return [TransactionResponse.model_validate(r) for r in rows]
 
@@ -332,7 +344,7 @@ async def check_fairness(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     result = await TransactionAnalyzer.check_fairness(db, payload, project_id=project_id)
     await record_audit_log(
         db,
@@ -372,7 +384,7 @@ async def create_capital_occupation(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     co = RelatedPartyCapitalOccupation(project_id=project_id, **payload.model_dump())
     db.add(co)
     await db.commit()
@@ -408,7 +420,7 @@ async def auto_compute_occupation(
     db: AsyncSession = Depends(get_db),
 ):
     """从序时账自动算最大占用. 不入库, 仅返回供前端预览."""
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     return await CapitalOccupationService.compute_max_occupation(
         db,
         project_id=project_id,
@@ -433,7 +445,7 @@ async def assess_peer_competition(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     try:
         result = await PeerCompetitionService.assess(
             db,
@@ -453,7 +465,9 @@ async def assess_peer_competition(
             title=f"同业竞争风险: {result.risk_level} (重合度 {result.overlap_score})",
             body=f"关联方 ID {payload.party_id}, 命中关键词: {result.overlap_keywords}",
             project_id=project_id,
-            severity=NOTIF_SEVERITY_CRITICAL if result.risk_level == "critical" else NOTIF_SEVERITY_WARN,
+            severity=NOTIF_SEVERITY_CRITICAL
+            if result.risk_level == "critical"
+            else NOTIF_SEVERITY_WARN,
         )
     return PeerCompetitionResponse.model_validate(result)
 
@@ -474,7 +488,9 @@ async def list_peer_competition(
                     PeerCompetitionAssessment.project_id == project_id
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     return [PeerCompetitionResponse.model_validate(r) for r in rows]
 
@@ -494,7 +510,7 @@ async def check_disclosure(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     payload.project_id = project_id
     result = await DisclosureChecker.diff(
         db, project_id=project_id, prospectus_party_names=payload.prospectus_party_names
@@ -541,5 +557,7 @@ async def list_disclosure_gaps(
         conds.append(ProspectusDisclosureGap.gap_status == gap_status)
     if resolved is not None:
         conds.append(ProspectusDisclosureGap.resolved == resolved)
-    rows = list((await db.execute(select(ProspectusDisclosureGap).where(and_(*conds)))).scalars().all())
+    rows = list(
+        (await db.execute(select(ProspectusDisclosureGap).where(and_(*conds)))).scalars().all()
+    )
     return [DisclosureGapResponse.model_validate(r) for r in rows]

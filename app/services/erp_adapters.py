@@ -1,36 +1,39 @@
 """ERP系统数据接口适配器 - 支持金蝶、用友、SAP等主流ERP系统的数据导入."""
+
 import pandas as pd
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 from enum import Enum
-import re
 
 
 class ERPType(Enum):
     """支持的ERP系统类型."""
-    KINGDEE = "金蝶K3" # 金蝶K3 Cloud
-    KINGDEE_WISE = "金蝶云星空"   # 金蝶云星空
-    YONYOU_NC = "用友NC"         # 用友NC
-    YONYOU_U8 = "用友U8"         # 用友U8
-    YONYOU_YONBIP = "用友YonBIP" # 用友YonBIP
-    SAP = "SAP" # SAP S/4HANA
-    SAP_ECC = "SAP_ECC"          # SAP ECC
-    MANUAL = "手动导入"           # 手动整理的标准格式
+
+    KINGDEE = "金蝶K3"  # 金蝶K3 Cloud
+    KINGDEE_WISE = "金蝶云星空"  # 金蝶云星空
+    YONYOU_NC = "用友NC"  # 用友NC
+    YONYOU_U8 = "用友U8"  # 用友U8
+    YONYOU_YONBIP = "用友YonBIP"  # 用友YonBIP
+    SAP = "SAP"  # SAP S/4HANA
+    SAP_ECC = "SAP_ECC"  # SAP ECC
+    MANUAL = "手动导入"  # 手动整理的标准格式
 
 
 @dataclass
 class ERPColumnMapping:
     """ERP字段映射配置."""
-    erp_field: str           # ERP系统原始字段名
-    standard_field: str       # 标准字段名
-    field_type: str          # 字段类型: string/number/date
-    description: str        # 字段说明
+
+    erp_field: str  # ERP系统原始字段名
+    standard_field: str  # 标准字段名
+    field_type: str  # 字段类型: string/number/date
+    description: str  # 字段说明
 
 
 @dataclass
 class ERPParserResult:
     """ERP解析结果."""
+
     success: bool
     message: str
     data: Optional[pd.DataFrame] = None
@@ -124,7 +127,7 @@ class KingdeeK3Adapter(BaseERPAdapter):
 
     def get_column_mappings(self) -> List[ERPColumnMapping]:
         return [
-            #科目余额表
+            # 科目余额表
             ERPColumnMapping("FAccountID", "account_code", "string", "科目编码"),
             ERPColumnMapping("FAccountName", "account_name", "string", "科目名称"),
             ERPColumnMapping("FAccountProperty", "balance_direction", "string", "科目属性(借/贷)"),

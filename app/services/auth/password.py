@@ -3,6 +3,7 @@
 降级路径: 如果 passlib 由于 bcrypt 版本不兼容报错, 退到 hashlib pbkdf2-sha256
 保证系统永远可登录 (打印一次告警 + 标记 hash 前缀方便后续迁移).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -37,9 +38,7 @@ _FALLBACK_ITER = 200_000
 
 def _fallback_hash(password: str) -> str:
     salt = os.urandom(16)
-    derived = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), salt, _FALLBACK_ITER
-    )
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _FALLBACK_ITER)
     return f"{_FALLBACK_PREFIX}{_FALLBACK_ITER}${salt.hex()}${derived.hex()}"
 
 
@@ -48,9 +47,7 @@ def _fallback_verify(password: str, hashed: str) -> bool:
         _, iter_str, salt_hex, hash_hex = hashed.split("$", 3)
         salt = bytes.fromhex(salt_hex)
         expected = bytes.fromhex(hash_hex)
-        derived = hashlib.pbkdf2_hmac(
-            "sha256", password.encode("utf-8"), salt, int(iter_str)
-        )
+        derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, int(iter_str))
         return hmac.compare_digest(derived, expected)
     except Exception:
         return False

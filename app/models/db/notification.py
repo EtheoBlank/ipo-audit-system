@@ -12,6 +12,7 @@
 ``SentimentNotification`` 老表保留 (兼容旧数据), 但前端的全局红点和
 所有新模块统一走本表。
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -80,6 +81,7 @@ NOTIF_MODULE_SYSTEM = "system"
 
 class Notification(Base):
     """通用通知 — 推送到指定用户 / 项目, 或广播 (user_id = NULL)."""
+
     __tablename__ = "notifications"
     __table_args__ = (
         Index("ix_notif_user_unread", "user_id", "is_read"),
@@ -97,20 +99,26 @@ class Notification(Base):
     )
 
     module: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
-    type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)  # 具体事件类型, 如 confirmation.locked
+    type: Mapped[str] = mapped_column(
+        String(80), nullable=False, index=True
+    )  # 具体事件类型, 如 confirmation.locked
     severity: Mapped[str] = mapped_column(
         String(20), default=NOTIF_SEVERITY_INFO, nullable=False, index=True
     )
 
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    link: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # 前端跳转 (anchor 或 path)
+    link: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )  # 前端跳转 (anchor 或 path)
 
     # 资源指针 (可空, 通知未必关联到具体资源)
     resource_type: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     resource_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
 
-    payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 字符串, 给前端额外渲染
+    payload: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # JSON 字符串, 给前端额外渲染
 
     # 状态
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)

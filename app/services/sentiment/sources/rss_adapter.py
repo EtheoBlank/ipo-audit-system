@@ -5,6 +5,7 @@
 默认行为: 试解析一条示例 RSS (财联社 / 雪球公开频道), 失败时返回空列表 (优雅降级).
 生产部署: 在 SentimentSource 表中注册带 base_url 的 RSS 信源.
 """
+
 from __future__ import annotations
 
 import logging
@@ -66,7 +67,11 @@ class RssAdapter(BaseSentimentSourceAdapter):
                     continue
                 # 命中任何一个搜索别名
                 matched = next(
-                    (q for q in queries if q in title or q in self.clean_text(entry.get("summary", ""))),
+                    (
+                        q
+                        for q in queries
+                        if q in title or q in self.clean_text(entry.get("summary", ""))
+                    ),
                     None,
                 )
                 if not matched:
@@ -82,7 +87,9 @@ class RssAdapter(BaseSentimentSourceAdapter):
                         severity="info",
                         title=title,
                         url=url,
-                        publisher=parsed.feed.get("title", feed_url) if hasattr(parsed, "feed") else feed_url,
+                        publisher=parsed.feed.get("title", feed_url)
+                        if hasattr(parsed, "feed")
+                        else feed_url,
                         publish_date=publish,
                         content_text=summary,
                         matched_alias=matched,

@@ -8,6 +8,7 @@
     verifier.py           # 双数据源对账 (financial vs 简报期 audit_verification_json 数字)
     word_exporter.py      # Markdown → .docx
 """
+
 from __future__ import annotations
 
 __all__: list[str] = []

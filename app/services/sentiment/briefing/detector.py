@@ -5,6 +5,7 @@
     - 同一项目同一天只能有一份简报 (idempotent)
     - 严重度全为 info 且都被忽略 → 不生成
 """
+
 from __future__ import annotations
 
 import logging
@@ -12,12 +13,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.db_models import (
-    SENTIMENT_DOC_STATUS_DRAFT,
     SENTIMENT_DOC_STATUS_FROZEN,
     SENTIMENT_EVENT_STATUS_IGNORED,
     SENTIMENT_SEVERITY_INFO,
@@ -31,9 +31,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DetectionResult:
     """detector 判定结果."""
+
     should_generate: bool
-    reason: str               # "ok" / "no_events" / "all_filtered" / "already_generated" / "already_locked"
-    event_count: int = 0      # 候选事件数
+    reason: str  # "ok" / "no_events" / "all_filtered" / "already_generated" / "already_locked"
+    event_count: int = 0  # 候选事件数
     existing_briefing_id: Optional[int] = None  # 若已存在
 
 
@@ -77,7 +78,10 @@ class BriefingDetector:
         return DetectionResult(True, "ok", event_count)
 
     async def _get_existing_briefing(
-        self, db: AsyncSession, project_id: int, briefing_date: str,
+        self,
+        db: AsyncSession,
+        project_id: int,
+        briefing_date: str,
     ) -> Optional[SentimentDailyBriefing]:
         res = await db.execute(
             select(SentimentDailyBriefing).where(
@@ -88,13 +92,16 @@ class BriefingDetector:
         return res.scalar_one_or_none()
 
     async def _count_relevant_events(
-        self, db: AsyncSession, project_id: int, briefing_date: str,
+        self,
+        db: AsyncSession,
+        project_id: int,
+        briefing_date: str,
     ) -> int:
         """窗口: briefing_date 当天 (00:00 ~ 23:59) + 向前 lookback_hours 小时."""
         window_start = self._parse_date(briefing_date) - timedelta(hours=self.lookback_hours)
         window_end_str = briefing_date + " 23:59:59"
         # 用 publish_date 字符串粗略比较 (YYYY-MM-DD 字典序 = 时间序)
-        window_start_str = window_start.strftime("%Y-%m-%d %H:%M:%S")
+        window_start.strftime("%Y-%m-%d %H:%M:%S")
 
         res = await db.execute(
             select(func.count(SentimentEvent.id)).where(
@@ -116,7 +123,10 @@ class BriefingDetector:
         return int(res.scalar() or 0)
 
     async def _is_all_filtered(
-        self, db: AsyncSession, project_id: int, briefing_date: str,
+        self,
+        db: AsyncSession,
+        project_id: int,
+        briefing_date: str,
     ) -> bool:
         """窗口内事件是否全部 (severity=info AND review_status=ignored)."""
         res = await db.execute(

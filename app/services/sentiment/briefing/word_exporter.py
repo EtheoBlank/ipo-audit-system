@@ -5,12 +5,12 @@
 - 落盘路径: settings.SENTIMENT_OUTPUT_DIR / "briefings" / "{project_id}_{date}.docx"
 - 返回 (file_path, sha256)
 """
+
 from __future__ import annotations
 
 import hashlib
 import logging
 import re
-from io import BytesIO
 from pathlib import Path
 from typing import Optional
 

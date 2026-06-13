@@ -1,10 +1,11 @@
 """Pydantic schemas for auth module (User / Firm / Role / Permission / Approval / AuditLog)."""
+
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel, Field, EmailStr, ConfigDict, field_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 from app.models.db.auth import (
     ROLE_ASSISTANT,
@@ -217,6 +218,7 @@ class RolePermissionAssign(BaseModel):
 
 class ApprovalStepDefinition(BaseModel):
     """单步骤定义 (创建审批流时由调用方传)."""
+
     step_no: int = Field(..., ge=1)
     required_role: str
     approver_user_id: Optional[int] = None
@@ -242,6 +244,20 @@ class ApprovalDecision(BaseModel):
     action: str = Field(..., pattern=r"^(approve|reject|delegate|comment)$")
     comment: Optional[str] = Field(None, max_length=2000)
     delegate_to_user_id: Optional[int] = None
+    expected_version: Optional[int] = Field(
+        None,
+        description="乐观锁版本快照 (来自上次 GET /approvals/{id} 返回的 version). "
+        "若实际 version 不一致, 返 409 Conflict; 不传则跳过版本校验.",
+    )
+
+
+class ApprovalWithdrawRequest(BaseModel):
+    """撤回审批 — 可选乐观锁."""
+
+    expected_version: Optional[int] = Field(
+        None,
+        description="乐观锁版本快照. 详见 ApprovalDecision.expected_version.",
+    )
 
 
 class ApprovalStepResponse(BaseModel):
@@ -273,6 +289,7 @@ class ApprovalWorkflowResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime] = None
+    version: int = 0
     steps: List[ApprovalStepResponse] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 

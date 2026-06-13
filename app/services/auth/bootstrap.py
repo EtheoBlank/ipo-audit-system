@@ -2,6 +2,7 @@
 
 幂等: 多次调用不会重复创建. 由 ``app/main.py`` lifespan 调用.
 """
+
 from __future__ import annotations
 
 import logging
@@ -86,10 +87,7 @@ async def _ensure_firm(db: AsyncSession) -> Firm:
 
 
 async def _ensure_roles(db: AsyncSession) -> None:
-    existing_codes = {
-        r.code
-        for r in (await db.execute(select(Role))).scalars().all()
-    }
+    existing_codes = {r.code for r in (await db.execute(select(Role))).scalars().all()}
     added = 0
     for code, name, desc in _DEFAULT_ROLES:
         if code in existing_codes:
@@ -110,10 +108,7 @@ async def _ensure_roles(db: AsyncSession) -> None:
 
 
 async def _ensure_permissions(db: AsyncSession) -> None:
-    existing_codes = {
-        p.code
-        for p in (await db.execute(select(Permission))).scalars().all()
-    }
+    existing_codes = {p.code for p in (await db.execute(select(Permission))).scalars().all()}
     added = 0
     for code, name, module in _DEFAULT_PERMISSIONS:
         if code in existing_codes:
@@ -127,9 +122,7 @@ async def _ensure_permissions(db: AsyncSession) -> None:
 
 async def _ensure_admin(db: AsyncSession, firm: Firm) -> Optional[User]:
     # 已有任何 admin 用户 → 跳过
-    existing = (
-        await db.execute(select(User).where(User.role == ROLE_ADMIN))
-    ).scalars().first()
+    existing = (await db.execute(select(User).where(User.role == ROLE_ADMIN))).scalars().first()
     if existing is not None:
         return existing
     username = settings.AUTH_BOOTSTRAP_ADMIN_USERNAME or "admin"
@@ -175,11 +168,11 @@ async def bootstrap_auth() -> None:
             # 仅在认证启用时才创建默认 admin
             if settings.AUTH_ENABLED:
                 # 生产保护: 若 AUTH_ENABLED=true 且密码仍是 example 默认值, 拒绝
-                if (
-                    not settings.DEBUG
-                    and settings.AUTH_BOOTSTRAP_ADMIN_PASSWORD
-                    in {"Admin@1234", "", "__SET_ME_BEFORE_AUTH_ENABLED__"}
-                ):
+                if not settings.DEBUG and settings.AUTH_BOOTSTRAP_ADMIN_PASSWORD in {
+                    "Admin@1234",
+                    "",
+                    "__SET_ME_BEFORE_AUTH_ENABLED__",
+                }:
                     logger.error(
                         "生产模式 (DEBUG=False) + AUTH_ENABLED=true, 但 AUTH_BOOTSTRAP_ADMIN_PASSWORD "
                         "仍是默认值。出于安全考虑跳过创建默认管理员 — 请通过 .env 设置强密码后再启动。"
@@ -187,8 +180,6 @@ async def bootstrap_auth() -> None:
                     return
                 await _ensure_admin(db, firm)
             else:
-                logger.info(
-                    "AUTH_ENABLED=false, 跳过创建默认管理员 (开启认证时再建)。"
-                )
+                logger.info("AUTH_ENABLED=false, 跳过创建默认管理员 (开启认证时再建)。")
     except Exception as exc:  # noqa: BLE001
         logger.exception("Auth bootstrap 失败 (非致命, 将继续启动): %s", exc)

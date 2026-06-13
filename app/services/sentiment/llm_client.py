@@ -8,6 +8,7 @@
 接口 (LlmClientProtocol) — 所有实现必须暴露:
     async chat_json(system, user, *, temperature, max_tokens, timeout) -> dict
 """
+
 from __future__ import annotations
 
 import json

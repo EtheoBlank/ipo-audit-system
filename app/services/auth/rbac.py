@@ -1,7 +1,7 @@
 """RBAC — 角色级别比较 + 字符串 code 权限检查."""
+
 from __future__ import annotations
 
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession

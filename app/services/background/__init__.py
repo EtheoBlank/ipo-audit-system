@@ -8,6 +8,7 @@
 
 未来可平滑替换为 Celery / Arq, 调用方接口 ``dispatch(event_name, payload)`` 不变.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -48,7 +49,9 @@ def unregister_listener(event_name: str, fn: Listener) -> None:
 def list_listeners(event_name: Optional[str] = None) -> Dict[str, List[str]]:
     """诊断用: 列出已注册的事件 + listener 名."""
     if event_name:
-        return {event_name: [getattr(f, "__name__", str(f)) for f in _listeners.get(event_name, [])]}
+        return {
+            event_name: [getattr(f, "__name__", str(f)) for f in _listeners.get(event_name, [])]
+        }
     return {
         name: [getattr(f, "__name__", str(f)) for f in bucket]
         for name, bucket in _listeners.items()
@@ -113,4 +116,3 @@ __all__ = [
     "dispatch_background",
     "get_session_factory",
 ]
-

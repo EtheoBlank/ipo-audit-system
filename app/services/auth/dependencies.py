@@ -6,6 +6,7 @@
   - require_role(role)          — 要求角色 ≥ role
   - require_permission(code)    — 要求拥有权限 code
 """
+
 from __future__ import annotations
 
 import logging
@@ -183,9 +184,7 @@ def require_permission(permission_code: str):
                     detail=f"缺少权限 {permission_code}",
                 )
         except AuthorizationError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
-            ) from exc
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
         return user
 
     return _checker

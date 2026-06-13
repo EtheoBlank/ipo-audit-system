@@ -8,6 +8,7 @@
   - 项目级总览 (跨科目)
   - Excel 导出审定明细
 """
+
 from __future__ import annotations
 
 import logging
@@ -79,7 +80,9 @@ async def get_effective_prefixes(
                     LongTermAssetScopeOverride.project_id == project_id
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     for r in rows:
         if r.action == "include":
@@ -115,7 +118,9 @@ class AccountAuditService:
                     .where(LongTermAssetScopeOverride.project_id == project_id)
                     .order_by(asc(LongTermAssetScopeOverride.account_prefix))
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
 
     @staticmethod
@@ -160,9 +165,7 @@ class AccountAuditService:
         return ov
 
     @staticmethod
-    async def remove_scope_override(
-        db: AsyncSession, *, project_id: int, override_id: int
-    ) -> bool:
+    async def remove_scope_override(db: AsyncSession, *, project_id: int, override_id: int) -> bool:
         ov = (
             await db.execute(
                 select(LongTermAssetScopeOverride).where(
@@ -237,7 +240,6 @@ class AccountAuditService:
         skipped = 0
         for r in rows:
             # 默认每行只有一个方向(借或贷)非零; 都非零时分两条记录
-            line_no_counter = {"debit": 1, "credit": 1}
             for direction, amount in (
                 (MOVEMENT_DIRECTION_DEBIT, float(r.debit_amount or 0)),
                 (MOVEMENT_DIRECTION_CREDIT, float(r.credit_amount or 0)),
@@ -345,7 +347,9 @@ class AccountAuditService:
         if row is None:
             raise ValueError(f"movement_id={movement_id} 不存在")
         row.status = MOVEMENT_AUDIT_STATUS_DISPUTED
-        row.note = (row.note or "") + f"\n[争议 {_utcnow_naive().isoformat()} by {user_display or user_id}] {reason}"
+        row.note = (
+            row.note or ""
+        ) + f"\n[争议 {_utcnow_naive().isoformat()} by {user_display or user_id}] {reason}"
         row.audited_by_user_id = user_id
         row.audited_by_display = user_display
         row.audited_at = _utcnow_naive()
@@ -376,7 +380,9 @@ class AccountAuditService:
                         AccountMovementAudit.period_end == period_end,
                     )
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
         index: Dict[Tuple[str, str, int, str], AccountMovementAudit] = {
             (r.account_code, r.voucher_no, r.voucher_line_no, r.direction): r for r in rows
@@ -443,6 +449,7 @@ class AccountAuditService:
         if keyword:
             # P0 第 2 轮修复 — 转义 LIKE 通配符 + 限长 200 防全表扫描 DoS (与 audit_log 同源)
             from app.services.auth.audit_log import _escape_like
+
             kw = keyword[:200]
             like = f"%{_escape_like(kw)}%"
             conds.append(
@@ -456,7 +463,8 @@ class AccountAuditService:
         total = int(
             (
                 await db.execute(select(func.count(AccountMovementAudit.id)).where(where))
-            ).scalar_one() or 0
+            ).scalar_one()
+            or 0
         )
         stmt = (
             select(AccountMovementAudit)
@@ -511,7 +519,9 @@ class AccountAuditService:
                         AccountMovementAudit.period_end == period_end,
                     )
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
 
         debit_book = 0.0
@@ -615,7 +625,9 @@ class AccountAuditService:
                 await db.execute(
                     select(AccountBalance).where(AccountBalance.project_id == project_id)
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
 
         accounts: List[AccountAuditSummary] = []
