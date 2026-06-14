@@ -166,17 +166,19 @@ async def rotate_audit_logs(
         if not ids:
             break
 
-        # 复制到归档表
-        id_csv = ",".join(str(i) for i in ids)
-        insert_sql = text(
-            f"INSERT INTO {_ARCHIVE_TABLE} ({cols}) "
-            f"SELECT {cols} FROM audit_logs WHERE id IN ({id_csv})"
-        )
-        await db.execute(insert_sql)
-
-        # raw DELETE (绕过 ORM event)
-        del_sql = text(f"DELETE FROM audit_logs WHERE id IN ({id_csv})")
-        del_res = await db.execute(del_sql)
+        # 复制到归档表 — 用 IN 子句, 但分块避免 PG/SQLite 长 IN 问题
+        chunk_size = 500
+        for i in range(0, len(ids), chunk_size):
+            chunk = ids[i:i + chunk_size]
+            id_csv = ",".join(str(i) for i in chunk)
+            insert_sql = text(
+                f"INSERT INTO {_ARCHIVE_TABLE} ({cols}) "
+                f"SELECT {cols} FROM audit_logs WHERE id IN ({id_csv})"
+            )
+            await db.execute(insert_sql)
+            # raw DELETE (绕过 ORM event)
+            del_sql = text(f"DELETE FROM audit_logs WHERE id IN ({id_csv})")
+            del_res = await db.execute(del_sql)
         await db.commit()
 
         archived_total += len(ids)

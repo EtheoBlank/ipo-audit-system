@@ -50,7 +50,7 @@ class RegulatoryCaseScraper:
 
     async def scrape_sse_inquiry(self, page: int = 1) -> List[Dict]:
         """抓取上交所问询函."""
-        url = f"{settings.SseUrl}/markets/stock/list/ inquiry"
+        url = f"{settings.SseUrl}/markets/stock/list/inquiry"
         params = {"page": page}
         cases = []
         try:

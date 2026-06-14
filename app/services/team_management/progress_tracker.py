@@ -226,13 +226,16 @@ class ProgressTracker:
         )
 
         c = Counter(b.severity for b in blockers)
-        now = datetime.now(timezone.utc)
+        # raised_at 字段在项目中统一为 naive UTC (utc_now()), 这里用 naive now 保持一致
+        now = datetime.utcnow()
         ages: list[float] = []
         for b in blockers:
             raised = b.raised_at
             if raised is None:
                 continue
-            # raised_at 是 tz-aware utc
+            # 兼容历史数据: 若 raised_at 是 tz-aware, 转 naive
+            if raised.tzinfo is not None:
+                raised = raised.replace(tzinfo=None)
             try:
                 delta = (now - raised).total_seconds() / 3600.0
                 ages.append(delta)

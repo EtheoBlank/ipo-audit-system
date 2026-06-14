@@ -158,12 +158,6 @@ class SalesLedgerSynthesizer:
     # --- utilities exposed for tests / API -----------------------------
 
     @staticmethod
-    def coerce_dates(rec: dict[str, Any]) -> tuple[Optional[datetime], Optional[datetime]]:
-        ship = _parse_date(rec.get("ship_date"))
-        confirm = _parse_date(rec.get("revenue_confirm_date"))
-        return ship, confirm
-
-    @staticmethod
     def coerce_numbers(rec: dict[str, Any]) -> dict[str, float]:
         revenue = _parse_float(rec.get("revenue_amount"))
         tax_rate = _parse_float(rec.get("tax_rate"))

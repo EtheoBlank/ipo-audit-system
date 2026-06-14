@@ -351,9 +351,11 @@ def _tab_checklist(project_id: int) -> None:
         ]
         cols_show = [c for c in cols_show if c in df.columns]
         st.dataframe(df[cols_show], width="stretch", height=400)
-        missing = df[(df.get("is_required", False)) & (~df.get("is_uploaded", False))]
-        if not missing.empty:
-            st.warning(f"⚠️ 必交但未上传: {len(missing)} 项")
+        # df.get("key", default) 返回的是 Series, 不会返回默认值, 必须用 in + 直接索引
+        if "is_required" in df.columns and "is_uploaded" in df.columns:
+            missing = df[(df["is_required"]) & (~df["is_uploaded"])]
+            if not missing.empty:
+                st.warning(f"⚠️ 必交但未上传: {len(missing)} 项")
 
     with st.expander("✏️ 标记某项已上传", expanded=False):
         item_id = st.number_input("清单项 ID", min_value=0, step=1, value=0)

@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from app.utils.datetime_helpers import utc_now
 from typing import Optional
 
 from sqlalchemy import (
@@ -65,10 +66,6 @@ __all__ = [
 ]
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
 # ============================================================
 #  Phase 16 — 内控穿行测试
 # ============================================================
@@ -88,7 +85,7 @@ class InternalControlCycle(Base):
     cycle_name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class ICRiskControl(Base):
@@ -109,7 +106,7 @@ class ICRiskControl(Base):
     # preventive / detective; manual / automated
     control_frequency: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     test_assertion: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class ICWalkthrough(Base):
@@ -128,7 +125,7 @@ class ICWalkthrough(Base):
     # effective / partial / ineffective
     flowchart_mermaid: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class ICWalkthroughStep(Base):
@@ -144,7 +141,7 @@ class ICWalkthroughStep(Base):
     control_evidence: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     test_result: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     issues_noted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class ICSamplingResult(Base):
@@ -160,7 +157,7 @@ class ICSamplingResult(Base):
     criteria: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sample_count: Mapped[int] = mapped_column(Integer, default=0)
     sampled_voucher_nos: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -186,7 +183,7 @@ class RevenueCutoffTest(Base):
     adjustment_proposed: Mapped[float] = mapped_column(Float, default=0.0)
     accepted: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class ContractAssetLiability(Base):
@@ -203,7 +200,7 @@ class ContractAssetLiability(Base):
     # contract_asset (已履约未开票) / contract_liability (已收款未履约)
     amount: Mapped[float] = mapped_column(Float, default=0.0)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class JournalEntryDraft(Base):
@@ -228,7 +225,7 @@ class JournalEntryDraft(Base):
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     decided_by_display: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -248,7 +245,7 @@ class Prospectus(Base):
     upload_date: Mapped[str] = mapped_column(String(20), nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_current: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class ProspectusKeyMetric(Base):
@@ -271,7 +268,7 @@ class ProspectusKeyMetric(Base):
     diff_pct: Mapped[float] = mapped_column(Float, default=0.0)
     is_matched: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class ReconciliationFinding(Base):
@@ -290,7 +287,7 @@ class ReconciliationFinding(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     suggested_action: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     resolved: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -318,7 +315,7 @@ class PeriodComparisonReport(Base):
     yoy_change_pct: Mapped[float] = mapped_column(Float, default=0.0)
     anomaly_flag: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     ai_explanation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -345,7 +342,7 @@ class CustomerSupplierOverlap(Base):
     is_related_party: Mapped[bool] = mapped_column(Boolean, default=False)
     explanation_required: Mapped[bool] = mapped_column(Boolean, default=True)
     explanation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -367,7 +364,7 @@ class PeerCompany(Base):
     main_business: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     market_cap: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class PeerCompanyMetric(Base):
@@ -384,7 +381,7 @@ class PeerCompanyMetric(Base):
     metric_name: Mapped[str] = mapped_column(String(200), nullable=False)
     value: Mapped[float] = mapped_column(Float, default=0.0)
     unit: Mapped[str] = mapped_column(String(20), default="%")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -410,7 +407,7 @@ class FeedbackLetter(Base):
     # open / in_progress / replied / closed
     title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class FeedbackQuestion(Base):
@@ -427,7 +424,7 @@ class FeedbackQuestion(Base):
     severity: Mapped[str] = mapped_column(String(20), default="warn")
     status: Mapped[str] = mapped_column(String(20), default="open")
     assigned_to_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class FeedbackResponse(Base):
@@ -442,7 +439,7 @@ class FeedbackResponse(Base):
     submitted_by_display: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     is_final: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -467,4 +464,4 @@ class SubmissionChecklistItem(Base):
     uploaded_by_display: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     file_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

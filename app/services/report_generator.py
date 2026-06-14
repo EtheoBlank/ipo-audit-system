@@ -69,9 +69,9 @@ class ComprehensiveReportGenerator:
         rows_data = [
             ("公司名称", project_info.get("company_name", "")),
             ("所属行业", project_info.get("industry", "")),
-            ("注册资本", f"{financial_data.get('registered_capital', 0):,.2f}万元"),
-            ("总资产", f"{financial_data.get('total_assets', 0):,.2f}万元"),
-            ("营业收入", f"{financial_data.get('revenue', 0):,.2f}万元"),
+            ("注册资本", f"{financial_data.get('registered_capital') or 0:,.2f}万元"),
+            ("总资产", f"{financial_data.get('total_assets') or 0:,.2f}万元"),
+            ("营业收入", f"{financial_data.get('revenue') or 0:,.2f}万元"),
         ]
 
         for i, (label, value) in enumerate(rows_data):
@@ -88,10 +88,10 @@ class ComprehensiveReportGenerator:
         table.style = "Table Grid"
 
         rows_data = [
-            ("毛利率", f"{financial_data.get('gross_margin', 0):.2f}%"),
-            ("净利率", f"{financial_data.get('net_margin', 0):.2f}%"),
-            ("净资产收益率", f"{financial_data.get('roe', 0):.2f}%"),
-            ("每股收益", f"{financial_data.get('eps', 0):.2f}元"),
+            ("毛利率", f"{financial_data.get('gross_margin') or 0:.2f}%"),
+            ("净利率", f"{financial_data.get('net_margin') or 0:.2f}%"),
+            ("净资产收益率", f"{financial_data.get('roe') or 0:.2f}%"),
+            ("每股收益", f"{financial_data.get('eps') or 0:.2f}元"),
         ]
 
         for i, (label, value) in enumerate(rows_data):
@@ -104,9 +104,9 @@ class ComprehensiveReportGenerator:
         table2.style = "Table Grid"
 
         rows_data2 = [
-            ("流动比率", f"{financial_data.get('current_ratio', 0):.2f}"),
-            ("速动比率", f"{financial_data.get('quick_ratio', 0):.2f}"),
-            ("资产负债率", f"{financial_data.get('debt_ratio', 0):.2f}%"),
+            ("流动比率", f"{financial_data.get('current_ratio') or 0:.2f}"),
+            ("速动比率", f"{financial_data.get('quick_ratio') or 0:.2f}"),
+            ("资产负债率", f"{financial_data.get('debt_ratio') or 0:.2f}%"),
         ]
 
         for i, (label, value) in enumerate(rows_data2):
@@ -301,10 +301,10 @@ class PDFReportGenerator:
         story.append(Paragraph("二、主要财务指标", styles["Heading2"]))
         fin_data = [
             ["指标", "金额/比例"],
-            ["总资产", f"{financial_data.get('total_assets', 0):,.2f}万元"],
-            ["营业收入", f"{financial_data.get('revenue', 0):,.2f}万元"],
-            ["净利润", f"{financial_data.get('net_profit', 0):,.2f}万元"],
-            ["毛利率", f"{financial_data.get('gross_margin', 0):.2f}%"],
+            ["总资产", f"{financial_data.get('total_assets') or 0:,.2f}万元"],
+            ["营业收入", f"{financial_data.get('revenue') or 0:,.2f}万元"],
+            ["净利润", f"{financial_data.get('net_profit') or 0:,.2f}万元"],
+            ["毛利率", f"{financial_data.get('gross_margin') or 0:.2f}%"],
         ]
         fin_table = Table(fin_data, colWidths=[4 * cm, 10 * cm])
         fin_table.setStyle(
@@ -337,8 +337,8 @@ class PDFReportGenerator:
         story.append(
             Paragraph(
                 f"状态：{'平衡' if trial_balance.get('is_balanced') else '不平衡'} | "
-                f"借方合计：{trial_balance.get('total_debit', 0):,.2f} | "
-                f"贷方合计：{trial_balance.get('total_credit', 0):,.2f}",
+                f"借方合计：{trial_balance.get('total_debit') or 0:,.2f} | "
+                f"贷方合计：{trial_balance.get('total_credit') or 0:,.2f}",
                 styles["Normal"],
             )
         )

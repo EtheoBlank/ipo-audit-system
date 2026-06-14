@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from app.utils.datetime_helpers import utc_now
 from typing import Optional
 
 from sqlalchemy import (
@@ -72,10 +73,6 @@ __all__ = [
 ]
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
 # ============================================================
 #  1. PAYABLES (应付循环)
 # ============================================================
@@ -99,7 +96,7 @@ class Supplier(Base):
     address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     payment_terms: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     is_related_party: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class PayableAging(Base):
@@ -123,7 +120,7 @@ class PayableAging(Base):
     amount_over_365: Mapped[float] = mapped_column(Float, default=0.0)
     total_amount: Mapped[float] = mapped_column(Float, default=0.0)
     risk_flag: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -151,7 +148,7 @@ class ExpenseRecord(Base):
     amount: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_related_party: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class ExpenseAnomalyFlag(Base):
@@ -168,7 +165,7 @@ class ExpenseAnomalyFlag(Base):
     # 整数报销 / 节假日报销 / 业务招待超 60% / 1‰ / 关联方支付
     severity: Mapped[str] = mapped_column(String(20), default="warn", nullable=False)
     detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -194,7 +191,7 @@ class PayrollRecord(Base):
     income_tax: Mapped[float] = mapped_column(Float, default=0.0)
     net_salary: Mapped[float] = mapped_column(Float, default=0.0)
     is_senior_executive: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class PayrollReconciliation(Base):
@@ -214,7 +211,7 @@ class PayrollReconciliation(Base):
     discrepancy_amount: Mapped[float] = mapped_column(Float, default=0.0)
     is_balanced: Mapped[bool] = mapped_column(Boolean, default=True)
     discrepancy_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -246,7 +243,7 @@ class FixedAsset(Base):
     # straight_line / double_declining / sum_of_years / units_of_production
     location: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     in_use: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class DepreciationRecalc(Base):
@@ -264,7 +261,7 @@ class DepreciationRecalc(Base):
     diff_pct: Mapped[float] = mapped_column(Float, default=0.0)
     has_material_diff: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class ConstructionInProgress(Base):
@@ -282,7 +279,7 @@ class ConstructionInProgress(Base):
     transfer_ready: Mapped[bool] = mapped_column(Boolean, default=False)
     transfer_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     transfer_evidence_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -306,7 +303,7 @@ class IntangibleAsset(Base):
     useful_life_months: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     acquired_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     is_internally_developed: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class RDCapitalizationAssessment(Base):
@@ -331,7 +328,7 @@ class RDCapitalizationAssessment(Base):
     capitalized_amount: Mapped[float] = mapped_column(Float, default=0.0)
     expensed_amount: Mapped[float] = mapped_column(Float, default=0.0)
     evidence_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -358,7 +355,7 @@ class LongTermInvestment(Base):
     is_consolidated: Mapped[bool] = mapped_column(Boolean, default=False)
     goodwill_amount: Mapped[float] = mapped_column(Float, default=0.0)
     acquired_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class GoodwillImpairmentTest(Base):
@@ -384,7 +381,7 @@ class GoodwillImpairmentTest(Base):
     impairment_required: Mapped[float] = mapped_column(Float, default=0.0)
     method_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     cashflow_table_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -412,7 +409,7 @@ class LeaseContract(Base):
     use_simplified: Mapped[bool] = mapped_column(Boolean, default=False)
     rou_asset_initial: Mapped[float] = mapped_column(Float, default=0.0)
     lease_liability_initial: Mapped[float] = mapped_column(Float, default=0.0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class LeaseAmortizationSchedule(Base):
@@ -429,7 +426,7 @@ class LeaseAmortizationSchedule(Base):
     rou_depreciation: Mapped[float] = mapped_column(Float, default=0.0)
     liability_balance: Mapped[float] = mapped_column(Float, default=0.0)
     rou_balance: Mapped[float] = mapped_column(Float, default=0.0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -455,7 +452,7 @@ class IncomeTaxReconciliation(Base):
     deferred_tax_change: Mapped[float] = mapped_column(Float, default=0.0)
     losses_carried_forward_used: Mapped[float] = mapped_column(Float, default=0.0)
     bridging_table_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class DeferredTaxItem(Base):
@@ -472,7 +469,7 @@ class DeferredTaxItem(Base):
     tax_rate: Mapped[float] = mapped_column(Float, default=0.25)
     deferred_tax_amount: Mapped[float] = mapped_column(Float, default=0.0)
     recognition_basis: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -498,7 +495,7 @@ class ECLAssessment(Base):
     ead_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 风险敞口
     ecl_amount: Mapped[float] = mapped_column(Float, default=0.0)
     methodology_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class AssetImpairmentTest(Base):
@@ -516,7 +513,7 @@ class AssetImpairmentTest(Base):
     impairment_required: Mapped[float] = mapped_column(Float, default=0.0)
     method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class ProvisionEstimate(Base):
@@ -535,7 +532,7 @@ class ProvisionEstimate(Base):
     # pending / booked / disclosed_only / no_action
     period_end: Mapped[str] = mapped_column(String(20), nullable=False)
     evidence_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 # ============================================================
@@ -560,7 +557,7 @@ class SubsequentEvent(Base):
     disclosure_required: Mapped[bool] = mapped_column(Boolean, default=False)
     disclosure_section: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     evidence_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class GoingConcernAssessment(Base):
@@ -582,4 +579,4 @@ class GoingConcernAssessment(Base):
     # low / medium / high / substantial_doubt
     mitigating_factors: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     conclusion: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

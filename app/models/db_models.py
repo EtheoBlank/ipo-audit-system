@@ -11,7 +11,8 @@
 本文件保留 import 即可, 调用方无感知。
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
+from app.utils.datetime_helpers import utc_now
 from typing import Optional
 from sqlalchemy import (
     String,
@@ -29,15 +30,6 @@ from app.core.database import Base
 
 # 子模块聚合 — 新增模块在 app/models/db/__init__.py 加一行即可
 from app.models.db import *  # noqa: F401, F403
-
-
-def _utcnow() -> datetime:
-    """Return the current UTC datetime (timezone-aware).
-
-    Replaces the deprecated ``_utcnow()`` which returns a naive
-    datetime and is removed in Python 3.14.
-    """
-    return datetime.now(timezone.utc)
 
 
 class Project(Base):
@@ -82,8 +74,8 @@ class Project(Base):
         String(10), default="normal", nullable=True, index=True
     )
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     # 关联关系
     account_balances: Mapped[list["AccountBalance"]] = relationship(
@@ -172,7 +164,7 @@ class AccountBalance(Base):
     debit_amount: Mapped[float] = mapped_column(Float, default=0)
     credit_amount: Mapped[float] = mapped_column(Float, default=0)
     ending_balance: Mapped[float] = mapped_column(Float, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     # 关联关系
     project: Mapped["Project"] = relationship(back_populates="account_balances")
@@ -193,7 +185,7 @@ class ChronologicalAccount(Base):
     credit_amount: Mapped[float] = mapped_column(Float, default=0)
     summary: Mapped[str] = mapped_column(Text, nullable=True)
     auxiliary_accounting: Mapped[str] = mapped_column(String(200), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     # 关联关系
     project: Mapped["Project"] = relationship(back_populates="chronological_accounts")
@@ -213,7 +205,7 @@ class BankStatement(Base):
     credit_amount: Mapped[float] = mapped_column(Float, default=0)
     balance: Mapped[float] = mapped_column(Float, default=0)
     bank_account: Mapped[str] = mapped_column(String(50), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     # 关联关系
     project: Mapped["Project"] = relationship(back_populates="bank_statements")
@@ -236,8 +228,8 @@ class RegulatoryCase(Base):
     industry: Mapped[str] = mapped_column(String(100), nullable=True, index=True)
     key_words: Mapped[str] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class AuditRisk(Base):
@@ -256,7 +248,7 @@ class AuditRisk(Base):
         Integer, ForeignKey("regulatory_cases.id"), nullable=True
     )
     is_resolved: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     resolved_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
     # 关联关系
@@ -279,7 +271,7 @@ class SalesDocument(Base):
     doc_type: Mapped[str] = mapped_column(String(20), nullable=False)  # docx / pdf / xlsx
     raw_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     project: Mapped["Project"] = relationship(back_populates="sales_documents")
     records: Mapped[list["SalesRecord"]] = relationship(
@@ -350,8 +342,8 @@ class SalesRecord(Base):
     confidence: Mapped[float] = mapped_column(Float, default=1.0)  # AI 合成置信度（0-1）
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)  # 人工核对标志
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     project: Mapped["Project"] = relationship(back_populates="sales_records")
     document: Mapped[Optional["SalesDocument"]] = relationship(back_populates="records")
@@ -385,7 +377,7 @@ class ContractDocument(Base):
     # 风险扫描结论
     risk_flags: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     analyzed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="contracts")
@@ -450,7 +442,7 @@ class InventoryMovement(Base):
     unit_cost: Mapped[float] = mapped_column(Float, default=0.0)  # 期末加权平均成本单价
 
     source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     project: Mapped["Project"] = relationship(back_populates="inventory_movements")
 
@@ -486,8 +478,8 @@ class InventoryCountPlan(Base):
         Text, nullable=True
     )  # JSON 数组：每次用户对话修改
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     project: Mapped["Project"] = relationship(back_populates="inventory_count_plans")
     sheets: Mapped[list["InventoryCountSheet"]] = relationship(
@@ -535,8 +527,8 @@ class InventoryCountSheet(Base):
     counted_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     remark: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     project: Mapped["Project"] = relationship(back_populates="inventory_count_sheets")
     plan: Mapped[Optional["InventoryCountPlan"]] = relationship(back_populates="sheets")
@@ -599,7 +591,7 @@ class InventoryImpairment(Base):
     method: Mapped[str] = mapped_column(String(20), default="aging")  # aging / nrv / combined
     note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     project: Mapped["Project"] = relationship(back_populates="inventory_impairments")
 
@@ -624,7 +616,7 @@ class InventoryCodeMapping(Base):
     old_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     new_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     note: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 # ============================================================
@@ -729,11 +721,11 @@ class ConfirmationCase(Base):
     lock_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     # 生成 / 审计
-    generated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     generated_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     # 关联
     project: Mapped["Project"] = relationship(back_populates="confirmation_cases")
@@ -816,8 +808,8 @@ class ConfirmationItem(Base):
         Integer, ForeignKey("confirmation_responses.id"), nullable=True, index=True
     )
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     case: Mapped["ConfirmationCase"] = relationship(back_populates="items")
 
@@ -880,8 +872,8 @@ class ConfirmationLetter(Base):
     reminder_count: Mapped[int] = mapped_column(Integer, default=0)
     last_reminded_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     case: Mapped["ConfirmationCase"] = relationship(back_populates="letters")
     item: Mapped["ConfirmationItem"] = relationship(foreign_keys=[item_id])
@@ -926,8 +918,8 @@ class ConfirmationResponse(Base):
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     auditor_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     letter: Mapped["ConfirmationLetter"] = relationship(foreign_keys=[letter_id])
     photos: Mapped[list["ConfirmationResponsePhoto"]] = relationship(
@@ -960,7 +952,7 @@ class ConfirmationResponsePhoto(Base):
     matched_subjects: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 数组
 
     note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     response: Mapped["ConfirmationResponse"] = relationship(back_populates="photos")
@@ -1007,7 +999,7 @@ class InventoryCountPhoto(Base):
     counted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
@@ -1062,9 +1054,9 @@ class Regulation(Base):
     )
 
     # 元数据
-    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     favorites: Mapped[list["RegulationFavorite"]] = relationship(
         back_populates="regulation", cascade="all, delete-orphan"
@@ -1085,7 +1077,7 @@ class RegulationFavorite(Base):
     )
     note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     tag: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     regulation: Mapped["Regulation"] = relationship(back_populates="favorites")
 
@@ -1135,7 +1127,7 @@ class KnowledgeBook(Base):
     embedding_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     embedding_dim: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     indexed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     chunks: Mapped[list["KnowledgeChunk"]] = relationship(
@@ -1172,7 +1164,7 @@ class KnowledgeChunk(Base):
     # 向量 (JSON 字符串)
     embedding: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     book: Mapped["KnowledgeBook"] = relationship(back_populates="chunks")
 
@@ -1193,7 +1185,7 @@ class KnowledgeRetrievalLog(Base):
     top_chunk_ids: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 数组
     top_scores: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 数组
     result_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 # ============================================================
@@ -1382,8 +1374,8 @@ class SentimentSubject(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
 
     note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     project: Mapped["Project"] = relationship(back_populates="sentiment_subjects")
 
@@ -1415,8 +1407,8 @@ class SentimentSource(Base):
     last_run_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class SentimentEvent(Base):
@@ -1466,9 +1458,9 @@ class SentimentEvent(Base):
         Integer, ForeignKey("sentiment_daily_briefings.id"), nullable=True, index=True
     )
 
-    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     project: Mapped["Project"] = relationship(back_populates="sentiment_events")
     source: Mapped[Optional["SentimentSource"]] = relationship()
@@ -1530,8 +1522,8 @@ class SentimentDailyBriefing(Base):
     review_comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     event_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     project: Mapped["Project"] = relationship(back_populates="daily_briefings")
     revisions: Mapped[list["SentimentDailyBriefingRevision"]] = relationship(
@@ -1554,7 +1546,7 @@ class SentimentDailyBriefingRevision(Base):
     snapshot_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     change_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     changed_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    changed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    changed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     briefing: Mapped["SentimentDailyBriefing"] = relationship(back_populates="revisions")
 
@@ -1633,8 +1625,8 @@ class SentimentQuarterlyReport(Base):
     reviewed_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     review_comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     project: Mapped["Project"] = relationship(back_populates="quarterly_reports")
     revisions: Mapped[list["SentimentQuarterlyReportRevision"]] = relationship(
@@ -1658,7 +1650,7 @@ class SentimentQuarterlyReportRevision(Base):
     amount_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     change_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     changed_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    changed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    changed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     report: Mapped["SentimentQuarterlyReport"] = relationship(back_populates="revisions")
 
@@ -1679,7 +1671,7 @@ class SentimentNotification(Base):
     link_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     read_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
 
 
 # ============================================================
@@ -1860,8 +1852,8 @@ class TeamMember(Base):
         String(20), nullable=True
     )  # 入职日期 YYYY-MM-DD
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     # 关系
     # NOTE: 不在 TeamMember 上挂 cascade="all, delete-orphan" —
@@ -1896,7 +1888,7 @@ class ProjectAssignment(Base):
     workload_pct: Mapped[float] = mapped_column(Float, default=100.0)  # 投入百分比
     start_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     end_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     project: Mapped["Project"] = relationship(back_populates="project_assignments")
     member: Mapped["TeamMember"] = relationship(back_populates="assignments")
@@ -1913,7 +1905,7 @@ class WorkPlan(Base):
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default=WORK_PLAN_STATUS_DRAFT, nullable=False)
-    generated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     generated_by: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True
     )  # "ai" / "manual:<user>"
@@ -1923,8 +1915,8 @@ class WorkPlan(Base):
     )  # 记录 AI 用了什么 prompt
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     items: Mapped[list["WorkPlanItem"]] = relationship(
         back_populates="plan", cascade="all, delete-orphan", order_by="WorkPlanItem.sort_order"
@@ -1961,8 +1953,8 @@ class WorkPlanItem(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     # 建议的人员级别（AI 给出，分配时作为参考）
     recommended_level: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     plan: Mapped["WorkPlan"] = relationship(back_populates="items")
     assignee: Mapped[Optional["TeamMember"]] = relationship(back_populates="work_plan_items")
@@ -1998,8 +1990,8 @@ class Meeting(Base):
     status: Mapped[str] = mapped_column(
         String(20), default=MEETING_STATUS_SCHEDULED, nullable=False
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     record: Mapped[Optional["MeetingRecord"]] = relationship(
         back_populates="meeting", cascade="all, delete-orphan", uselist=False
@@ -2030,7 +2022,7 @@ class MeetingRecord(Base):
     )  # JSON: {strengths, weaknesses, suggestions}
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     recorded_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     meeting: Mapped["Meeting"] = relationship(back_populates="record")
 
@@ -2053,7 +2045,7 @@ class DailyReport(Base):
     blockers_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 卡点摘要
     next_day_plan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 次日计划
     hours_logged: Mapped[float] = mapped_column(Float, default=0.0)  # 实际工时
-    submitted_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     member: Mapped["TeamMember"] = relationship(back_populates="daily_reports")
     project: Mapped["Project"] = relationship(back_populates="daily_reports")
@@ -2080,7 +2072,7 @@ class Blocker(Base):
         String(20), default=BLOCKER_SEVERITY_MEDIUM, nullable=False
     )
     status: Mapped[str] = mapped_column(String(20), default=BLOCKER_STATUS_OPEN, nullable=False)
-    raised_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    raised_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     resolution_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # SLA 跟踪
@@ -2112,7 +2104,7 @@ class ProgressSnapshot(Base):
     hours_done: Mapped[float] = mapped_column(Float, default=0.0)
     hours_remaining: Mapped[float] = mapped_column(Float, default=0.0)
     open_blockers: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     project: Mapped["Project"] = relationship(back_populates="progress_snapshots")
 
@@ -2126,7 +2118,7 @@ class ManagementRecommendation(Base):
     project_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("projects.id"), nullable=False, index=True
     )
-    generated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     period_start: Mapped[Optional[str]] = mapped_column(
         String(20), nullable=True
     )  # 建议覆盖的开始日期
@@ -2178,7 +2170,7 @@ class FirmTemplate(Base):
     # 元数据
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    published_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    published_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
     __table_args__ = (
@@ -2212,4 +2204,4 @@ class HistoricalWorkpaper(Base):
     # 来源项目（脱敏前）
     source_project_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     uploaded_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

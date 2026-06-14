@@ -172,6 +172,16 @@ async def lifespan(app: FastAPI):
         await stop_scheduler()
     except Exception:
         logger.exception("舆情调度器停止失败")
+
+    # 关闭数据库连接池，避免 Postgres/MySQL 上的连接泄漏
+    try:
+        from app.core.database import engine
+
+        await engine.dispose()
+        logger.info("数据库连接池已释放")
+    except Exception:
+        logger.exception("数据库引擎释放失败")
+
     logger.info("👋 %s 关闭", settings.APP_NAME)
 
 
@@ -225,9 +235,14 @@ def create_app() -> FastAPI:
                 "http://localhost:8501",
                 "http://127.0.0.1:8501",
                 "http://localhost:3000",
+                "http://127.0.0.1:3000",
             ]
         )
         allowed_origins = list(set(allowed_origins))
+
+    # Pack A — 审计轨迹中间件 (必须先于 CORS 添加, 因为 add_middleware 后加的包裹在最外层)
+    # 执行顺序: CORSMiddleware(外) → AuditLogMiddleware(中) → 路由(内)
+    app.add_middleware(AuditLogMiddleware)
 
     app.add_middleware(
         CORSMiddleware,
@@ -236,9 +251,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    # Pack A — 审计轨迹中间件 (放在 CORS 之后, 业务路由之前)
-    app.add_middleware(AuditLogMiddleware)
 
     # Include routers
     app.include_router(projects.router)

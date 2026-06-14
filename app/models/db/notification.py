@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from app.utils.datetime_helpers import utc_now
 from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, Index
@@ -45,11 +46,6 @@ __all__ = [
     "NOTIF_MODULE_SENTIMENT",
     "NOTIF_MODULE_SYSTEM",
 ]
-
-
-def _utcnow() -> datetime:
-    """与 db_models 一致 — naive UTC."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # === 严重度 (与现有 SentimentEvent 对齐, 便于前端统一渲染) ===
@@ -125,5 +121,5 @@ class Notification(Base):
     read_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, nullable=False, index=True
+        DateTime, default=utc_now, nullable=False, index=True
     )

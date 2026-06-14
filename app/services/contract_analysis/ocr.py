@@ -92,8 +92,8 @@ class ContractOCR:
             import pytesseract  # type: ignore
             from PIL import Image  # type: ignore
 
-            img = Image.open(str(file_path))
-            text = pytesseract.image_to_string(img, lang="chi_sim+eng")
+            with Image.open(str(file_path)) as img:
+                text = pytesseract.image_to_string(img, lang="chi_sim+eng")
             if text.strip():
                 return "tesseract", text
         except ImportError:

@@ -141,7 +141,7 @@ def analyze_template(template_bytes: bytes, output_format: str) -> TemplateAnaly
         placeholders=placeholders,
         duplicates=duplicates,
         unknown_tags=[],
-        is_valid=bool(placeholders) or True,  # 允许无 placeholder 的纯模板
+        is_valid=True,  # 占位符为空也算合法 — 允许纯静态模板
         suggested_context_keys=suggestions_hit,
     )
 

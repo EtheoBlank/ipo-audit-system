@@ -409,7 +409,11 @@ async def export_sales_ledger(
     analysis: dict | None = None
     if run_analysis and records:
         analyzer = RevenueAnalyzer(records=records, industry=project.industry or "")
-        analysis = analyzer.run().to_dict()
+        result = await analyzer.arun(
+            period_end=date(project.fiscal_year, 12, 31),
+            run_industry_benchmark=False,
+        )
+        analysis = result.to_dict()
 
     blob = SalesLedgerExporter.build(records, analysis=analysis)
     filename = f"sales_ledger_project_{project_id}.xlsx"

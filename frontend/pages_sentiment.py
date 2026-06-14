@@ -331,8 +331,14 @@ def _render_briefing_detail(br: dict, project_id: int) -> None:
                     )
                     if e.get("review_status") == "unread":
                         if st.button("标已读", key=f"r_{e['id']}"):
-                            # events 端点没有 /read, 用 ignore 代替 (后续可加 /read 端点)
-                            pass
+                            # 调 ignore 端点实现"已处理"语义, 后续可换专门 /read 端点
+                            r = api_request(
+                                "POST",
+                                f"/api/sentiment/events/{e['id']}/ignore",
+                            )
+                            if r is not None:
+                                st.success("已标记为已处理")
+                                st.rerun()
 
     with tabs[2]:
         if br.get("audit_verification_json"):
@@ -399,12 +405,19 @@ def _render_briefing_detail(br: dict, project_id: int) -> None:
         st.success("✅ 已批准 / 锁定, 不可修改")
         c1, c2 = st.columns(2)
         with c1:
-            # 下载链接
-            st.markdown(
-                f'<a href="{API_BASE_URL}/api/sentiment/briefings/{br["id"]}/download" target="_blank">'
-                f'<button style="background:#007bff;color:white;padding:0.5rem 1rem;border:none;border-radius:4px;cursor:pointer;">📥 下载 Word 文档</button></a>',
-                unsafe_allow_html=True,
+            # 走统一 api_request 走 auth 头
+            content = api_request(
+                "GET",
+                f"/api/sentiment/briefings/{br['id']}/download",
+                expect_bytes=True,
             )
+            if isinstance(content, bytes) and content:
+                st.download_button(
+                    "📥 下载 Word 文档",
+                    data=content,
+                    file_name=f"briefing_{br['id']}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
         with c2:
             reviser = st.text_input("修订人", key=f"rvs_{br['id']}")
             if st.button("🔄 基于本版修订", key=f"revise_{br['id']}"):
@@ -588,11 +601,19 @@ def _render_report_detail(rep: dict, project_id: int) -> None:
 
     elif rep["is_locked"]:
         st.success("✅ 已批准并锁定")
-        st.markdown(
-            f'<a href="{API_BASE_URL}/api/sentiment/reports/{rep["id"]}/download" target="_blank">'
-            f'<button style="background:#007bff;color:white;padding:0.5rem 1rem;border:none;border-radius:4px;cursor:pointer;">📥 下载 Word 文档</button></a>',
-            unsafe_allow_html=True,
+        # 走统一 api_request 走 auth 头
+        content = api_request(
+            "GET",
+            f"/api/sentiment/reports/{rep['id']}/download",
+            expect_bytes=True,
         )
+        if isinstance(content, bytes) and content:
+            st.download_button(
+                "📥 下载 Word 文档",
+                data=content,
+                file_name=f"report_{rep['id']}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
 
 
 # ============================================================

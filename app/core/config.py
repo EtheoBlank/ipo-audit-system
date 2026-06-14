@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # App settings
     APP_NAME: str = "IPO审计系统"
-    APP_VERSION: str = "0.1.0"
+    APP_VERSION: str = "0.2.0"
     DEBUG: bool = True
 
     # Server settings
@@ -28,9 +28,6 @@ class Settings(BaseSettings):
 
     # Database settings
     DATABASE_URL: str = "sqlite+aiosqlite:///./ipo_audit.db"
-
-    # Redis settings
-    REDIS_URL: str = "redis://localhost:6379/0"
 
     # File settings
     UPLOAD_DIR: Path = Path("./uploads")
@@ -50,11 +47,6 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_API_BASE: str = "https://api.deepseek.com/v1"
     DEEPSEEK_MODEL: str = "deepseek-chat"
-
-    # AI settings (Volcano Engine / 火山引擎) — used when MiniMax is stuck
-    VOLCANO_ENGINE_API_KEY: str = ""
-    VOLCANO_ENGINE_API_BASE: str = "https://ark.cn-beijing.volces.com/api/v3/"
-    VOLCANO_ENGINE_MODEL: str = "glm-5.1"
 
     # Regulatory case scraping — consistent UPPER_SNAKE naming
     CSRC_URL: str = "http://www.csrc.gov.cn"

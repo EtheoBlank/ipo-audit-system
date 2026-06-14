@@ -1,22 +1,11 @@
 """Streamlit frontend for IPO Audit System - 全功能版."""
 
-import os
-
 import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime
 
-# 后端 API 基础地址。
-#
-# 默认值 "http://localhost:8000" 同时适用于:
-#   1. 本地开发 (uvicorn :8000 + streamlit :8501/7860)
-#   2. Hugging Face Space 单容器双进程部署 (uvicorn :8000 + streamlit :7860)
-#      — Streamlit 通过服务端 HTTP 调 FastAPI, 浏览器只连 Streamlit 的 7860。
-#
-# 如果未来要把前端/后端拆成两个独立 Space 部署, 在 HF Space 的
-# "Variables and secrets" 里覆盖 API_BASE_URL 为后端 Space 的公网 URL 即可。
-API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+from frontend._http import API_BASE_URL, api_request, auth_headers
 
 st.set_page_config(
     page_title="IPO审计系统",
@@ -56,19 +45,13 @@ st.markdown(
 )
 
 
-def _auth_headers() -> dict:
-    """Pack A: 从 st.session_state 取 token, 给所有 API 调用带上."""
-    token = st.session_state.get("auth_token")
-    return {"Authorization": f"Bearer {token}"} if token else {}
-
-
 @st.cache_data(ttl=30)
 def get_sentiment_unread_count() -> int:
     """全局红点: 30 秒缓存, 调一次 /notifications/unread."""
     try:
         r = requests.get(
             f"{API_BASE_URL}/api/sentiment/notifications/unread?limit=1",
-            headers=_auth_headers(),
+            headers=auth_headers(),
             timeout=2,
         )
         if r.status_code == 200:
@@ -83,7 +66,7 @@ def get_global_unread_count() -> dict:
     """Pack A: 通用通知中心未读数, 30s 缓存."""
     try:
         r = requests.get(
-            f"{API_BASE_URL}/api/notifications/unread", headers=_auth_headers(), timeout=2
+            f"{API_BASE_URL}/api/notifications/unread", headers=auth_headers(), timeout=2
         )
         if r.status_code == 200:
             return r.json() or {"total_unread": 0}
@@ -139,27 +122,6 @@ def get_auth_status() -> dict:
     return {}
 
 
-def api_request(method: str, endpoint: str, **kwargs):
-    try:
-        url = f"{API_BASE_URL}{endpoint}"
-        headers = kwargs.pop("headers", {}) or {}
-        headers.update(_auth_headers())
-        response = requests.request(method, url, timeout=30, headers=headers, **kwargs)
-        if response.status_code == 401:
-            st.warning("登录已失效, 请重新登录 (左侧 '🔐 系统管理' 页)")
-            st.session_state.pop("auth_token", None)
-            st.session_state.pop("auth_user", None)
-            return None
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.ConnectionError:
-        st.error("无法连接到后端服务，请确保FastAPI服务已启动")
-        return None
-    except requests.exceptions.HTTPError as e:
-        st.error(f"API错误: {e}")
-        return None
-
-
 @st.cache_data(ttl=60)
 def get_projects():
     return api_request("GET", "/api/projects/") or []
@@ -178,7 +140,7 @@ def _render_user_card_in_sidebar() -> None:
             try:
                 requests.post(
                     f"{API_BASE_URL}/api/auth/logout",
-                    headers=_auth_headers(),
+                    headers=auth_headers(),
                     timeout=5,
                 )
             except Exception:
@@ -248,6 +210,12 @@ def main():
             "🔐 系统管理",  # Pack A
         ],
     )
+
+    # 首页快速按钮的导航请求 (set st.session_state["page"] 后 rerun)
+    if "page" in st.session_state and st.session_state["page"] in [
+        "📁 项目管理", "📤 数据导入", "📊 底稿生成", "📄 综合报告"
+    ]:
+        page = st.session_state.pop("page")  # 消费掉, 避免影响后续 radio 切换
 
     if page == "🏠 首页概览":
         show_homepage()
