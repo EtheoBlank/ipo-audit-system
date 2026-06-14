@@ -1,4 +1,5 @@
 """Streamlit frontend for IPO Audit System - 全功能版."""
+
 import os
 
 import streamlit as st
@@ -24,7 +25,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.markdown("""
+st.markdown(
+    """
 <style>
     .main-header {font-size: 2.5rem;font-weight:bold;color:#4472C4;text-align:center;padding:1rem;}
     .sub-header {font-size:1.5rem;font-weight:bold;color:#2E4057;}
@@ -40,15 +42,35 @@ st.markdown("""
         background: #6c757d; color: white; border-radius: 999px;
         padding: 0.3rem 0.8rem; font-weight: bold; font-size: 0.85rem;
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);}
+    .global-badge {position: fixed; top: 0.5rem; right: 9rem; z-index: 999;
+        background: #fd7e14; color: white; border-radius: 999px;
+        padding: 0.3rem 0.8rem; font-weight: bold; font-size: 0.85rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);}
+    .global-badge-zero {position: fixed; top: 0.5rem; right: 9rem; z-index: 999;
+        background: #6c757d; color: white; border-radius: 999px;
+        padding: 0.3rem 0.8rem; font-weight: bold; font-size: 0.85rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);}
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
+
+
+def _auth_headers() -> dict:
+    """Pack A: 从 st.session_state 取 token, 给所有 API 调用带上."""
+    token = st.session_state.get("auth_token")
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 @st.cache_data(ttl=30)
 def get_sentiment_unread_count() -> int:
     """全局红点: 30 秒缓存, 调一次 /notifications/unread."""
     try:
-        r = requests.get(f"{API_BASE_URL}/api/sentiment/notifications/unread?limit=1", timeout=2)
+        r = requests.get(
+            f"{API_BASE_URL}/api/sentiment/notifications/unread?limit=1",
+            headers=_auth_headers(),
+            timeout=2,
+        )
         if r.status_code == 200:
             return int((r.json() or {}).get("count", 0))
     except requests.exceptions.RequestException:
@@ -56,17 +78,44 @@ def get_sentiment_unread_count() -> int:
     return 0
 
 
+@st.cache_data(ttl=30)
+def get_global_unread_count() -> dict:
+    """Pack A: 通用通知中心未读数, 30s 缓存."""
+    try:
+        r = requests.get(
+            f"{API_BASE_URL}/api/notifications/unread", headers=_auth_headers(), timeout=2
+        )
+        if r.status_code == 200:
+            return r.json() or {"total_unread": 0}
+    except requests.exceptions.RequestException:
+        pass
+    return {"total_unread": 0}
+
+
 def render_sentiment_global_badge() -> None:
-    """在主页 main() 顶部渲染右上角红点 (全局)."""
-    count = get_sentiment_unread_count()
-    if count > 0:
+    """在主页 main() 顶部渲染右上角红点 (舆情 + 全局通知)."""
+    s_count = get_sentiment_unread_count()
+    if s_count > 0:
         st.markdown(
-            f'<div class="sentiment-badge">🔴 舆情 {count}</div>',
+            f'<div class="sentiment-badge">🔴 舆情 {s_count}</div>',
             unsafe_allow_html=True,
         )
     else:
         st.markdown(
-            f'<div class="sentiment-badge-zero">⚪ 舆情 0</div>',
+            '<div class="sentiment-badge-zero">⚪ 舆情 0</div>',
+            unsafe_allow_html=True,
+        )
+
+    g = get_global_unread_count()
+    total = int(g.get("total_unread", 0))
+    if total > 0:
+        st.markdown(
+            f'<div class="global-badge">🔔 通知 {total}</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="global-badge-zero">🔕 通知 0</div>',
             unsafe_allow_html=True,
         )
 
@@ -79,10 +128,28 @@ def check_api_health() -> bool:
         return False
 
 
+def get_auth_status() -> dict:
+    """Pack A: 取 /health 看 AUTH_ENABLED, 用于决定是否提示登录."""
+    try:
+        r = requests.get(f"{API_BASE_URL}/health", timeout=2)
+        if r.status_code == 200:
+            return r.json() or {}
+    except requests.exceptions.RequestException:
+        pass
+    return {}
+
+
 def api_request(method: str, endpoint: str, **kwargs):
     try:
         url = f"{API_BASE_URL}{endpoint}"
-        response = requests.request(method, url, timeout=30, **kwargs)
+        headers = kwargs.pop("headers", {}) or {}
+        headers.update(_auth_headers())
+        response = requests.request(method, url, timeout=30, headers=headers, **kwargs)
+        if response.status_code == 401:
+            st.warning("登录已失效, 请重新登录 (左侧 '🔐 系统管理' 页)")
+            st.session_state.pop("auth_token", None)
+            st.session_state.pop("auth_user", None)
+            return None
         response.raise_for_status()
         return response.json()
     except requests.exceptions.ConnectionError:
@@ -98,14 +165,47 @@ def get_projects():
     return api_request("GET", "/api/projects/") or []
 
 
+def _render_user_card_in_sidebar() -> None:
+    """Pack A: sidebar 顶部显示当前用户卡片 + 登出按钮."""
+    user = st.session_state.get("auth_user")
+    if user:
+        st.sidebar.markdown(
+            f"**👤 {user.get('full_name', '-')}**  \n"
+            f"角色: `{user.get('role', '-')}`  \n"
+            f"用户名: `{user.get('username', '-')}`"
+        )
+        if st.sidebar.button("🚪 登出", key="sidebar_logout", width="stretch"):
+            try:
+                requests.post(
+                    f"{API_BASE_URL}/api/auth/logout",
+                    headers=_auth_headers(),
+                    timeout=5,
+                )
+            except Exception:
+                pass
+            st.session_state.pop("auth_token", None)
+            st.session_state.pop("auth_user", None)
+            st.session_state.pop("auth_refresh_token", None)
+            st.rerun()
+    else:
+        health = get_auth_status()
+        if health.get("auth_enabled"):
+            st.sidebar.warning("🔒 未登录, 仅可查看部分功能")
+        else:
+            st.sidebar.info("⚠️ 当前 AUTH_ENABLED=false (开发模式无认证)")
+
+
 def main():
     st.markdown('<p class="main-header">📊 IPO 审计系统 (专业版)</p>', unsafe_allow_html=True)
 
-    # 全局红点 — 舆情未读 (右上角 fixed)
+    # 全局红点 — 舆情 + 通用通知 (右上角 fixed)
     render_sentiment_global_badge()
 
     # Sidebar
     st.sidebar.title("功能菜单")
+
+    # Pack A — 顶部用户卡片 + 登出
+    _render_user_card_in_sidebar()
     st.sidebar.markdown("---")
 
     if not check_api_health():
@@ -125,6 +225,7 @@ def main():
             "📁 项目管理",
             "📤 数据导入",
             "📊 底稿生成",
+            "📑 长期资产发生额审定",  # Pack A — 用户特别要求
             "⚖️ 试算平衡",
             "🔍 监管案例库",
             "🤖 AI风险分析",
@@ -139,7 +240,13 @@ def main():
             "📑 综合底稿自动生成",
             "👥 项目组管理",
             "📡 舆情跟踪",
-        ]
+            "🎨 报告模板",  # Pack A
+            "🔔 通知中心",  # Pack A
+            "🤝 关联方专项",  # Pack B
+            "🔄 审计循环 (Pack C)",  # Pack C
+            "🎯 IPO 专属 (Pack D)",  # Pack D
+            "🔐 系统管理",  # Pack A
+        ],
     )
 
     if page == "🏠 首页概览":
@@ -150,6 +257,13 @@ def main():
         show_data_import()
     elif page == "📊 底稿生成":
         show_workbook_generation()
+    elif page == "📑 长期资产发生额审定":
+        try:
+            from frontend.pages_account_audit import show_account_audit
+
+            show_account_audit()
+        except ImportError as exc:
+            st.error(f"长期资产审定模块加载失败：{exc}")
     elif page == "⚖️ 试算平衡":
         show_trial_balance()
     elif page == "🔍 监管案例库":
@@ -165,60 +279,110 @@ def main():
         # new module's optional deps (e.g. pdfplumber) aren't installed yet.
         try:
             from frontend.pages_sales_ledger import show_sales_ledger
+
             show_sales_ledger()
         except ImportError as exc:
             st.error(
-                f"销售清单模块加载失败：{exc}。"
-                "请确认已安装 pdfplumber (`uv add pdfplumber`)。"
+                f"销售清单模块加载失败：{exc}。请确认已安装 pdfplumber (`uv add pdfplumber`)。"
             )
     elif page == "📄 收入合同分析":
         try:
             from frontend.pages_contracts import show_contracts
+
             show_contracts()
         except ImportError as exc:
             st.error(f"合同分析模块加载失败：{exc}。")
     elif page == "🏷️ 收发存盘点&减值":
         try:
             from frontend.pages_inventory import show_inventory
+
             show_inventory()
         except ImportError as exc:
             st.error(f"收发存盘点&减值模块加载失败：{exc}。")
     elif page == "📬 函证管理":
         try:
             from frontend.pages_confirmations import show_confirmations
+
             show_confirmations()
         except ImportError as exc:
             st.error(f"函证管理模块加载失败：{exc}。")
     elif page == "⚖️ 法律法规库":
         try:
             from frontend.pages_regulations import show_regulations
+
             show_regulations()
         except ImportError as exc:
             st.error(f"法律法规库模块加载失败：{exc}。")
     elif page == "📚 自助知识库":
         try:
             from frontend.pages_knowledge_base import show_knowledge_base
+
             show_knowledge_base()
         except ImportError as exc:
             st.error(f"自助知识库模块加载失败：{exc}。")
     elif page == "📑 综合底稿自动生成":
         try:
             from frontend.pages_comprehensive import show_comprehensive_workpaper
+
             show_comprehensive_workpaper()
         except ImportError as exc:
             st.error(f"综合底稿模块加载失败：{exc}。")
     elif page == "👥 项目组管理":
         try:
             from frontend.pages_team_management import show_team_management
+
             show_team_management()
         except ImportError as exc:
             st.error(f"项目组管理模块加载失败：{exc}。")
     elif page == "📡 舆情跟踪":
         try:
             from frontend.pages_sentiment import show_sentiment
+
             show_sentiment()
         except ImportError as exc:
             st.error(f"舆情跟踪模块加载失败：{exc}。")
+    elif page == "🎨 报告模板":
+        try:
+            from frontend.pages_report_templates import show_report_templates
+
+            show_report_templates()
+        except ImportError as exc:
+            st.error(f"报告模板模块加载失败：{exc}")
+    elif page == "🔔 通知中心":
+        try:
+            from frontend.pages_notification import show_notifications
+
+            show_notifications()
+        except ImportError as exc:
+            st.error(f"通知中心模块加载失败：{exc}")
+    elif page == "🤝 关联方专项":
+        try:
+            from frontend.pages_related_parties import show_related_parties
+
+            show_related_parties()
+        except ImportError as exc:
+            st.error(f"关联方专项模块加载失败：{exc}")
+    elif page == "🔄 审计循环 (Pack C)":
+        try:
+            from frontend.pages_audit_cycles import show_audit_cycles
+
+            show_audit_cycles()
+        except ImportError as exc:
+            st.error(f"审计循环模块加载失败：{exc}")
+    elif page == "🎯 IPO 专属 (Pack D)":
+        try:
+            from frontend.pages_ipo_specials import show_ipo_specials
+
+            show_ipo_specials()
+        except ImportError as exc:
+            st.error(f"IPO 专属模块加载失败：{exc}")
+    elif page == "🔐 系统管理":
+        try:
+            from frontend.pages_auth import show_auth
+
+            show_auth()
+        except ImportError as exc:
+            st.error(f"系统管理模块加载失败：{exc}")
 
 
 def show_homepage():
@@ -262,7 +426,9 @@ def show_homepage():
     st.markdown("### 📋 最近项目")
     if projects:
         df = pd.DataFrame(projects[:5])
-        st.dataframe(df[["name", "company_name", "fiscal_year", "status"]], use_container_width=True)
+        st.dataframe(
+            df[["name", "company_name", "fiscal_year", "status"]], use_container_width=True
+        )
     else:
         st.info("暂无项目，请先创建项目")
 
@@ -277,7 +443,10 @@ def show_projects():
         projects = get_projects()
         if projects:
             df = pd.DataFrame(projects)
-            st.dataframe(df[["id", "name", "company_name", "industry", "fiscal_year", "status"]], use_container_width=True)
+            st.dataframe(
+                df[["id", "name", "company_name", "industry", "fiscal_year", "status"]],
+                use_container_width=True,
+            )
         else:
             st.info("暂无项目")
 
@@ -286,7 +455,9 @@ def show_projects():
         with st.form("create_project_form"):
             name = st.text_input("项目名称", placeholder="例如：XX公司IPO审计")
             company_name = st.text_input("公司名称", placeholder="例如：华大基因")
-            industry = st.selectbox("所属行业", ["制造业", "信息技术", "医药生物", "金融服务", "房地产", "零售", "其他"])
+            industry = st.selectbox(
+                "所属行业", ["制造业", "信息技术", "医药生物", "金融服务", "房地产", "零售", "其他"]
+            )
             fiscal_year = st.number_input("审计年度", min_value=2000, max_value=2030, value=2024)
             submitted = st.form_submit_button("创建项目", type="primary", use_container_width=True)
 
@@ -294,7 +465,16 @@ def show_projects():
                 if not name or not company_name:
                     st.error("请填写项目名称和公司名称")
                 else:
-                    result = api_request("POST", "/api/projects/", json={"name": name, "company_name": company_name, "industry": industry, "fiscal_year": fiscal_year})
+                    result = api_request(
+                        "POST",
+                        "/api/projects/",
+                        json={
+                            "name": name,
+                            "company_name": company_name,
+                            "industry": industry,
+                            "fiscal_year": fiscal_year,
+                        },
+                    )
                     if result:
                         st.success(f"✅ 项目创建成功: {result.get('name')}")
                         st.rerun()
@@ -320,7 +500,9 @@ def show_data_import():
         uploaded_file = st.file_uploader("选择科目余额表文件", type=["xlsx", "xls", "csv"])
         if uploaded_file and st.button("导入", type="primary"):
             files = {"file": (uploaded_file.name, uploaded_file.read(), uploaded_file.type)}
-            result = api_request("POST", f"/api/projects/{project_id}/account-balances", files=files)
+            result = api_request(
+                "POST", f"/api/projects/{project_id}/account-balances", files=files
+            )
             if result:
                 st.success(f"✅ {result.get('message', '导入成功')}")
                 st.rerun()
@@ -330,7 +512,9 @@ def show_data_import():
         uploaded_file = st.file_uploader("选择序时账文件", type=["xlsx", "xls", "csv"])
         if uploaded_file and st.button("导入序时账", type="primary"):
             files = {"file": (uploaded_file.name, uploaded_file.read(), uploaded_file.type)}
-            result = api_request("POST", f"/api/projects/{project_id}/chronological-accounts", files=files)
+            result = api_request(
+                "POST", f"/api/projects/{project_id}/chronological-accounts", files=files
+            )
             if result:
                 st.success(f"✅ {result.get('message', '导入成功')}")
                 st.rerun()
@@ -370,11 +554,17 @@ def show_workbook_generation():
 
     if st.button("生成底稿", type="primary", use_container_width=True):
         with st.spinner("生成中..."):
-            result = api_request("POST", "/api/workbooks/generate", json={"project_id": project_id, "template_type": template_type})
+            result = api_request(
+                "POST",
+                "/api/workbooks/generate",
+                json={"project_id": project_id, "template_type": template_type},
+            )
             if result:
                 st.success(f"✅ 底稿生成成功")
                 st.markdown(f"📁 文件路径: `{result.get('file_path')}`")
-                st.markdown(f"📥 下载链接: [{result.get('file_name')}]({result.get('download_url')})")
+                st.markdown(
+                    f"📥 下载链接: [{result.get('file_name')}]({result.get('download_url')})"
+                )
 
 
 def show_trial_balance():
@@ -391,12 +581,20 @@ def show_trial_balance():
 
     if st.button("检查试算平衡", type="primary", use_container_width=True):
         with st.spinner("检查中..."):
-            result = api_request("POST", "/api/workbooks/trial-balance", json={"project_id": project_id})
+            result = api_request(
+                "POST", "/api/workbooks/trial-balance", json={"project_id": project_id}
+            )
             if result:
                 if result.get("is_balanced"):
-                    st.markdown('<div class="success-box">✅ <strong>试算平衡</strong> - 资产负债表平衡！</div>', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="success-box">✅ <strong>试算平衡</strong> - 资产负债表平衡！</div>',
+                        unsafe_allow_html=True,
+                    )
                 else:
-                    st.markdown('<div class="warning-box">⚠️ <strong>试算不平衡</strong> - 存在差异，请检查数据</div>', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="warning-box">⚠️ <strong>试算不平衡</strong> - 存在差异，请检查数据</div>',
+                        unsafe_allow_html=True,
+                    )
 
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -431,7 +629,10 @@ def show_regulatory_cases():
         cases = api_request("GET", "/api/regulatory-cases/")
         if cases:
             df = pd.DataFrame(cases)
-            st.dataframe(df[["case_no", "case_type", "source", "publish_date", "title"]], use_container_width=True)
+            st.dataframe(
+                df[["case_no", "case_type", "source", "publish_date", "title"]],
+                use_container_width=True,
+            )
         else:
             st.info("暂无案例，请先抓取")
 
@@ -439,7 +640,9 @@ def show_regulatory_cases():
         st.markdown("#### 关键词搜索")
         keywords = st.text_input("输入关键词（逗号分隔）")
         if keywords and st.button("搜索"):
-            result = api_request("GET", f"/api/regulatory-cases/search/by-keywords?keywords={keywords}")
+            result = api_request(
+                "GET", f"/api/regulatory-cases/search/by-keywords?keywords={keywords}"
+            )
             if result:
                 st.success(f"找到 {result.get('matched_count', 0)} 条相关案例")
 
@@ -464,11 +667,15 @@ def show_ai_analysis():
         if result:
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("总资产", f"¥ {result.get('financial_summary', {}).get('total_assets', 0):,.0f}")
+                st.metric(
+                    "总资产", f"¥ {result.get('financial_summary', {}).get('total_assets', 0):,.0f}"
+                )
             with col2:
-                st.metric("营业收入", f"¥ {result.get('financial_summary', {}).get('revenue', 0):,.0f}")
+                st.metric(
+                    "营业收入", f"¥ {result.get('financial_summary', {}).get('revenue', 0):,.0f}"
+                )
             with col3:
-                st.metric("风险等级", result.get('risk_assessment', {}).get('level', '未知'))
+                st.metric("风险等级", result.get("risk_assessment", {}).get("level", "未知"))
 
 
 def show_anomaly_detection():
@@ -495,7 +702,11 @@ def show_anomaly_detection():
                     st.dataframe(df, use_container_width=True)
 
                     # 风险汇总
-                    risk_counts = df.groupby("risk_level").size() if "risk_level" in df.columns else pd.Series()
+                    risk_counts = (
+                        df.groupby("risk_level").size()
+                        if "risk_level" in df.columns
+                        else pd.Series()
+                    )
                     if not risk_counts.empty:
                         st.markdown("### 风险分布")
                         col1, col2, col3 = st.columns(3)

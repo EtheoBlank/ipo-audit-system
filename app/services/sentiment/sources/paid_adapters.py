@@ -8,11 +8,10 @@
 注意: 本项目不推荐任何特定服务, 也不对第三方服务的可用性 / 价格 / 数据质量
 做任何承诺. 用户自行决定是否启用.
 """
+
 from __future__ import annotations
 
-import json
 import logging
-from typing import Optional
 
 from app.models.db_models import (
     PaidSourceMissingKey,
@@ -20,7 +19,6 @@ from app.models.db_models import (
     SentimentSubject,
 )
 from app.services.sentiment.dedup import RawSentimentItem
-from app.services.sentiment.http_client import SentimentHttpClient
 from app.services.sentiment.sources.base import BaseSentimentSourceAdapter
 
 logger = logging.getLogger(__name__)
@@ -70,7 +68,7 @@ class TavilyAdapter(BaseSentimentSourceAdapter):
                 logger.warning("Tavily 请求失败 %s: %s", q, exc)
                 continue
 
-            for item in (data.get("results") or []):
+            for item in data.get("results") or []:
                 title = self.clean_text(item.get("title", ""))
                 url = item.get("url")
                 content = self.clean_text(item.get("content", ""))
@@ -139,7 +137,7 @@ class BochaAdapter(BaseSentimentSourceAdapter):
                 logger.warning("Bocha 请求失败 %s: %s", q, exc)
                 continue
 
-            for item in (data.get("data", {}).get("webPages", {}).get("value") or []):
+            for item in data.get("data", {}).get("webPages", {}).get("value") or []:
                 title = self.clean_text(item.get("name", ""))
                 url = item.get("url")
                 content = self.clean_text(item.get("snippet", ""))
@@ -205,7 +203,7 @@ class SerpAPIAdapter(BaseSentimentSourceAdapter):
                 logger.warning("SerpAPI 请求失败 %s: %s", q, exc)
                 continue
 
-            for item in (data.get("organic_results") or []):
+            for item in data.get("organic_results") or []:
                 title = self.clean_text(item.get("title", ""))
                 url = item.get("link")
                 content = self.clean_text(item.get("snippet", ""))

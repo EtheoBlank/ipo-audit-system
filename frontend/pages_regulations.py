@@ -1,9 +1,9 @@
 """Streamlit 页面 — 法律法规库.
 
-  - 抓取触发 (按来源 / 全部)
-  - 来源统计
-  - 列表查询 + 全文搜索
-  - 详情查看 + 收藏
+- 抓取触发 (按来源 / 全部)
+- 来源统计
+- 列表查询 + 全文搜索
+- 详情查看 + 收藏
 """
 
 from __future__ import annotations
@@ -158,8 +158,7 @@ def show_regulations():
             st.info("暂无收藏。")
         for f in favs:
             with st.expander(
-                f"⭐ {f.get('regulation', {}).get('title', '')[:80]} "
-                f"({f.get('tag') or '无标签'})"
+                f"⭐ {f.get('regulation', {}).get('title', '')[:80]} ({f.get('tag') or '无标签'})"
             ):
                 st.write(f"备注: {f.get('note') or '—'}")
                 _render_regulation(f.get("regulation") or {}, key_prefix=f"fav_{f['id']}")
@@ -173,12 +172,14 @@ def _render_regulation(item: dict, key_prefix: str = ""):
         return
     title = item.get("title", "")
     meta = " | ".join(
-        x for x in [
+        x
+        for x in [
             SOURCE_LABELS.get(item.get("source") or "", item.get("source") or ""),
             item.get("category"),
             item.get("document_no"),
             item.get("publish_date"),
-        ] if x
+        ]
+        if x
     )
     with st.expander(f"📄 {title[:120]}"):
         st.caption(meta)
@@ -189,7 +190,9 @@ def _render_regulation(item: dict, key_prefix: str = ""):
             st.write(item["full_text"][:1500])
         if item.get("source_url"):
             st.markdown(f"[在官方网站打开 ↗]({item['source_url']})")
-        with st.form(f"fav_form_{key_prefix or item.get('id')}_{item.get('id')}", clear_on_submit=True):
+        with st.form(
+            f"fav_form_{key_prefix or item.get('id')}_{item.get('id')}", clear_on_submit=True
+        ):
             tag = st.text_input("收藏标签", key=f"tag_{key_prefix}_{item.get('id')}")
             note = st.text_area("备注", key=f"note_{key_prefix}_{item.get('id')}")
             if st.form_submit_button("⭐ 收藏"):

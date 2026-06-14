@@ -14,6 +14,7 @@
 辅助:
     - manual:    审计师手工录入入口, 不抓取
 """
+
 from __future__ import annotations
 
 __all__: list[str] = []

@@ -6,6 +6,7 @@
   3. 显示未填字段的"一次性问答"，用户回答后系统写回
   4. 预览与导出最终 Excel
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -46,6 +47,7 @@ API_BASE_URL = "http://localhost:8000"
 # Streamlit 工具
 # ============================================================
 
+
 def _run_async(coro):
     """在 Streamlit（同步）上下文中跑 async 协程。"""
     return asyncio.run(coro)
@@ -68,11 +70,15 @@ def _build_context(project_id: int) -> WorkpaperDataContext:
     """
     # TODO: 接入现有 /api/projects/{id}/data 接口
     return WorkpaperDataContext(
-        project=type("P", (), {
-            "company_name": "ACME 科技股份有限公司",
-            "industry": "制造业",
-            "fiscal_year": 2024,
-        })(),
+        project=type(
+            "P",
+            (),
+            {
+                "company_name": "ACME 科技股份有限公司",
+                "industry": "制造业",
+                "fiscal_year": 2024,
+            },
+        )(),
         account_balances=pd.DataFrame(),
         extra={"revenue": 36500.0},
     )
@@ -97,9 +103,7 @@ def _build_engine() -> ComprehensiveFillEngine:
 
 def _render_schema_summary(schema: TemplateSchema) -> None:
     """渲染模板解析结果概览。"""
-    st.success(
-        f"✅ 模板解析成功：{schema.template_name}（{schema.template_id} v{schema.version}）"
-    )
+    st.success(f"✅ 模板解析成功：{schema.template_name}（{schema.template_id} v{schema.version}）")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("总字段数", len(schema.fields))
     col2.metric("工作表数", len(schema.sheets))
@@ -111,9 +115,7 @@ def _render_schema_summary(schema: TemplateSchema) -> None:
     for f in schema.fields:
         prefix = f.source.split(":", 1)[0] if ":" in f.source else f.source
         by_source[prefix] = by_source.get(prefix, 0) + 1
-    df = pd.DataFrame(
-        [{"来源类型": k, "字段数": v} for k, v in by_source.items()]
-    )
+    df = pd.DataFrame([{"来源类型": k, "字段数": v} for k, v in by_source.items()])
     st.markdown("##### 字段来源分布")
     st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -125,9 +127,7 @@ def _render_fill_report(report: FillReport) -> None:
     col2.metric("已自动填充", report.filled, delta_color="normal")
     col3.metric("待人工补全", report.pending, delta_color="inverse")
 
-    st.progress(
-        report.filled / report.total_fields if report.total_fields else 1.0
-    )
+    st.progress(report.filled / report.total_fields if report.total_fields else 1.0)
 
     st.markdown("##### 填充明细")
     rows = [
@@ -158,7 +158,7 @@ def _render_questions(report: FillReport, key_prefix: str) -> dict[str, str]:
     answers: dict[str, str] = {}
     for i, q in enumerate(report.open_questions):
         with st.expander(
-            f"问题 {i+1} · 主题：{q.topic}（覆盖 {len(q.field_ids)} 个字段）",
+            f"问题 {i + 1} · 主题：{q.topic}（覆盖 {len(q.field_ids)} 个字段）",
             expanded=True,
         ):
             st.markdown(f"**{q.prompt}**")
@@ -194,10 +194,18 @@ def _export_to_excel(schema: TemplateSchema, report: FillReport) -> bytes:
     if "_log" in wb.sheetnames:
         del wb["_log"]
     log = wb.create_sheet("_log")
-    log.append([
-        "field_id", "sheet", "cell", "value", "source",
-        "confidence", "citation", "filled_at",
-    ])
+    log.append(
+        [
+            "field_id",
+            "sheet",
+            "cell",
+            "value",
+            "source",
+            "confidence",
+            "citation",
+            "filled_at",
+        ]
+    )
 
     for f in schema.fields:
         if f.field_id not in by_id or by_id[f.field_id].value is None:
@@ -208,8 +216,7 @@ def _export_to_excel(schema: TemplateSchema, report: FillReport) -> bytes:
         cell = ws.cell(row=f.row, column=f.column)
         # 仅在单元格是占位符/命名区域时替换，保留其它内容（公式/手工填入）
         if isinstance(cell.value, str) and (
-            cell.value.startswith("{{")
-            or cell.value.endswith("}}")
+            cell.value.startswith("{{") or cell.value.endswith("}}")
         ):
             cell.value = by_id[f.field_id].value
         elif f.name_range:
@@ -217,14 +224,18 @@ def _export_to_excel(schema: TemplateSchema, report: FillReport) -> bytes:
         else:
             # 既不是占位符也不是命名区域 → 不动原值
             continue
-        log.append([
-            f.field_id, f.sheet, f.cell_ref,
-            str(by_id[f.field_id].value),
-            by_id[f.field_id].source_used,
-            f"{by_id[f.field_id].confidence:.2f}",
-            by_id[f.field_id].citation or "",
-            "",  # filled_at 占位
-        ])
+        log.append(
+            [
+                f.field_id,
+                f.sheet,
+                f.cell_ref,
+                str(by_id[f.field_id].value),
+                by_id[f.field_id].source_used,
+                f"{by_id[f.field_id].confidence:.2f}",
+                by_id[f.field_id].citation or "",
+                "",  # filled_at 占位
+            ]
+        )
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -238,6 +249,7 @@ def _truncate(s: str, n: int) -> str:
 # ============================================================
 # 主入口
 # ============================================================
+
 
 def show_comprehensive_workpaper():
     st.markdown("## 📑 综合底稿自动生成")
@@ -282,8 +294,7 @@ def show_comprehensive_workpaper():
                 return
         st.session_state["__comprehensive_report__"] = report
         st.success(
-            f"自动填充完成：{report.filled}/{report.total_fields}，"
-            f"待补全 {report.pending} 项。"
+            f"自动填充完成：{report.filled}/{report.total_fields}，待补全 {report.pending} 项。"
         )
 
     # 4) 展示结果 & 问答

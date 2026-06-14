@@ -131,20 +131,57 @@ uv run ruff format app/ frontend/
    人民银行的政策、准则、规章、问答口径；多维过滤 + 全文搜索 + 按项目收藏
 10. **自助知识库 (Knowledge Base)**: 上传实务书籍 (PDF/EPUB/DOCX/TXT/MD) → 切块 +
     向量化 (TF-IDF / MiniMax / DeepSeek 三种 provider) → 生成审计说明时按
-    科目 / 风险点自动检索相似案例，注入 AI prompt，让模型基于真实实务处理方式输出
-11. **项目组管理 (Team Management)**: 录入审计师 + 5 级级别（项目负责人/高级经理/经理/
-    高级审计员/审计员）；账套导入完成后由 AI（DeepSeek）按公司信息+账套规模+人员级别
-    自动生成 IPO 审计工作计划并按级别分配；站会/周会/启动会/复核会纪要 → AI 质量评分
-    (0-100) + 亮点/不足/建议；员工日报 + 卡点上报；个人 + 项目级可视化进度看板
-    （Streamlit + Altair）；AI 周期性输出管理建议（关键发现 + 优先行动 + Markdown 总结）
-    给项目负责人确认。降级模式：AI 不可用时退回标准模板 / 规则评估，**绝不 500**。
-11. **收发存盘点 & 减值（成本）**:
-    - 导入收发存（金蝶/用友/SAP/手工模板自动识别）
-    - 期末时点数 → 金额优先+阈值覆盖 生成盘点用表（A 类全盘 / B 类抽样 / C 类覆盖性），用户可对话式调整覆盖率阈值/必盘仓库/必盘类别
-    - 行业化盘点计划（制造/医药/零售/电子/化工/建筑/默认 内置模板 + AI 对话修改 + 修改日志）
-    - 现场盘点用表拍照上传 → OCR（paddleocr/easyocr/tesseract 兜底）+ DeepSeek AI 解析实盘数 → 自动回填到对应行 → 盘点率(数量/金额)/盘盈盘亏自动统计
-    - FIFO 库龄分层（≤90/91-180/181-365/366-730/>730 天）+ 期末后销售清单加权平均价 → NRV 跌价测试
-    - 上年期末跌价（可自动结转或手工上传）→ 本期跌价转回 / 新增计提自动计算
+    科目 / 风险点自动检索相似案例
+11. **项目组管理 (Team Management)**: 5 级人员库 + AI 工作计划 + 会议评分 +
+    日报 + 卡点 + 进度看板 + AI 管理建议
+12. **收发存盘点 & 减值**: 金额优先 + 阈值覆盖 + 拍照 OCR 回填 + FIFO 库龄 +
+    NRV 跌价 + 跌价转回
+13. **函证管理**: 财政部模板 + 锁定金额快照 + 回函 OCR + AI 解析 + 差异统计
+14. **舆情跟踪**: 多源抓取 + AI 去重校验 + 简报 / 季报 + 全局红点
+15. **综合底稿**: 事务所模板上传 + 字段映射 + AI 填充 + QA 引擎 + 规则引擎
+16. **多用户 / 权限 / 审计轨迹 (Pack A — Phase 18)**: JWT 认证 + 5 级签字流
+    (assistant→manager→partner→qc_partner→signing_partner) + RBAC 角色权限
+    + 全量 AuditLog (所有写操作不可篡改记录) + 通用通知中心 + 后台事件机制
+17. **长期资产发生额审定 (Pack A — 用户特别要求)**: 固定资产/在建工程/无形资产/
+    长投/商誉/使用权资产/递延所得税资产等长期资产科目, 本期借/贷方发生额逐笔
+    出审定数 + 审计调整, 底稿自动恒等式校验 (期初+借-贷=期末)
+18. **报告模板自定义化 (Pack A — Phase 20)**: 事务所上传 Word/Excel 模板,
+    ``${placeholder}`` 占位符 + context 注入渲染, 支持嵌套字段 ``${a.b.c}``
+
+## Pack A 新模块文件结构
+
+```
+app/
+├── models/db/                    # 模块化 ORM (新模块统一放这里)
+│   ├── __init__.py
+│   ├── auth.py                   # User/Firm/Role/Permission/ApprovalWorkflow/AuditLog
+│   ├── notification.py           # 通用通知
+│   ├── account_audit.py          # AccountMovementAudit + 长期资产前缀清单
+│   └── report_template.py        # ReportTemplate / ReportRenderHistory
+├── models/
+│   ├── auth.py                   # Pydantic schemas
+│   ├── notification.py
+│   ├── account_audit.py
+│   └── report_template.py
+├── services/
+│   ├── auth/                     # JWT + password + RBAC + approval + bootstrap
+│   ├── notification/             # push / mark_read / unread_count
+│   ├── background/               # 事件分发
+│   ├── account_audit/            # 长期资产审定服务
+│   └── report_template/          # docxtpl 风格 ${placeholder} 渲染
+├── api/
+│   ├── auth.py                   # /api/auth/login, /users, /audit-logs, /approvals 等
+│   ├── notifications.py          # /api/notifications/unread, /list, /mark-read
+│   ├── account_audit.py          # /api/account-audit/projects/{pid}/...
+│   └── report_templates.py       # /api/report-templates/...
+└── main.py                       # 加 AuditLogMiddleware + 4 个新 router + bootstrap_auth
+
+frontend/
+├── pages_auth.py                 # 登录 + 用户/事务所/角色权限/审计轨迹/审批流
+├── pages_notification.py         # 通知中心
+├── pages_account_audit.py        # 长期资产发生额审定 (st.data_editor)
+└── pages_report_templates.py     # 报告模板上传 / 预览 / 渲染
+```
 
 ## 环境变量
 
@@ -161,6 +198,66 @@ uv run ruff format app/ frontend/
 | `KNOWLEDGE_BASE_DIR` | 知识库书籍原文件目录 (默认 `./uploads/knowledge_base`) |
 | `MOF_URL` / `STA_URL` / `SAFE_URL` / `PBOC_URL` | 法规来源根 URL (一般不需要改) |
 | `REGULATION_MAX_PAGES` | 单栏目抓取最大页数 (默认 5) |
+| **Pack A** | |
+| `AUTH_ENABLED` | JWT 认证开关; `false`=兼容现网无认证 (默认), `true`=启用 |
+| `JWT_SECRET` | JWT 签名密钥; 生产必须改成 >=32 字节随机串 |
+| `JWT_ACCESS_EXPIRE_MINUTES` | Access token 过期分钟 (默认 60) |
+| `JWT_REFRESH_EXPIRE_DAYS` | Refresh token 过期天数 (默认 7) |
+| `BCRYPT_ROUNDS` | bcrypt 哈希轮数 (默认 12) |
+| `AUTH_MAX_FAILED_LOGIN` | 失败次数自动锁定 (默认 10, 0=不锁定) |
+| `AUTH_BOOTSTRAP_ADMIN_USERNAME/PASSWORD/FULL_NAME` | 首次启动自动创建的管理员账号 |
+| `AUTH_BOOTSTRAP_FIRM_NAME` | 默认事务所名称 |
+| `AUDIT_LOG_WRITE_ONLY` | true=只记 POST/PUT/DELETE; false=记所有请求 |
+| `AUDIT_LOG_PAYLOAD_MAX_CHARS` | payload 截断长度 (默认 4000, 0=不存) |
+| `AUDIT_LOG_EXCLUDE_PATHS` | 不落库的 path 前缀 (逗号分隔) |
+| `LONG_TERM_ASSET_EXTRA_INCLUDES/EXCLUDES` | 长期资产科目前缀全局额外加/减 |
+| `REPORT_TEMPLATE_DIR` / `REPORT_OUTPUT_DIR` | 报告模板存目录 + 渲染输出目录 |
+| `REPORT_TEMPLATE_MAX_SIZE` | 模板上传大小上限 (默认 20MB) |
+| `REPORT_TEMPLATE_ALLOWED_EXTS` | 模板允许扩展 (默认 `.docx,.xlsx,.dotx,.xltx`) |
+
+## Pack A 默认登录
+
+首次启动 (DB 没用户时) 自动创建:
+  - 用户名: `admin`
+  - 密码: `Admin@1234`
+  - 角色: `admin` (拥有所有权限)
+
+⚠️ **生产部署必须立即登录后修改密码**, 并且把 `JWT_SECRET` 改成强随机串。
+
+## Pack A.2 / B.2 — 本轮增强 (路线图全部完工 + 41 个新增单测覆盖)
+
+| 增强 | 实现位置 | 单测 | 说明 |
+|------|----------|------|------|
+| **老业务 API 全量加鉴权** | `app/api/*.py` 13 个老路由 | `test_pack_a2_b2.py::TestLegacyApisImport` | 全部接入 `get_current_user` / `get_current_user_optional`; AUTH_ENABLED=false 兼容老调用 |
+| **多租户硬隔离** | `app/services/auth/tenant.py` + `Project.firm_id` | `test_pack_a2_b2.py::TestTenantIsolation` | `scope_projects_to_firm(query, user)` / `ensure_project_in_firm(db, pid, user)`; admin 跨租户 |
+| **审批乐观锁** | `app/services/auth/approval.py` + `ApprovalWorkflow.version` | `test_pack_a2_b2.py::TestApprovalOptimisticLock` | `decide(expected_version=N)` 不匹配抛 `ApprovalConflict` → HTTP 409 |
+| **审计轨迹索引 + 归档** | `app/models/db/auth.py` + `app/services/auth/archive.py` | `test_pack_a2_b2.py::TestAuditLogArchive` | 4 个 (维度, created_at) 复合索引 + `rotate_audit_logs(months=N, confirm=True)` 影子表归档 |
+| **DeepSeek 关联方推断** | `app/services/related_parties/ai_inferer.py` | `test_pack_a2_b2.py::TestRelatedPartyAIInferer` | `RelatedPartyAIInferer` 类, DetectorRunRequest.enable_ai_inference=true 启用; 失败自动降级到规则识别 |
+| **Word 富格式渲染** | `app/services/report_template/__init__.py` (`_render_docx_xml_blob`) | `test_pack_a2_b2.py::TestReportTemplateRunAware` | XML 段落级 run-aware 替换, 保留字体/字号/加粗/颜色/下划线 |
+
+调用模式速查:
+
+```python
+# 多租户硬隔离 — 列表查询
+from app.services.auth import scope_projects_to_firm
+query = select(Project)
+query = scope_projects_to_firm(query, current_user)
+
+# 多租户硬隔离 — 单项目访问 (403 / 404)
+from app.services.auth import ensure_project_in_firm
+proj = await ensure_project_in_firm(db, project_id, current_user)
+
+# 乐观锁审批 (前端必须先 GET 拿到 version 才能 decide)
+payload = ApprovalDecision(action="approve", expected_version=wf.version)
+POST /api/auth/approvals/{id}/decide  # 409 时刷新重试
+
+# AuditLog 归档 (admin only)
+POST /api/auth/audit-logs/rotate?months=6&confirm=true
+
+# DeepSeek 关联方推断
+POST /api/related-parties/detector/run
+{ "project_id": 1, "enable_ai_inference": true, "ai_max_candidates": 30 }
+```
 
 ## 开发注意事项
 
@@ -171,3 +268,60 @@ uv run ruff format app/ frontend/
 - ORM → DataFrame 转换统一使用 `app.utils.db_helpers.account_balances_to_df()`
 - 日志使用 `logging.getLogger(__name__)`，启动时由 `app.core.logging.setup_logging()` 统一配置
 - 日期时间使用 `datetime.now(timezone.utc)` 替代已弃用的 `datetime.utcnow()`
+
+## 多端同步流程 (GitHub ↔ Hugging Face Space)
+
+仓库有两个 remote，**推送必须走 `scripts/sync.sh`**，不要裸 `git push`：
+
+| remote | 仓库 | 分支策略 | 写入方式 |
+|--------|------|---------|---------|
+| `origin` | https://github.com/EtheoBlank/ipo-audit-system | master 为稳定主线，feature 分支走 PR | 本地 `sync.sh push-github` |
+| `hf` | https://huggingface.co/spaces/EtheoZheng/EtheoBlank | `main` 是 Space 部署分支（推送即公开 rebuild） | 本地 `sync.sh push-hf` 或 GitHub Action `Sync to HF Space` |
+
+### 推荐工作流（PR 合到 master 之后）
+
+```bash
+# 1. 在 feature 分支开发, 推到 origin 走 PR
+git checkout -b feat/xxx
+git commit ...
+bash scripts/sync.sh push-github          # 等价于 git push origin feat/xxx
+
+# 2. GitHub 网页开 PR, CI 全绿后合并到 master
+
+# 3. 本地同步 master, 然后推 HF Space
+git checkout master && git pull
+bash scripts/sync.sh status               # 看 origin/master vs hf/main 谁领先
+bash scripts/sync.sh push-hf             # 默认 fast-forward, 安全
+# 如果 status 显示 ❌ 分叉 (origin/master 与 hf/main 无共同祖先):
+bash scripts/sync.sh push-hf --force-with-lease
+```
+
+### 不想本地推 HF？用 GitHub Action
+
+1. 一次性配置: GitHub 仓库 → Settings → Secrets and variables → Actions → **New repository secret**
+   - Name: `HF_TOKEN`
+   - Value: 去 https://huggingface.co/settings/tokens 生成（建议 **fine-grained**，只勾 `EtheoZheng/EtheoBlank` Space 的 write 权限）
+2. 日常同步: 仓库页 → Actions → **Sync to HF Space** → Run workflow → **勾上 `confirm_rebuild`** → Run
+3. Action 会自动跑：安全检查 → `uv sync` → smoke import → 比对 remote → 推 hf/main → 输出 Space URL
+
+### 安全护栏（三个强制约束）
+
+1. **绝不提交 `.env`**: `sync.sh` 和 `sync-hf.yml` 都会扫描 `.env` 文件 + `sk-` 字面量；CI 也会跑同样的检查
+2. **HF Token 永远在 GitHub Secret**: 不要贴在 issue / commit message / 文档里
+3. **HF Space 公开 rebuild 必须人工确认**: workflow 的 `confirm_rebuild` input 是 last-line 防御，别取消
+
+### 一次性初始化（老 `git_push.sh` 的用途）
+
+`scripts/git_push.sh` 是 **首次把仓库同步给 GitHub** 的批量脚本（分多个 commit 上传大段初始代码），现在仓库已有完整历史，**新工作用 `sync.sh`**。`git_push.sh` 保留仅作历史参考，不应再执行。
+
+### HF Space 一旦出错怎么回滚
+
+```bash
+# 找到上一个能跑的 commit
+git log --oneline hf/main | head -10
+
+# 强推回滚
+git push hf <previous-commit-sha>:main --force-with-lease
+```
+
+或用 GitHub Action 的 `force_with_lease` 选项重推旧 commit。

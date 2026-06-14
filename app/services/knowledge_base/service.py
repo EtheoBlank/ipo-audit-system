@@ -36,7 +36,6 @@ from app.services.knowledge_base.chunker import (
     extract_keywords,
 )
 from app.services.knowledge_base.document_loader import (
-    detect_file_type,
     load_document,
 )
 from app.services.knowledge_base.embedder import (
@@ -66,9 +65,9 @@ class KnowledgeBaseService:
     async def index_book(self, book_id: int) -> dict:
         """解析并索引一本书 — 适合 BackgroundTasks 调用。"""
         async with AsyncSessionLocal() as db:
-            book = (await db.execute(
-                select(KnowledgeBook).where(KnowledgeBook.id == book_id)
-            )).scalar_one_or_none()
+            book = (
+                await db.execute(select(KnowledgeBook).where(KnowledgeBook.id == book_id))
+            ).scalar_one_or_none()
             if not book:
                 raise ValueError(f"书籍不存在: {book_id}")
             book.status = "parsing"
@@ -93,9 +92,9 @@ class KnowledgeBaseService:
             await self._persist_chunks(book_id, text_chunks, vectors, model_name, dim)
 
             async with AsyncSessionLocal() as db:
-                book = (await db.execute(
-                    select(KnowledgeBook).where(KnowledgeBook.id == book_id)
-                )).scalar_one()
+                book = (
+                    await db.execute(select(KnowledgeBook).where(KnowledgeBook.id == book_id))
+                ).scalar_one()
                 book.status = "ready"
                 book.chunk_count = len(text_chunks)
                 book.total_chars = sum(c.char_count for c in text_chunks)
@@ -113,9 +112,9 @@ class KnowledgeBaseService:
         except Exception as e:  # noqa: BLE001
             logger.exception("书籍索引失败 (book_id=%s)", book_id)
             async with AsyncSessionLocal() as db:
-                book = (await db.execute(
-                    select(KnowledgeBook).where(KnowledgeBook.id == book_id)
-                )).scalar_one_or_none()
+                book = (
+                    await db.execute(select(KnowledgeBook).where(KnowledgeBook.id == book_id))
+                ).scalar_one_or_none()
                 if book:
                     book.status = "failed"
                     book.error_msg = str(e)[:1000]
@@ -135,9 +134,9 @@ class KnowledgeBaseService:
 
     async def delete_book(self, book_id: int) -> None:
         async with AsyncSessionLocal() as db:
-            book = (await db.execute(
-                select(KnowledgeBook).where(KnowledgeBook.id == book_id)
-            )).scalar_one_or_none()
+            book = (
+                await db.execute(select(KnowledgeBook).where(KnowledgeBook.id == book_id))
+            ).scalar_one_or_none()
             if not book:
                 return
             file_path = book.file_path

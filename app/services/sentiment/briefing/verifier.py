@@ -3,26 +3,26 @@
 与 LLM 的 4 轮协议解耦; 只看产物, 不信 LLM.
 校验失败 → briefing.verification_failed=True, 禁止进入 review 状态.
 """
+
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
 # 数字/百分比/日期/金额 — 抽取模式
 NUMERIC_PATTERNS: list[re.Pattern] = [
-    re.compile(r"\d{1,3}(?:,\d{3})+\.?\d*"),       # 1,234.56 / 1,234,567
-    re.compile(r"\d+\.\d+%"),                       # 12.5%
-    re.compile(r"\d+%"),                            # 12%
-    re.compile(r"[\d.]+亿"),                         # 1.5亿
-    re.compile(r"[\d.]+万"),                         # 200万
-    re.compile(r"\d{4}-\d{1,2}-\d{1,2}"),          # 2025-06-12
-    re.compile(r"\d{4}年\d{1,2}月\d{1,2}日"),       # 2025年6月12日
+    re.compile(r"\d{1,3}(?:,\d{3})+\.?\d*"),  # 1,234.56 / 1,234,567
+    re.compile(r"\d+\.\d+%"),  # 12.5%
+    re.compile(r"\d+%"),  # 12%
+    re.compile(r"[\d.]+亿"),  # 1.5亿
+    re.compile(r"[\d.]+万"),  # 200万
+    re.compile(r"\d{4}-\d{1,2}-\d{1,2}"),  # 2025-06-12
+    re.compile(r"\d{4}年\d{1,2}月\d{1,2}日"),  # 2025年6月12日
 ]
 
 # 引用模式: [事件#N] 或 事件#N
@@ -35,7 +35,8 @@ DOC_NO_PATTERN = re.compile(r"[一-龥]{2,8}[\[\(（]?\d{4}[\]\)）]?号?(?:第?
 @dataclass
 class Issue:
     """校验问题."""
-    issue_type: str        # missing_event_ref / hallucinated_number / broken_event_ref / mood_word / unverified_fact
+
+    issue_type: str  # missing_event_ref / hallucinated_number / broken_event_ref / mood_word / unverified_fact
     event_id: Optional[int]
     detail: str
     severity: str = "warn"  # warn / error (error → verification_failed=True)
@@ -44,6 +45,7 @@ class Issue:
 @dataclass
 class VerificationReport:
     """校验产物 — 落库到 briefing.audit_verification_json."""
+
     passed: bool
     issue_count: int = 0
     error_count: int = 0
@@ -59,7 +61,12 @@ class VerificationReport:
             "error_count": self.error_count,
             "warn_count": self.warn_count,
             "issues": [
-                {"type": i.issue_type, "event_id": i.event_id, "detail": i.detail, "severity": i.severity}
+                {
+                    "type": i.issue_type,
+                    "event_id": i.event_id,
+                    "detail": i.detail,
+                    "severity": i.severity,
+                }
                 for i in self.issues
             ],
             "fact_verification": self.fact_verification,
@@ -101,12 +108,14 @@ class BriefingVerifier:
         # 1) 情绪词扫描
         for w in self.BANNED_WORDS:
             if w in markdown:
-                issues.append(Issue(
-                    issue_type="mood_word",
-                    event_id=None,
-                    detail=f"禁用情绪词『{w}』出现在简报正文中 (违反用词精准要求)",
-                    severity="error",
-                ))
+                issues.append(
+                    Issue(
+                        issue_type="mood_word",
+                        event_id=None,
+                        detail=f"禁用情绪词『{w}』出现在简报正文中 (违反用词精准要求)",
+                        severity="error",
+                    )
+                )
 
         # 2) [事件#N] 引用校验
         ref_ids = set()
@@ -117,21 +126,25 @@ class BriefingVerifier:
                 continue
             ref_ids.add(eid)
             if eid not in events_by_id:
-                issues.append(Issue(
-                    issue_type="broken_event_ref",
-                    event_id=eid,
-                    detail=f"引用了不存在的事件 id={eid}",
-                    severity="error",
-                ))
+                issues.append(
+                    Issue(
+                        issue_type="broken_event_ref",
+                        event_id=eid,
+                        detail=f"引用了不存在的事件 id={eid}",
+                        severity="error",
+                    )
+                )
 
         if not ref_ids and raw_events:
             # 简报里没有任何事件引用 → 强警告
-            issues.append(Issue(
-                issue_type="missing_event_ref",
-                event_id=None,
-                detail="简报正文未引用任何 [事件#N] 标记 (违反『每个事实必须引用』要求)",
-                severity="error",
-            ))
+            issues.append(
+                Issue(
+                    issue_type="missing_event_ref",
+                    event_id=None,
+                    detail="简报正文未引用任何 [事件#N] 标记 (违反『每个事实必须引用』要求)",
+                    severity="error",
+                )
+            )
 
         # 3) 数字/日期/金额/文号 一致性
         # 思路: 把 markdown 中所有数字抽出, 再把所有被引用的 event 的原文数字合并成 union,
@@ -142,7 +155,9 @@ class BriefingVerifier:
             ev = events_by_id.get(eid)
             if not ev:
                 continue
-            all_referenced_content.append((ev.get("content_text", "") or "") + " " + (ev.get("title", "") or ""))
+            all_referenced_content.append(
+                (ev.get("content_text", "") or "") + " " + (ev.get("title", "") or "")
+            )
         union_content_numbers: set[str] = set()
         for c in all_referenced_content:
             union_content_numbers |= self._extract_numbers(c)
@@ -155,14 +170,18 @@ class BriefingVerifier:
                     ev = events_by_id.get(eid)
                     if not ev:
                         continue
-                    if n not in self._extract_numbers((ev.get("content_text", "") or "") + " " + (ev.get("title", "") or "")):
+                    if n not in self._extract_numbers(
+                        (ev.get("content_text", "") or "") + " " + (ev.get("title", "") or "")
+                    ):
                         missing_in.append(eid)
-                issues.append(Issue(
-                    issue_type="hallucinated_number",
-                    event_id=missing_in[0] if missing_in else None,
-                    detail=f"数字『{n}』在被引用事件 {missing_in or list(ref_ids)} 的原文中均不存在, 疑似 LLM 幻觉",
-                    severity="error",
-                ))
+                issues.append(
+                    Issue(
+                        issue_type="hallucinated_number",
+                        event_id=missing_in[0] if missing_in else None,
+                        detail=f"数字『{n}』在被引用事件 {missing_in or list(ref_ids)} 的原文中均不存在, 疑似 LLM 幻觉",
+                        severity="error",
+                    )
+                )
         # 记录 fact 核实结果
         for eid in ref_ids:
             ev = events_by_id.get(eid)
@@ -170,22 +189,26 @@ class BriefingVerifier:
                 continue
             content = (ev.get("content_text", "") or "") + " " + (ev.get("title", "") or "")
             ev_numbers = self._extract_numbers(content)
-            fact_verification.append({
-                "event_id": eid,
-                "matched_numbers": sorted(md_numbers & ev_numbers),
-                "hallucinated_numbers": sorted(md_numbers - ev_numbers),
-            })
+            fact_verification.append(
+                {
+                    "event_id": eid,
+                    "matched_numbers": sorted(md_numbers & ev_numbers),
+                    "hallucinated_numbers": sorted(md_numbers - ev_numbers),
+                }
+            )
 
         # 4) safe_fact_event_ids 与实际引用比对
         if safe_ids is not None:
             used_unsafe = ref_ids - safe_ids
             for eid in used_unsafe:
-                issues.append(Issue(
-                    issue_type="unverified_fact",
-                    event_id=eid,
-                    detail=f"事件 {eid} 出现在正文, 但 LLM 自检未将其标记为 verified",
-                    severity="warn",
-                ))
+                issues.append(
+                    Issue(
+                        issue_type="unverified_fact",
+                        event_id=eid,
+                        detail=f"事件 {eid} 出现在正文, 但 LLM 自检未将其标记为 verified",
+                        severity="warn",
+                    )
+                )
 
         # 5) quote 精确 substring 匹配 (P0 LLM F2 修复)
         # 防止 LLM 数字碰巧匹配但 fact 是编造的情况
@@ -197,21 +220,25 @@ class BriefingVerifier:
                     continue
                 ev = events_by_id.get(eid)
                 if not ev:
-                    issues.append(Issue(
-                        issue_type="unverified_fact",
-                        event_id=eid,
-                        detail=f"key_facts 引用了不存在的事件 id={eid}",
-                        severity="warn",
-                    ))
+                    issues.append(
+                        Issue(
+                            issue_type="unverified_fact",
+                            event_id=eid,
+                            detail=f"key_facts 引用了不存在的事件 id={eid}",
+                            severity="warn",
+                        )
+                    )
                     continue
                 content = (ev.get("content_text", "") or "") + " " + (ev.get("title", "") or "")
                 if quote not in content:
-                    issues.append(Issue(
-                        issue_type="quote_not_in_source",
-                        event_id=eid,
-                        detail=f"quote『{quote[:50]}...』在原文 (事件 {eid}) 中找不到完全一致的子串, 疑似 LLM 编造事实",
-                        severity="error",
-                    ))
+                    issues.append(
+                        Issue(
+                            issue_type="quote_not_in_source",
+                            event_id=eid,
+                            detail=f"quote『{quote[:50]}...』在原文 (事件 {eid}) 中找不到完全一致的子串, 疑似 LLM 编造事实",
+                            severity="error",
+                        )
+                    )
 
         # 汇总
         errors = [i for i in issues if i.severity == "error"]

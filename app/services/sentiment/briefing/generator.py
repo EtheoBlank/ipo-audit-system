@@ -11,12 +11,13 @@
                     — 这一轮不写入最终简报, 但产物落 audit_verification_json 供领导审阅
 第 4 轮 (compose): 输入第 1+2 轮安全事实 + 第 3 轮挑刺结论, 输出最终 Markdown 简报
 """
+
 from __future__ import annotations
 
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from app.core.config import settings
 from app.services.sentiment.llm_client import LlmClientFactory
@@ -165,12 +166,13 @@ class AdversarialResult:
 @dataclass
 class BriefingContent:
     """4 轮协议最终产物."""
+
     markdown: str
     extraction: ExtractionResult
     self_check: SelfCheckResult
     adversarial: AdversarialResult
-    safe_fact_event_ids: list[int]      # 用于 verifier 二次校验
-    event_snapshot: list[dict]          # 当日事件精简 (入库用)
+    safe_fact_event_ids: list[int]  # 用于 verifier 二次校验
+    event_snapshot: list[dict]  # 当日事件精简 (入库用)
     raw_input_events: list[dict] = field(default_factory=list)  # 原始事件, verifier 也要用
 
 
@@ -232,7 +234,8 @@ class BriefingGenerator:
             events_json=events_json,
         )
         r1 = await self.client.chat_json(
-            EXTRACT_SYSTEM, extract_user,
+            EXTRACT_SYSTEM,
+            extract_user,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )
@@ -277,7 +280,8 @@ class BriefingGenerator:
             f"其余章节只引用 safe_facts 中的 event_id. "
         )
         r4 = await self.client.chat_json(
-            COMPOSE_SYSTEM, compose_user,
+            COMPOSE_SYSTEM,
+            compose_user,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )
@@ -345,6 +349,7 @@ class BriefingGenerator:
     def _strip_banned_words(text: str) -> str:
         """后置硬过滤: 出现 BANNED_WORDS 任一即替换为 ***"""
         import re
+
         out = text
         for w in BANNED_WORDS:
             out = re.sub(re.escape(w), "***", out)

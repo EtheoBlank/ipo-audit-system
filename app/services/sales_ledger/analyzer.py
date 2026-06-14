@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date
 from typing import Any, Iterable, Optional
 
 import pandas as pd
@@ -199,12 +199,8 @@ class RevenueAnalyzer:
                         "rebate_amount": getattr(r, "rebate_amount", 0),
                         "ship_date": getattr(r, "ship_date", None),
                         "receipt_date": getattr(r, "receipt_date", None),
-                        "revenue_confirm_date": getattr(
-                            r, "revenue_confirm_date", None
-                        ),
-                        "confirmation_status": getattr(
-                            r, "confirmation_status", "未发函"
-                        ),
+                        "revenue_confirm_date": getattr(r, "revenue_confirm_date", None),
+                        "confirmation_status": getattr(r, "confirmation_status", "未发函"),
                         "confirmation_ref": getattr(r, "confirmation_ref", ""),
                         "confirmation_diff": getattr(r, "confirmation_diff", 0),
                         "source": getattr(r, "source", ""),
@@ -281,9 +277,7 @@ class RevenueAnalyzer:
             }
         revenue = float(self.df["revenue_amount"].sum())
         cost = float(self.df["cost_amount"].sum())
-        direct = float(
-            self.df[["shipping_fee", "customs_fee", "other_direct_fee"]].sum().sum()
-        )
+        direct = float(self.df[["shipping_fee", "customs_fee", "other_direct_fee"]].sum().sum())
         profit = revenue - cost - direct
         return {
             "record_count": int(len(self.df)),
@@ -372,18 +366,14 @@ class RevenueAnalyzer:
             .reset_index()
         )
         grouped["gross_margin"] = grouped.apply(
-            lambda r: ((r["revenue"] - r["cost"]) / r["revenue"])
-            if r["revenue"]
-            else 0.0,
+            lambda r: ((r["revenue"] - r["cost"]) / r["revenue"]) if r["revenue"] else 0.0,
             axis=1,
         )
         return grouped.round(4).to_dict(orient="records")
 
     # --- alerts ---------------------------------------------------------
 
-    def _cut_off_test(
-        self, period_end: date, window_days: int
-    ) -> list[dict[str, Any]]:
+    def _cut_off_test(self, period_end: date, window_days: int) -> list[dict[str, Any]]:
         if self.df.empty:
             return []
         alerts: list[dict[str, Any]] = []
@@ -411,8 +401,7 @@ class RevenueAnalyzer:
                     else None,
                     "revenue_amount": float(row.get("revenue_amount", 0) or 0),
                     "reason": (
-                        "跨期风险：发货/确认日期落在年末 ± window 天内，"
-                        "需核实是否属于正确期间"
+                        "跨期风险：发货/确认日期落在年末 ± window 天内，需核实是否属于正确期间"
                     ),
                 }
             )
@@ -435,19 +424,13 @@ class RevenueAnalyzer:
         if grouped.empty:
             return []
         grouped["spread_pct"] = grouped.apply(
-            lambda r: (
-                (r["max_price"] - r["min_price"]) / r["avg_price"]
-                if r["avg_price"]
-                else 0
-            ),
+            lambda r: (r["max_price"] - r["min_price"]) / r["avg_price"] if r["avg_price"] else 0,
             axis=1,
         )
         alerts = grouped[grouped["spread_pct"] > threshold_pct]
         return alerts.round(4).to_dict(orient="records")
 
-    def _inventory_recon(
-        self, inventory_outs: pd.DataFrame
-    ) -> list[dict[str, Any]]:
+    def _inventory_recon(self, inventory_outs: pd.DataFrame) -> list[dict[str, Any]]:
         """Compare sales quantity (grouped by product_code + month) with the
         user's 收发存 outflows. Returns a row per (product, month) where the
         delta is non-zero."""
@@ -455,10 +438,9 @@ class RevenueAnalyzer:
             return []
         sales = (
             self.df.dropna(subset=["revenue_confirm_date"])
-            .assign(
-                month=lambda d: d["revenue_confirm_date"].dt.to_period("M").astype(str)
-            )
-            .groupby(["product_code", "month"], as_index=False)["quantity"].sum()
+            .assign(month=lambda d: d["revenue_confirm_date"].dt.to_period("M").astype(str))
+            .groupby(["product_code", "month"], as_index=False)["quantity"]
+            .sum()
             .rename(columns={"quantity": "sales_qty"})
         )
         outs = inventory_outs.copy()
@@ -474,10 +456,12 @@ class RevenueAnalyzer:
                 rename_map[col] = "out_qty"
         outs = outs.rename(columns=rename_map)
         if "out_qty" not in outs.columns or "product_code" not in outs.columns:
-            return [{
-                "warning": "收发存文件缺少必要列（产品编号/发出数量/期间）",
-                "found_columns": list(inventory_outs.columns),
-            }]
+            return [
+                {
+                    "warning": "收发存文件缺少必要列（产品编号/发出数量/期间）",
+                    "found_columns": list(inventory_outs.columns),
+                }
+            ]
         outs["month"] = outs["month"].astype(str)
         merged = sales.merge(outs, on=["product_code", "month"], how="outer")
         merged[["sales_qty", "out_qty"]] = merged[["sales_qty", "out_qty"]].fillna(0)
@@ -582,8 +566,7 @@ class RevenueAnalyzer:
         )
         grouped["adjustment_ratio"] = grouped.apply(
             lambda r: (
-                (r["return_amount"] + r["discount_amount"] + r["rebate_amount"])
-                / r["revenue"]
+                (r["return_amount"] + r["discount_amount"] + r["rebate_amount"]) / r["revenue"]
                 if r["revenue"]
                 else 0.0
             ),
@@ -639,9 +622,7 @@ class RevenueAnalyzer:
             return {"error": "DEEPSEEK_API_KEY 未配置，跳过行业对比"}
         user_msg = f"行业：{self.industry}\n请给出该行业的常见财务指标参考区间。"
         try:
-            data = await self.client.chat_json(
-                system=INDUSTRY_SYSTEM, user=user_msg
-            )
+            data = await self.client.chat_json(system=INDUSTRY_SYSTEM, user=user_msg)
         except DeepSeekError as exc:
             return {"error": f"行业对比失败: {exc}"}
         data.setdefault("disclaimer", "AI 参考值，非权威，不可作为审计证据")

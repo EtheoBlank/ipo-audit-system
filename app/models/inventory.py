@@ -69,8 +69,8 @@ class CountSheetGenerateRequest(BaseModel):
     must_include_codes: list[str] = Field(default_factory=list)
     min_unit_amount: float = Field(0.0, ge=0.0)
     random_seed: int = 42
-    persist: bool = True              # 是否落库（False 仅预览）
-    plan_id: Optional[int] = None     # 关联到哪个盘点计划
+    persist: bool = True  # 是否落库（False 仅预览）
+    plan_id: Optional[int] = None  # 关联到哪个盘点计划
     force_overwrite_counted: bool = False  # True 时连已回填的实盘数也一并清空（默认 False 保留）
     # 重要性水平：单条 ≥ 该值的物料强制入 A（如税前利润 ×5%）
     materiality: float = Field(0.0, ge=0.0)
@@ -82,6 +82,7 @@ class CountSheetGenerateRequest(BaseModel):
 
 class CountSheetSimulateRequest(BaseModel):
     """Compare multiple thresholds — used by the interactive page."""
+
     period_end: Optional[date] = None
     thresholds: list[float] = Field(default_factory=lambda: [0.7, 0.8, 0.9])
     b_sample_ratio: float = 0.20
@@ -129,7 +130,7 @@ class CountSheetGenerateResponse(BaseModel):
 
 class CountPlanGenerateRequest(BaseModel):
     period_end: Optional[date] = None
-    industry: Optional[str] = None        # 不传则用 Project.industry
+    industry: Optional[str] = None  # 不传则用 Project.industry
     count_days_before: int = 0
     count_days_after: int = 2
     team: list[dict[str, str]] = Field(default_factory=list)
@@ -149,7 +150,7 @@ class CountPlanResponse(BaseModel):
     count_date_end: Optional[str] = None
     objectives: Optional[str] = None
     scope: Optional[str] = None
-    team: Optional[str] = None        # JSON string
+    team: Optional[str] = None  # JSON string
     procedures: Optional[str] = None
     special_notes: Optional[str] = None
     risks: Optional[str] = None
@@ -197,7 +198,7 @@ class ImpairmentComputeRequest(BaseModel):
     completion_cost_rate: float = Field(0.0, ge=0.0, le=0.90)
     manual_nrv: dict[str, float] = Field(default_factory=dict, max_length=10_000)
     persist: bool = True
-    include_reversal: bool = True   # 自动结合上年期初已计提做跌价转回
+    include_reversal: bool = True  # 自动结合上年期初已计提做跌价转回
 
     @field_validator("manual_nrv")
     @classmethod
@@ -248,6 +249,7 @@ class ImpairmentComputeResponse(BaseModel):
 
 class PriorImpairmentUpload(BaseModel):
     """{material_code: 上年期末已计提跌价金额}"""
+
     items: dict[str, float] = Field(..., max_length=10_000)
 
     @field_validator("items")

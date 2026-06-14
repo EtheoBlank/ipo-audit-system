@@ -6,10 +6,11 @@
     - ORM → Schema 用 model_config = {"from_attributes": True}
     - 中文 description
 """
+
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -105,6 +106,7 @@ class SentimentEventResponse(BaseModel):
 
 class SentimentEventImport(BaseModel):
     """手工录入事件."""
+
     project_id: int
     title: str = Field(..., min_length=1)
     content_text: str = Field("", max_length=8000)
@@ -218,6 +220,7 @@ class SentimentQuarterlyCreateRequest(BaseModel):
 
 class SentimentQuarterlyFinancialInput(BaseModel):
     """季报关键数据录入. 8 个必填字段 + 签名."""
+
     revenue: float = Field(..., description="营业收入 (元)")
     net_profit: float = Field(..., description="净利润 (元)")
     non_recurring_pnl: float = Field(..., description="扣非净利润 (元)")

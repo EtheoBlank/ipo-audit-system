@@ -39,7 +39,6 @@ import io
 import json
 import logging
 from datetime import date, datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -48,6 +47,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.api._helpers import get_project_or_404
 from app.core.database import get_db
 from app.models.db_models import (
     InventoryCodeMapping,
@@ -59,8 +59,8 @@ from app.models.db_models import (
     Project,
     SalesRecord,
 )
+from app.models.db.auth import User
 from app.models.inventory import (
-    CodeMappingItem,
     CodeMappingResponse,
     CodeMappingUploadRequest,
     CompletionStatsResponse,
@@ -89,6 +89,7 @@ from app.services.inventory import (
     InventoryImporter,
     InventoryImportError,
 )
+from app.services.auth import get_current_user, get_current_user_optional
 from app.services.sales_ledger.deepseek_client import DeepSeekClient
 from app.utils.upload_safety import (
     read_upload_capped,
@@ -111,14 +112,6 @@ def _deepseek_client() -> DeepSeekClient:
     )
 
 
-async def _get_project_or_404(db: AsyncSession, project_id: int) -> Project:
-    res = await db.execute(select(Project).where(Project.id == project_id))
-    proj = res.scalar_one_or_none()
-    if not proj:
-        raise HTTPException(status_code=404, detail="项目不存在")
-    return proj
-
-
 def _default_period_end(proj: Project) -> date:
     return date(proj.fiscal_year, 12, 31)
 
@@ -135,20 +128,24 @@ def _default_period_end(proj: Project) -> date:
 async def upload_movements(
     project_id: int,
     file: UploadFile = File(...),
-    period_end: Optional[date] = Query(None, description="报告期截止日；默认取项目 fiscal_year 的 12-31"),
+    period_end: Optional[date] = Query(
+        None, description="报告期截止日；默认取项目 fiscal_year 的 12-31"
+    ),
     is_prior_year: bool = Query(False, description="是否为上年同期数据（用于跌价转回）"),
     replace: bool = Query(True, description="导入前是否清空相同期间数据"),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """上传收发存 Excel/CSV。自动识别金蝶/用友/SAP/手工模板。"""
-    proj = await _get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id)
     pe = period_end or _default_period_end(proj)
     pe_str = pe.isoformat()
 
     # 校验文件大小、后缀白名单、文件名净化
     try:
         content, safe_name, _suffix = await read_upload_capped(
-            file, allowed_exts={".xlsx", ".xls", ".csv"},
+            file,
+            allowed_exts={".xlsx", ".xls", ".csv"},
         )
         df = InventoryImporter.parse_bytes(content, safe_name)
     except InventoryImportError as exc:
@@ -211,8 +208,9 @@ async def list_movements(
     period_end: Optional[date] = Query(None),
     is_prior_year: Optional[bool] = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     q = select(InventoryMovement).where(InventoryMovement.project_id == project_id)
     if period_end:
         q = q.where(InventoryMovement.period_end == period_end.isoformat())
@@ -228,8 +226,9 @@ async def clear_movements(
     period_end: Optional[date] = Query(None, description="不填则清空全部期间"),
     is_prior_year: Optional[bool] = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     stmt = delete(InventoryMovement).where(InventoryMovement.project_id == project_id)
     if period_end:
         stmt = stmt.where(InventoryMovement.period_end == period_end.isoformat())
@@ -266,9 +265,10 @@ async def generate_count_sheet(
     project_id: int,
     req: CountSheetGenerateRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """生成盘点用表（金额优先 + 阈值覆盖）。"""
-    proj = await _get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id)
     pe = req.period_end or _default_period_end(proj)
     movements = await _fetch_period_movements(db, project_id, pe)
     if not movements:
@@ -304,7 +304,11 @@ async def generate_count_sheet(
         await db.execute(stmt_del)
 
         # 拉取仍保留的（已盘）行，以便在 add 时跳过
-        keep_q = select(InventoryCountSheet.material_code, InventoryCountSheet.warehouse, InventoryCountSheet.batch_no).where(
+        keep_q = select(
+            InventoryCountSheet.material_code,
+            InventoryCountSheet.warehouse,
+            InventoryCountSheet.batch_no,
+        ).where(
             InventoryCountSheet.project_id == project_id,
             InventoryCountSheet.counted_qty.is_not(None),
         )
@@ -317,7 +321,11 @@ async def generate_count_sheet(
 
         skipped = 0
         for row in result.rows:
-            key = (str(row.get("material_code", "")), str(row.get("warehouse", "")), str(row.get("batch_no", "")))
+            key = (
+                str(row.get("material_code", "")),
+                str(row.get("warehouse", "")),
+                str(row.get("batch_no", "")),
+            )
             if key in existing_keys:
                 skipped += 1
                 continue
@@ -336,10 +344,12 @@ async def generate_count_sheet(
         # 返回时把"已盘点保留"的行也带回去
         if existing_keys:
             kept_res = await db.execute(
-                select(InventoryCountSheet).where(
+                select(InventoryCountSheet)
+                .where(
                     InventoryCountSheet.project_id == project_id,
                     InventoryCountSheet.counted_qty.is_not(None),
-                ).order_by(InventoryCountSheet.sample_tier, InventoryCountSheet.coverage_rank)
+                )
+                .order_by(InventoryCountSheet.sample_tier, InventoryCountSheet.coverage_rank)
             )
             saved_rows = list(kept_res.scalars().all()) + saved_rows
         row_resp = [CountSheetRowResponse.model_validate(s) for s in saved_rows]
@@ -347,8 +357,13 @@ async def generate_count_sheet(
         # 预览模式：返回伪 id=0 的行
         row_resp = [
             CountSheetRowResponse(
-                id=0, project_id=project_id, plan_id=req.plan_id,
-                counted_qty=None, counted_at=None, counted_by=None, remark=None,
+                id=0,
+                project_id=project_id,
+                plan_id=req.plan_id,
+                counted_qty=None,
+                counted_at=None,
+                counted_by=None,
+                remark=None,
                 **row,
             )
             for row in result.rows
@@ -372,9 +387,10 @@ async def simulate_count_sheet(
     project_id: int,
     req: CountSheetSimulateRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """对多档阈值做平行测算，方便用户在前端拉滑条选择。"""
-    proj = await _get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id)
     pe = req.period_end or _default_period_end(proj)
     movements = await _fetch_period_movements(db, project_id, pe)
     if not movements:
@@ -401,8 +417,9 @@ async def list_count_sheets(
     plan_id: Optional[int] = Query(None),
     only_unchecked: bool = Query(False, description="仅返回未盘点的"),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     q = select(InventoryCountSheet).where(InventoryCountSheet.project_id == project_id)
     if plan_id is not None:
         q = q.where(InventoryCountSheet.plan_id == plan_id)
@@ -418,8 +435,9 @@ async def clear_count_sheets(
     project_id: int,
     plan_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     stmt = delete(InventoryCountSheet).where(InventoryCountSheet.project_id == project_id)
     if plan_id is not None:
         stmt = stmt.where(InventoryCountSheet.plan_id == plan_id)
@@ -435,8 +453,10 @@ async def update_count_sheet(
     counted_by: Optional[str] = Query(None),
     remark: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     import math as _math
+
     if counted_qty is not None and (not _math.isfinite(counted_qty) or counted_qty < 0):
         raise HTTPException(422, "counted_qty 必须为非负有限数值")
     res = await db.execute(select(InventoryCountSheet).where(InventoryCountSheet.id == sheet_id))
@@ -469,8 +489,9 @@ async def generate_count_plan(
     project_id: int,
     req: CountPlanGenerateRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    proj = await _get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id)
     pe = req.period_end or _default_period_end(proj)
     industry = (req.industry or proj.industry or "").strip()
 
@@ -512,6 +533,7 @@ async def revise_count_plan(
     plan_id: int,
     req: CountPlanReviseRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     res = await db.execute(select(InventoryCountPlan).where(InventoryCountPlan.id == plan_id))
     plan = res.scalar_one_or_none()
@@ -520,6 +542,7 @@ async def revise_count_plan(
 
     # 解开 DB 字段 → CountPlanDraft
     from app.services.inventory.count_plan import CountPlanDraft
+
     try:
         team = json.loads(plan.team or "[]")
     except json.JSONDecodeError:
@@ -566,8 +589,9 @@ async def get_count_plan(
     project_id: int,
     period_end: Optional[date] = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    proj = await _get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id)
     pe = period_end or _default_period_end(proj)
     res = await db.execute(
         select(InventoryCountPlan).where(
@@ -594,9 +618,10 @@ async def upload_count_photo(
     counted_by: Optional[str] = Query(None, description="盘点人；若 OCR 已识别则可不填"),
     note: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """上传盘点照片，OCR 后 AI 解析实盘数量并回填到盘点用表。"""
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
 
     settings.ensure_dirs()
     target_dir = settings.UPLOAD_DIR / f"inventory_photos/project_{project_id}"
@@ -611,10 +636,7 @@ async def upload_count_photo(
     with open(target, "wb") as f:
         f.write(content)
 
-    media_type = (
-        "application/pdf" if suffix == ".pdf"
-        else f"image/{suffix.lstrip('.') or 'jpeg'}"
-    )
+    media_type = "application/pdf" if suffix == ".pdf" else f"image/{suffix.lstrip('.') or 'jpeg'}"
 
     processor = CountPhotoProcessor(client=_deepseek_client())
 
@@ -646,7 +668,9 @@ async def upload_count_photo(
 
     # 回填 — DateTime 列是 naive，去掉 tz 避免 PG/SQLite 不一致
     counted_at_aware = parse.counted_at or datetime.now(timezone.utc)
-    counted_at = counted_at_aware.replace(tzinfo=None) if counted_at_aware.tzinfo else counted_at_aware
+    counted_at = (
+        counted_at_aware.replace(tzinfo=None) if counted_at_aware.tzinfo else counted_at_aware
+    )
     by = (counted_by or parse.counted_by or "").strip() or None
     for sheet, row in matched:
         sheet.counted_qty = float(row.counted_qty)
@@ -699,11 +723,16 @@ async def upload_count_photo(
 async def count_completion(
     project_id: int,
     plan_id: Optional[int] = Query(None),
-    materiality: float = Query(0.0, ge=0.0, description="重要性水平金额；用于把差异分'超过/未超过'两组"),
-    period_end: Optional[date] = Query(None, description="不填则用项目当年 12-31，用于拉应盘存货统计应盘未盘"),
+    materiality: float = Query(
+        0.0, ge=0.0, description="重要性水平金额；用于把差异分'超过/未超过'两组"
+    ),
+    period_end: Optional[date] = Query(
+        None, description="不填则用项目当年 12-31，用于拉应盘存货统计应盘未盘"
+    ),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    proj = await _get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id)
     pe = period_end or _default_period_end(proj)
     q = select(InventoryCountSheet).where(InventoryCountSheet.project_id == project_id)
     if plan_id is not None:
@@ -734,8 +763,9 @@ async def compute_impairments(
     project_id: int,
     req: ImpairmentComputeRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    proj = await _get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id)
     pe = req.period_end or _default_period_end(proj)
 
     movements = await _fetch_period_movements(db, project_id, pe)
@@ -784,6 +814,7 @@ async def compute_impairments(
     # 若用户未显式指定 sell_cost_rate，按行业自动选默认（化工/机械等高费率行业避免 5% 一刀切）
     if req.sell_cost_rate is None:
         from app.services.inventory.aging_engine import sell_cost_rate_for
+
         sc_rate = sell_cost_rate_for(industry)
     else:
         sc_rate = req.sell_cost_rate
@@ -828,8 +859,9 @@ async def list_impairments(
     project_id: int,
     period_end: Optional[date] = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     q = select(InventoryImpairment).where(InventoryImpairment.project_id == project_id)
     if period_end:
         q = q.where(InventoryImpairment.period_end == period_end.isoformat())
@@ -874,12 +906,13 @@ async def upload_prior_impairments(
     payload: PriorImpairmentUpload,
     period_end: date = Query(..., description="上年期末日，如 2023-12-31"),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """上传上年期末已计提跌价（仅用于跌价转回计算）。
 
     每个 material_code → 已计提金额。
     """
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     pe_str = period_end.isoformat()
     # 清空相同期间
     await db.execute(
@@ -890,15 +923,17 @@ async def upload_prior_impairments(
     )
     saved = 0
     for code, amount in payload.items.items():
-        db.add(InventoryImpairment(
-            project_id=project_id,
-            material_code=str(code),
-            material_name="(上年已计提)",
-            period_end=pe_str,
-            impairment_current=float(amount or 0),
-            impairment_opening=float(amount or 0),
-            method="prior_upload",
-        ))
+        db.add(
+            InventoryImpairment(
+                project_id=project_id,
+                material_code=str(code),
+                material_name="(上年已计提)",
+                period_end=pe_str,
+                impairment_current=float(amount or 0),
+                impairment_opening=float(amount or 0),
+                method="prior_upload",
+            )
+        )
         saved += 1
     await db.commit()
     return {"project_id": project_id, "saved": saved, "period_end": pe_str}
@@ -917,6 +952,7 @@ async def upload_code_mappings(
     project_id: int,
     req: CodeMappingUploadRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """上传物料编码跨年映射（旧编码 → 新编码）。
 
@@ -924,7 +960,7 @@ async def upload_code_mappings(
     翻译为本年的新编码后再去匹配本年期末数据。这样物料编码变更后，
     上年期末跌价不会"凭空消失"。
     """
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     if req.replace:
         await db.execute(
             delete(InventoryCodeMapping).where(InventoryCodeMapping.project_id == project_id)
@@ -958,10 +994,12 @@ async def upload_code_mappings(
 async def list_code_mappings(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     res = await db.execute(
-        select(InventoryCodeMapping).where(InventoryCodeMapping.project_id == project_id)
+        select(InventoryCodeMapping)
+        .where(InventoryCodeMapping.project_id == project_id)
         .order_by(InventoryCodeMapping.old_code)
     )
     return list(res.scalars().all())
@@ -971,8 +1009,9 @@ async def list_code_mappings(
 async def clear_code_mappings(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     res = await db.execute(
         delete(InventoryCodeMapping).where(InventoryCodeMapping.project_id == project_id)
     )
@@ -990,38 +1029,62 @@ async def export_inventory(
     project_id: int,
     period_end: Optional[date] = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    proj = await _get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id)
     pe = period_end or _default_period_end(proj)
 
-    movements = (await db.execute(
-        select(InventoryMovement).where(
-            InventoryMovement.project_id == project_id,
-            InventoryMovement.period_end == pe.isoformat(),
-            InventoryMovement.is_prior_year == False,  # noqa: E712
+    movements = (
+        (
+            await db.execute(
+                select(InventoryMovement).where(
+                    InventoryMovement.project_id == project_id,
+                    InventoryMovement.period_end == pe.isoformat(),
+                    InventoryMovement.is_prior_year == False,  # noqa: E712
+                )
+            )
         )
-    )).scalars().all()
+        .scalars()
+        .all()
+    )
 
-    count_sheets = (await db.execute(
-        select(InventoryCountSheet).where(InventoryCountSheet.project_id == project_id)
-        .order_by(InventoryCountSheet.sample_tier, InventoryCountSheet.coverage_rank)
-    )).scalars().all()
-
-    plan = (await db.execute(
-        select(InventoryCountPlan).where(
-            InventoryCountPlan.project_id == project_id,
-            InventoryCountPlan.period_end == pe.isoformat(),
+    count_sheets = (
+        (
+            await db.execute(
+                select(InventoryCountSheet)
+                .where(InventoryCountSheet.project_id == project_id)
+                .order_by(InventoryCountSheet.sample_tier, InventoryCountSheet.coverage_rank)
+            )
         )
-    )).scalar_one_or_none()
+        .scalars()
+        .all()
+    )
+
+    plan = (
+        await db.execute(
+            select(InventoryCountPlan).where(
+                InventoryCountPlan.project_id == project_id,
+                InventoryCountPlan.period_end == pe.isoformat(),
+            )
+        )
+    ).scalar_one_or_none()
 
     completion = CountPhotoProcessor.completion_stats(count_sheets) if count_sheets else None
 
-    impairments = (await db.execute(
-        select(InventoryImpairment).where(
-            InventoryImpairment.project_id == project_id,
-            InventoryImpairment.period_end == pe.isoformat(),
-        ).order_by(InventoryImpairment.impairment_current.desc())
-    )).scalars().all()
+    impairments = (
+        (
+            await db.execute(
+                select(InventoryImpairment)
+                .where(
+                    InventoryImpairment.project_id == project_id,
+                    InventoryImpairment.period_end == pe.isoformat(),
+                )
+                .order_by(InventoryImpairment.impairment_current.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     summary = None
     if impairments:

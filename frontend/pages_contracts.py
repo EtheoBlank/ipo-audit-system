@@ -91,21 +91,15 @@ def _render_five_step(data: dict[str, Any]) -> None:
 
 def show_contracts() -> None:
     st.markdown("## 📄 收入合同分析")
-    st.caption(
-        "上传合同图片 / 扫描件 → OCR → CAS 14 五步法分析 + 7 字段要点提取 + 风险扫描"
-    )
+    st.caption("上传合同图片 / 扫描件 → OCR → CAS 14 五步法分析 + 7 字段要点提取 + 风险扫描")
 
     project = _projects_selectbox()
     if not project:
         return
     project_id = project["id"]
-    st.info(
-        f"当前项目：**{project['name']}** | 公司：{project.get('company_name', '')}"
-    )
+    st.info(f"当前项目：**{project['name']}** | 公司：{project.get('company_name', '')}")
 
-    tab_upload, tab_list, tab_analyse = st.tabs(
-        ["📤 上传合同", "📋 合同列表", "🤖 五步法分析"]
-    )
+    tab_upload, tab_list, tab_analyse = st.tabs(["📤 上传合同", "📋 合同列表", "🤖 五步法分析"])
 
     # --- Tab 1: 上传 --------------------------------------------------
     with tab_upload:

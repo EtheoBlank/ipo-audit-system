@@ -3,6 +3,7 @@
 读取符合 `docs/COMPREHENSIVE_WORKPAPER_TEMPLATE_SPEC.md` 的 .xlsx 模板，
 输出结构化的 `TemplateSchema`。
 """
+
 from __future__ import annotations
 
 import logging
@@ -12,7 +13,6 @@ from typing import Any, Optional, Union
 
 from openpyxl import load_workbook
 from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
-from openpyxl.workbook.defined_name import DefinedName
 
 from app.services.comprehensive.schemas import TemplateField, TemplateSchema
 
@@ -164,9 +164,7 @@ class TemplateParser:
         required = ("template_id", "template_name", "version", "firm_id")
         missing = [k for k in required if k not in config]
         if missing:
-            raise TemplateParseError(
-                f"_meta 配置缺少必填项: {missing}。需要: {required}"
-            )
+            raise TemplateParseError(f"_meta 配置缺少必填项: {missing}。需要: {required}")
         return config
 
     @staticmethod
@@ -174,7 +172,9 @@ class TemplateParser:
         """读取字段定义表（A12 起，列: field_id, label, type, source, required, hint, options）。"""
         # 找到表头行
         header_row_idx: Optional[int] = None
-        for i, row in enumerate(meta_sheet.iter_rows(min_row=1, max_row=30, values_only=True), start=1):
+        for i, row in enumerate(
+            meta_sheet.iter_rows(min_row=1, max_row=30, values_only=True), start=1
+        ):
             first = row[0]
             if isinstance(first, str) and first.strip().lower() == "field_id":
                 header_row_idx = i
@@ -223,7 +223,12 @@ class TemplateParser:
             # required 兼容多种真值
             if "required" in entry:
                 entry["required"] = str(entry["required"]).strip().lower() in (
-                    "true", "1", "yes", "y", "是", "√"
+                    "true",
+                    "1",
+                    "yes",
+                    "y",
+                    "是",
+                    "√",
                 )
             # type 缺省
             if not entry.get("type"):
@@ -233,9 +238,7 @@ class TemplateParser:
 
     # ----- 业务表占位符/命名区域扫描 -----
 
-    def _scan_business_placeholders(
-        self, wb, exclude: str
-    ) -> dict[str, tuple[str, int, int, str]]:
+    def _scan_business_placeholders(self, wb, exclude: str) -> dict[str, tuple[str, int, int, str]]:
         """扫描所有业务表中 `{{field_id}}` 占位符的位置。
 
         Returns: {field_id: (cell_ref, row, column, sheet_name)}
@@ -255,16 +258,16 @@ class TemplateParser:
                         if fid in found:
                             logger.debug(
                                 "占位符 '%s' 出现在多个位置，使用首次: %s 与 %s",
-                                fid, found[fid][0], cell.coordinate,
+                                fid,
+                                found[fid][0],
+                                cell.coordinate,
                             )
                             continue
                         found[fid] = (f"{name}!{cell.coordinate}", cell.row, cell.column, name)
         return found
 
     @staticmethod
-    def _collect_named_ranges(
-        wb, exclude: str
-    ) -> dict[str, tuple[str, int, int, str]]:
+    def _collect_named_ranges(wb, exclude: str) -> dict[str, tuple[str, int, int, str]]:
         """收集命名区域到单元格坐标的映射。
 
         Returns: {name: (cell_ref, row, column, sheet_name)}
@@ -298,9 +301,7 @@ class TemplateParser:
                 # 解析 row/col
                 col_letter, row_num = coordinate_from_string(left_top)
                 col_idx = column_index_from_string(col_letter)
-                result[str(name)] = (
-                    f"{sheet_name}!{left_top}", row_num, col_idx, sheet_name
-                )
+                result[str(name)] = (f"{sheet_name}!{left_top}", row_num, col_idx, sheet_name)
         return result
 
     @staticmethod

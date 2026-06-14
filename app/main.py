@@ -2,11 +2,12 @@
 
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import AsyncSessionLocal, init_db
 from app.core.logging import setup_logging
 from app.api import (
     projects,
@@ -22,9 +23,92 @@ from app.api import (
     comprehensive,
     team_management,
     sentiment,
+    # Pack A — 新模块
+    auth as auth_api,
+    notifications as notifications_api,
+    account_audit as account_audit_api,
+    report_templates as report_templates_api,
+    # Pack B — 关联方专项
+    related_parties as related_parties_api,
+    # Pack C — 10 个审计循环
+    audit_cycles as audit_cycles_api,
+    # Pack D — IPO 专属 (内控/截止性/招股书/可比公司/反馈/申报清单)
+    ipo_specials as ipo_specials_api,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+#  Pack A — Audit Log 中间件
+# ============================================================
+
+
+_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _exclude_paths() -> set:
+    return {p.strip() for p in (settings.AUDIT_LOG_EXCLUDE_PATHS or "").split(",") if p.strip()}
+
+
+class AuditLogMiddleware(BaseHTTPMiddleware):
+    """简单审计中间件 — 仅记录写操作 (按配置).
+
+    业务路由内部已经 ``record_audit_log`` 落了精细日志, 这里再补一条粗粒度日志
+    (覆盖未在路由里手动 record 的端点 + 异常未捕获的兜底).
+    避免重复: 关键端点已 record 的, 这里只多一条 method/path/status, 不会带 payload.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        excludes = _exclude_paths()
+        if any(path.startswith(p) for p in excludes):
+            return await call_next(request)
+
+        if settings.AUDIT_LOG_WRITE_ONLY and request.method.upper() not in _WRITE_METHODS:
+            return await call_next(request)
+
+        ip = request.client.host if request.client else None
+        ua = request.headers.get("user-agent")
+
+        response: Response
+        error_detail = None
+        try:
+            response = await call_next(request)
+        except Exception as exc:  # noqa: BLE001
+            error_detail = str(exc)[:2000]
+            raise
+        finally:
+            # 写日志 — 失败被吞 (audit_log 内部自带 try/except)
+            try:
+                from app.services.auth.audit_log import record_audit_log
+
+                user = getattr(request.state, "user", None)
+                user_id = getattr(user, "id", None) if user else None
+                user_display = getattr(user, "full_name", None) if user else None
+                user_role = getattr(user, "role", None) if user else None
+                firm_id = getattr(user, "firm_id", None) if user else None
+                async with AsyncSessionLocal() as db:
+                    await record_audit_log(
+                        db,
+                        user_id=user_id,
+                        user_display=user_display,
+                        user_role=user_role,
+                        firm_id=firm_id,
+                        action="http",
+                        method=request.method,
+                        path=path,
+                        ip=ip,
+                        user_agent=ua,
+                        status_code=getattr(response, "status_code", None)
+                        if error_detail is None
+                        else 500,
+                        summary=f"{request.method} {path}",
+                        error_detail=error_detail,
+                    )
+            except Exception:  # noqa: BLE001
+                logger.exception("AuditLogMiddleware 写日志异常 (已吞)")
+        return response
 
 
 @asynccontextmanager
@@ -33,10 +117,49 @@ async def lifespan(app: FastAPI):
     # Startup
     setup_logging(level="DEBUG" if settings.DEBUG else "INFO")
     settings.ensure_dirs()
+
+    # Pack A — 生产护栏: JWT_SECRET 不能用 dev 默认值
+    if settings.AUTH_ENABLED and not settings.DEBUG:
+        # P0 第 2 轮修复 — 用 == 严格比较 (不再 startswith 假阳), + 长度校验
+        _DEV_JWT_DEFAULTS = {
+            "ipo-audit-dev-only-change-in-prod-please-use-secrets-token-urlsafe-32",
+            "please-generate-a-random-secret-with-secrets-token-urlsafe-48-bytes",
+            "",
+        }
+        if settings.JWT_SECRET in _DEV_JWT_DEFAULTS or len(settings.JWT_SECRET or "") < 32:
+            logger.error(
+                "❌ 生产模式 (DEBUG=False) + AUTH_ENABLED=true, 但 JWT_SECRET "
+                "仍是 dev 默认值或长度不足 32 字节。请在 .env 设置强随机串后再启动: "
+                'python -c "import secrets; print(secrets.token_urlsafe(48))"'
+            )
+            raise RuntimeError(
+                "JWT_SECRET must be set to a strong random string (>=32 bytes) in production"
+            )
+        # 启动自检: encode → decode roundtrip
+        try:
+            from app.services.auth.jwt import create_access_token, decode_token
+
+            _t = create_access_token(user_id=0, username="__startup_check__", role="admin")
+            _p = decode_token(_t)
+            assert _p.get("sub") == "0", "JWT roundtrip 自检失败"
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("JWT encode/decode 自检失败 — JWT 配置异常: %s", exc)
+            raise RuntimeError(f"JWT configuration broken: {exc}") from exc
+
     await init_db()
+
+    # Pack A — Auth bootstrap (创建默认事务所 + 内置角色/权限; admin 仅在 AUTH_ENABLED=true 创建)
+    try:
+        from app.services.auth import bootstrap_auth
+
+        await bootstrap_auth()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Auth bootstrap 启动失败 (非致命): %s", exc)
+
     # 舆情跟踪调度器 (APScheduler) — v0.2 新增
     try:
         from app.services.sentiment.scheduler import start_scheduler
+
         await start_scheduler()
     except Exception as exc:  # 调度器挂掉不能让整个 app 起不来
         logger.exception("舆情调度器启动失败: %s", exc)
@@ -45,6 +168,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     try:
         from app.services.sentiment.scheduler import stop_scheduler
+
         await stop_scheduler()
     except Exception:
         logger.exception("舆情调度器停止失败")
@@ -56,6 +180,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
+        lifespan=lifespan,
         description="""
 ## IPO 审计系统
 
@@ -63,39 +188,27 @@ def create_app() -> FastAPI:
 
 ### 主要功能
 
+- **多用户 / 权限 / 审计轨迹 (Pack A — Phase 18)**: 完整 5 级签字流
+  (审计员 → 经理 → 项目合伙人 → 质控合伙人 → 签字合伙人) + JWT 认证 +
+  审计轨迹全量记录 + 通用通知中心
+- **长期资产发生额审定 (Pack A — 用户特别要求)**: 固定资产/在建工程/
+  无形资产/长投/商誉/使用权资产等长期资产科目, 不只期初期末出审定数,
+  本期借/贷方发生额逐笔出审定数 + 审计调整, 底稿自动恒等式校验
+- **报告模板自定义化 (Pack A — Phase 20)**: 事务所上传 Word/Excel
+  模板, 系统按 ``${placeholder}`` 注入数据生成定制品牌报告
 - **项目管理**: 创建和管理 IPO 审计项目
 - **数据导入**: 支持 Excel 格式的科目余额表、序时账、银行对账单导入
 - **底稿生成**: 自动生成标准化的审计底稿 Excel 文件
 - **试算平衡**: 验证资产负债表平衡和报表勾稽关系
 - **监管案例**: 抓取和检索证监会、交易所的监管案例
-- **AI 分析**: 利用 AI识别风险点和生成审计建议
+- **AI 分析**: 利用 AI 识别风险点和生成审计建议
 - **销售清单整理 (Sales Ledger)**: 上传散乱文档 → AI 合成结构化销售清单 →
   毛利率/截止性/单价波动/收发存对账/同行业参考分析，并导出多 Sheet Excel
 - **收发存盘点 & 减值 (Inventory)**: 上传收发存 → 金额优先生成盘点用表 →
   行业化盘点计划 → 现场拍照 OCR 回填实盘数 → 盘点率/差异统计；
   FIFO 库龄 + 销售清单NRV 跌价 + 上年期初跌价转回
-- **函证管理 (Confirmation)**: 从账套自动生成银行/客户/供应商/其他往来询证函统计表 →
-  确定发函后锁定发函日期与金额快照（避免多版本混乱）→ 银行询证函按财政部官方模板，
-  客户/供应商函证按 CSA 1311/1502/1504 最新审计准则要求函证余额/交易额/票据背书/
-  关键合同条款 → 上传回函照片 OCR + AI 解析 → 回函情况自动统计与差异分析
-- **法律法规库 (Regulations)**: 自动抓取证监会 / 财政部 / 国家税务总局 / 外管局 /
-  人民银行的政策文件、准则、规章、公告与问答口径，支持来源/日期/关键词多维过滤、
-  全文搜索、按项目收藏，方便审计师在生成审计说明时即时查规
-- **自助知识库 (Knowledge Base)**: 用户上传喜欢的实务书籍 / 案例集 (PDF / EPUB /
-  DOCX / TXT / MD) → 系统切块 + 向量化 (TF-IDF 兜底，可切到 MiniMax / DeepSeek 嵌入) →
-  生成审计说明时按科目 / 风险点检索相似案例，让 AI 参考真实实务处理方式
-- **项目组管理 (Team Management)**: 维护审计师人员库 + 5 级级别（项目负责人/高级经理/
-  经理/高级审计员/审计员）；账套导入完成后由 AI 自动生成 IPO 审计工作计划并按级别
-  分配任务；支持站会/周会/启动会/复核会纪要 → AI 质量评分；员工日报 + 卡点上报；
-  个人 + 项目级可视化进度看板（Streamlit + Altair）；AI 周期性输出管理建议给项目负责人。
-
-### 支持的模板类型
-
-- `account_detail`: 科目明细表
-- `income_statement`: 利润表
-- `balance_sheet`: 资产负债表
-- `cash_flow`: 现金流量表
-- `trial_balance`: 试算平衡表
+- **函证管理 (Confirmation)**: 财政部模板询证函 + 回函 OCR + 差异统计
+- **法律法规库 / 自助知识库 / 项目组管理 / 舆情跟踪 / 综合底稿** 等
         """,
         docs_url="/docs",
         redoc_url="/redoc",
@@ -103,17 +216,17 @@ def create_app() -> FastAPI:
 
     # CORS middleware — restrict origins in production
     allowed_origins = [
-        origin.strip()
-        for origin in settings.CORS_ORIGINS.split(",")
-        if origin.strip()
+        origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()
     ]
     if settings.DEBUG:
         # In debug mode, also allow localhost on any port for dev convenience
-        allowed_origins.extend([
-            "http://localhost:8501",
-            "http://127.0.0.1:8501",
-            "http://localhost:3000",
-        ])
+        allowed_origins.extend(
+            [
+                "http://localhost:8501",
+                "http://127.0.0.1:8501",
+                "http://localhost:3000",
+            ]
+        )
         allowed_origins = list(set(allowed_origins))
 
     app.add_middleware(
@@ -123,6 +236,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Pack A — 审计轨迹中间件 (放在 CORS 之后, 业务路由之前)
+    app.add_middleware(AuditLogMiddleware)
 
     # Include routers
     app.include_router(projects.router)
@@ -138,6 +254,17 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_base.router)
     app.include_router(team_management.router)
     app.include_router(sentiment.router)
+    # Pack A — 新模块
+    app.include_router(auth_api.router)
+    app.include_router(notifications_api.router)
+    app.include_router(account_audit_api.router)
+    app.include_router(report_templates_api.router)
+    # Pack B — 关联方专项
+    app.include_router(related_parties_api.router)
+    # Pack C — 10 个审计循环
+    app.include_router(audit_cycles_api.router)
+    # Pack D — IPO 专属
+    app.include_router(ipo_specials_api.router)
 
     # Health check endpoint
     @app.get("/health", tags=["系统"])
@@ -147,6 +274,7 @@ def create_app() -> FastAPI:
             "status": "healthy",
             "app": settings.APP_NAME,
             "version": settings.APP_VERSION,
+            "auth_enabled": settings.AUTH_ENABLED,
         }
 
     return app

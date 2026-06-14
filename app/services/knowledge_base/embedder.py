@@ -35,8 +35,8 @@ logger = logging.getLogger(__name__)
 # ----------------------------------------------------------------------
 
 
-_TFIDF_NGRAM = (2, 3)        # 中文 2-3gram 字符
-_TFIDF_TOP_TERMS = 4096      # 词表上限
+_TFIDF_NGRAM = (2, 3)  # 中文 2-3gram 字符
+_TFIDF_TOP_TERMS = 4096  # 词表上限
 _TFIDF_VERSION = "tfidf-char-v1"
 
 
@@ -81,9 +81,7 @@ class TfidfEmbedder:
         # 取最高频前 N 当词表
         top = [t for t, _ in df.most_common(_TFIDF_TOP_TERMS)]
         self.vocab = {t: i for i, t in enumerate(top)}
-        self.idf = [
-            math.log((1 + n_doc) / (1 + df[t])) + 1.0 for t in top
-        ]
+        self.idf = [math.log((1 + n_doc) / (1 + df[t])) + 1.0 for t in top]
         self.dim = len(self.vocab)
         logger.info("TF-IDF 拟合完成：词表 %d，文档 %d", self.dim, n_doc)
 

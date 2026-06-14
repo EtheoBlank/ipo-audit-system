@@ -1,12 +1,9 @@
 """综合报告生成器 - 第六阶段."""
-import pandas as pd
-from typing import Dict, List, Optional, Any
+
+from typing import Dict, List, Optional
 from datetime import datetime
 from docx import Document
-from docx.shared import Inches, Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT
-import json
 
 
 class ComprehensiveReportGenerator:
@@ -36,7 +33,7 @@ class ComprehensiveReportGenerator:
         doc.add_paragraph(f"审计年度：{project_info.get('fiscal_year', '')}年")
         doc.add_paragraph("")
 
-        #1. 企业概况
+        # 1. 企业概况
         doc.add_heading("一、企业概况", 1)
         self._add_company_overview(doc, project_info, financial_data)
 
@@ -58,6 +55,7 @@ class ComprehensiveReportGenerator:
 
         # 保存
         from io import BytesIO
+
         buffer = BytesIO()
         doc.save(buffer)
         buffer.seek(0)
@@ -214,7 +212,10 @@ class InteractiveReportGenerator:
                 },
                 "risk_heatmap": {
                     "categories": ["收入确认", "应收账款", "存货", "关联交易", "商誉"],
-                    "scores": [risk_analysis.get("scores", {}).get(cat, 50) for cat in ["收入确认", "应收账款", "存货", "关联交易", "商誉"]],
+                    "scores": [
+                        risk_analysis.get("scores", {}).get(cat, 50)
+                        for cat in ["收入确认", "应收账款", "存货", "关联交易", "商誉"]
+                    ],
                 },
             },
         }
@@ -256,6 +257,7 @@ class PDFReportGenerator:
         from reportlab.lib.units import cm
 
         from io import BytesIO
+
         buffer = BytesIO()
 
         doc = SimpleDocTemplate(buffer, pagesize=A4)
@@ -264,17 +266,19 @@ class PDFReportGenerator:
 
         # 标题
         title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
+            "CustomTitle",
+            parent=styles["Heading1"],
             fontSize=18,
             spaceAfter=30,
             alignment=1,  # CENTER
         )
-        story.append(Paragraph(f"{project_info.get('company_name', '')} IPO审计综合分析报告", title_style))
+        story.append(
+            Paragraph(f"{project_info.get('company_name', '')} IPO审计综合分析报告", title_style)
+        )
         story.append(Spacer(1, 0.5 * cm))
 
         # 基本信息
-        story.append(Paragraph("一、基本信息", styles['Heading2']))
+        story.append(Paragraph("一、基本信息", styles["Heading2"]))
         info_data = [
             ["项目名称", project_info.get("name", "")],
             ["公司名称", project_info.get("company_name", "")],
@@ -282,15 +286,19 @@ class PDFReportGenerator:
             ["审计年度", f"{project_info.get('fiscal_year', '')}年"],
         ]
         info_table = Table(info_data, colWidths=[4 * cm, 10 * cm])
-        info_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ]))
+        info_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (0, -1), colors.lightgrey),
+                    ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                ]
+            )
+        )
         story.append(info_table)
         story.append(Spacer(1, 0.5 * cm))
 
         # 财务指标
-        story.append(Paragraph("二、主要财务指标", styles['Heading2']))
+        story.append(Paragraph("二、主要财务指标", styles["Heading2"]))
         fin_data = [
             ["指标", "金额/比例"],
             ["总资产", f"{financial_data.get('total_assets', 0):,.2f}万元"],
@@ -299,33 +307,41 @@ class PDFReportGenerator:
             ["毛利率", f"{financial_data.get('gross_margin', 0):.2f}%"],
         ]
         fin_table = Table(fin_data, colWidths=[4 * cm, 10 * cm])
-        fin_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ]))
+        fin_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                    ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                ]
+            )
+        )
         story.append(fin_table)
         story.append(Spacer(1, 0.5 * cm))
 
         # 风险评估
-        story.append(Paragraph("三、风险评估", styles['Heading2']))
-        story.append(Paragraph(f"综合风险等级：{risk_analysis.get('risk_level', '中')}", styles['Normal']))
+        story.append(Paragraph("三、风险评估", styles["Heading2"]))
+        story.append(
+            Paragraph(f"综合风险等级：{risk_analysis.get('risk_level', '中')}", styles["Normal"])
+        )
         story.append(Spacer(1, 0.3 * cm))
 
         risk_points = risk_analysis.get("risk_points", [])
         if risk_points:
-            story.append(Paragraph("主要风险点：", styles['Normal']))
+            story.append(Paragraph("主要风险点：", styles["Normal"]))
             for i, point in enumerate(risk_points, 1):
-                story.append(Paragraph(f"{i}. {point}", styles['Normal']))
+                story.append(Paragraph(f"{i}. {point}", styles["Normal"]))
         story.append(Spacer(1, 0.5 * cm))
 
         # 试算平衡
-        story.append(Paragraph("四、试算平衡", styles['Heading2']))
-        story.append(Paragraph(
-            f"状态：{'平衡' if trial_balance.get('is_balanced') else '不平衡'} | "
-            f"借方合计：{trial_balance.get('total_debit', 0):,.2f} | "
-            f"贷方合计：{trial_balance.get('total_credit', 0):,.2f}",
-            styles['Normal']
-        ))
+        story.append(Paragraph("四、试算平衡", styles["Heading2"]))
+        story.append(
+            Paragraph(
+                f"状态：{'平衡' if trial_balance.get('is_balanced') else '不平衡'} | "
+                f"借方合计：{trial_balance.get('total_debit', 0):,.2f} | "
+                f"贷方合计：{trial_balance.get('total_credit', 0):,.2f}",
+                styles["Normal"],
+            )
+        )
 
         doc.build(story)
         buffer.seek(0)

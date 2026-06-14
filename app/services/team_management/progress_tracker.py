@@ -2,6 +2,7 @@
 
 只读操作，不写入数据库（快照写入由调用方决定）。
 """
+
 from __future__ import annotations
 
 import logging
@@ -19,7 +20,6 @@ from app.models.db_models import (
     BLOCKER_STATUS_IN_PROGRESS,
     BLOCKER_STATUS_ESCALATED,
     DailyReport,
-    MEMBER_LEVEL_LABELS,
     Project,
     ProjectAssignment,
     TeamMember,
@@ -28,7 +28,6 @@ from app.models.db_models import (
     TASK_STATUS_DONE,
     TASK_STATUS_BLOCKED,
     TASK_STATUS_IN_PROGRESS,
-    TASK_STATUS_PENDING,
     TASK_STATUS_CANCELLED,
 )
 
@@ -98,6 +97,7 @@ class ProgressTracker:
 
         # 4) 拉近 7 天 DailyReport
         from datetime import date, timedelta as _td
+
         seven_days_ago = (date.today() - _td(days=7)).isoformat()
         reports_q = await db.execute(
             select(DailyReport)
@@ -161,9 +161,7 @@ class ProgressTracker:
         return out
 
     @staticmethod
-    async def collect_project_summary(
-        db: AsyncSession, project_id: int
-    ) -> dict[str, Any]:
+    async def collect_project_summary(db: AsyncSession, project_id: int) -> dict[str, Any]:
         """聚合项目级摘要（不展开人员）。"""
         items_q = await db.execute(
             select(WorkPlanItem)
@@ -198,9 +196,7 @@ class ProgressTracker:
         }
 
     @staticmethod
-    async def collect_blocker_summary(
-        db: AsyncSession, project_id: int
-    ) -> dict[str, Any]:
+    async def collect_blocker_summary(db: AsyncSession, project_id: int) -> dict[str, Any]:
         """卡点摘要 — 数量 / 严重度分布 / 平均存续时长。"""
         blockers_q = await db.execute(
             select(Blocker).where(

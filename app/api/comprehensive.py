@@ -9,6 +9,7 @@
   POST   /api/comprehensive/historical         脱敏入库历史底稿
   GET    /api/comprehensive/historical/search  在历史库中检索
 """
+
 from __future__ import annotations
 
 import logging
@@ -22,7 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.db_models import FirmTemplate
+from app.models.db.auth import User
+from app.services.auth import get_current_user, get_current_user_optional
 from app.services.comprehensive.fill_engine import ComprehensiveFillEngine
 from app.services.comprehensive.firm_template_service import (
     FirmTemplateService,
@@ -51,7 +53,7 @@ async def _read_capped_xlsx(file: UploadFile) -> bytes:
     if len(data) > settings.MAX_UPLOAD_SIZE:
         raise HTTPException(
             status_code=413,
-            detail=f"文件超过 {settings.MAX_UPLOAD_SIZE // (1024*1024)}MB 上限",
+            detail=f"文件超过 {settings.MAX_UPLOAD_SIZE // (1024 * 1024)}MB 上限",
         )
     if len(data) < 4 or data[:4] != _XLSX_MAGIC:
         raise HTTPException(status_code=400, detail="文件不是有效的 xlsx（签名不匹配）")
@@ -68,6 +70,7 @@ def _safe_id(value: str, name: str) -> str:
 # ============================================================
 # Schemas
 # ============================================================
+
 
 class TemplateOut(BaseModel):
     id: int
@@ -104,6 +107,7 @@ class HistoricalSearchResponse(BaseModel):
 # 模板管理
 # ============================================================
 
+
 @router.post("/templates", response_model=TemplateOut)
 async def upload_template(
     firm_id: str = Form(...),
@@ -116,6 +120,7 @@ async def upload_template(
     created_by: Optional[str] = Form(None),
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """上传一份 .xlsx 模板，自动解析后入库。"""
     _safe_id(firm_id, "firm_id")
@@ -143,6 +148,7 @@ async def upload_template(
 async def list_templates(
     firm_id: str,
     session: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """列出某事务所的所有激活模板。"""
     _safe_id(firm_id, "firm_id")
@@ -156,6 +162,7 @@ async def download_template(
     firm_id: str,
     version: Optional[str] = None,
     session: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """下载模板 .xlsx 字节流。"""
     from fastapi.responses import Response
@@ -182,14 +189,17 @@ async def download_template(
 # 填充
 # ============================================================
 
+
 @router.post("/fill", response_model=FillReport)
-async def fill_template(req: FillRequest, session: AsyncSession = Depends(get_db)):
+async def fill_template(
+    req: FillRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """触发一次完整填充流程。"""
     _safe_id(req.firm_id, "firm_id")
     _safe_id(req.template_id, "template_id")
-    schema = await FirmTemplateService(session).parse_to_schema(
-        req.firm_id, req.template_id
-    )
+    schema = await FirmTemplateService(session).parse_to_schema(req.firm_id, req.template_id)
     if schema is None:
         raise HTTPException(status_code=404, detail="模板未找到")
 
@@ -201,34 +211,46 @@ async def fill_template(req: FillRequest, session: AsyncSession = Depends(get_db
     return await engine.fill(schema, ctx)
 
 
-async def _build_context_for_project(
-    session: AsyncSession, project_id: int
-) -> Optional[Any]:
+async def _build_context_for_project(session: AsyncSession, project_id: int) -> Optional[Any]:
     """从项目 ID 构造 WorkpaperDataContext。
 
     返回 None 表示项目不存在。
     """
     from sqlalchemy import select
     from app.models.db_models import (
-        AccountBalance, ConfirmationCase, Project,
+        AccountBalance,
+        ConfirmationCase,
+        Project,
     )
     from app.services.comprehensive.field_mapper import WorkpaperDataContext
     from app.utils.db_helpers import account_balances_to_df
 
-    proj = (await session.execute(
-        select(Project).where(Project.id == project_id)
-    )).scalars().first()
+    proj = (
+        (await session.execute(select(Project).where(Project.id == project_id))).scalars().first()
+    )
     if proj is None:
         return None
 
-    balances = (await session.execute(
-        select(AccountBalance).where(AccountBalance.project_id == project_id)
-    )).scalars().all()
+    balances = (
+        (
+            await session.execute(
+                select(AccountBalance).where(AccountBalance.project_id == project_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
     ab_df = account_balances_to_df(list(balances)) if balances else None
 
-    cases = (await session.execute(
-        select(ConfirmationCase).where(ConfirmationCase.project_id == project_id)
-    )).scalars().all()
+    cases = (
+        (
+            await session.execute(
+                select(ConfirmationCase).where(ConfirmationCase.project_id == project_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     return WorkpaperDataContext(
         project=proj,
@@ -238,7 +260,10 @@ async def _build_context_for_project(
 
 
 @router.post("/qa-apply", response_model=FillReport)
-async def apply_qa(req: QARequest):
+async def apply_qa(
+    req: QARequest,
+    current_user: User = Depends(get_current_user),
+):
     """把人工问答合并到报告中。"""
     engine = ComprehensiveFillEngine()
     return await engine.apply_qa_answers(req.report, req.answers)
@@ -247,6 +272,7 @@ async def apply_qa(req: QARequest):
 # ============================================================
 # 历史底稿库
 # ============================================================
+
 
 @router.post("/historical")
 async def ingest_historical(
@@ -257,6 +283,7 @@ async def ingest_historical(
     uploaded_by: Optional[str] = Form(None),
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """把一份历史综合底稿脱敏后入库。"""
     _safe_id(firm_id, "firm_id")
@@ -280,9 +307,9 @@ async def search_historical(
     q: str = Query(..., max_length=200, description="查询字符串"),
     top_k: int = Query(5, ge=1, le=50),
     session: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """在历史底稿库中按关键词检索（供 WebSearchEngine 注入）。"""
-    from fastapi import Query
     _safe_id(firm_id, "firm_id")
     _safe_id(template_id, "template_id")
     hits = await HistoricalLibraryService(session).search(

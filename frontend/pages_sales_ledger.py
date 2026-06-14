@@ -93,9 +93,7 @@ def show_sales_ledger() -> None:
             else:
                 ok = 0
                 for f in files:
-                    files_param = {
-                        "file": (f.name, f.read(), f.type or "application/octet-stream")
-                    }
+                    files_param = {"file": (f.name, f.read(), f.type or "application/octet-stream")}
                     params = {"note": note} if note else None
                     r = api_request(
                         "POST",
@@ -177,9 +175,11 @@ def show_sales_ledger() -> None:
     # --- Tab 3: 核对修改 -------------------------------------------------
     with tab_review:
         st.subheader("核对 / 修改销售记录")
-        records = st.session_state.get("sl_records") or api_request(
-            "GET", f"/api/sales-ledger/projects/{project_id}/sales-records"
-        ) or []
+        records = (
+            st.session_state.get("sl_records")
+            or api_request("GET", f"/api/sales-ledger/projects/{project_id}/sales-records")
+            or []
+        )
         if not records:
             st.info("没有可核对的记录。请先在『AI 合成』生成记录。")
         else:
@@ -334,8 +334,7 @@ def show_sales_ledger() -> None:
             if bench:
                 with st.expander("🏭 同行业 AI 参考"):
                     st.warning(
-                        "⚠️ 以下为 DeepSeek 给出的行业一般参考值，非权威数据，"
-                        "**不可作为审计证据**。"
+                        "⚠️ 以下为 DeepSeek 给出的行业一般参考值，非权威数据，**不可作为审计证据**。"
                     )
                     st.json(bench)
 

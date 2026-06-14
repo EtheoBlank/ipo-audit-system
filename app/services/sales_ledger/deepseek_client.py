@@ -66,9 +66,7 @@ class DeepSeekClient:
         model returns content that is not valid JSON.
         """
         if not self.is_configured:
-            raise DeepSeekError(
-                "DEEPSEEK_API_KEY 未配置。请在 .env 中填入密钥后重启服务。"
-            )
+            raise DeepSeekError("DEEPSEEK_API_KEY 未配置。请在 .env 中填入密钥后重启服务。")
 
         url = f"{self.base_url}/chat/completions"
         headers = {
@@ -96,9 +94,7 @@ class DeepSeekClient:
 
         if resp.status_code >= 400:
             # Surface a helpful diagnostic without leaking the key.
-            raise DeepSeekError(
-                f"DeepSeek 返回 {resp.status_code}: {resp.text[:500]}"
-            )
+            raise DeepSeekError(f"DeepSeek 返回 {resp.status_code}: {resp.text[:500]}")
 
         try:
             data = resp.json()
@@ -112,7 +108,7 @@ class DeepSeekClient:
 
         try:
             return json.loads(content)
-        except json.JSONDecodeError as exc:
+        except json.JSONDecodeError:
             # Some models occasionally wrap JSON in ``` fences; try to strip.
             cleaned = content.strip()
             if cleaned.startswith("```"):

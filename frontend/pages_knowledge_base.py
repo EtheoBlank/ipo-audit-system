@@ -1,9 +1,9 @@
 """Streamlit 页面 — 自助知识库.
 
-  - 上传书籍 (PDF/EPUB/DOCX/TXT/MD)
-  - 书籍列表 + 索引状态
-  - 重建索引 / 删除
-  - 案例检索 / 与底稿联动 (按科目找相似案例 + 一键生成审计说明)
+- 上传书籍 (PDF/EPUB/DOCX/TXT/MD)
+- 书籍列表 + 索引状态
+- 重建索引 / 删除
+- 案例检索 / 与底稿联动 (按科目找相似案例 + 一键生成审计说明)
 """
 
 from __future__ import annotations
@@ -119,9 +119,7 @@ def show_knowledge_base():
                         data=data,
                     )
                     if r:
-                        st.success(
-                            f"✅ 已上传：{r.get('title')} — 索引状态：{r.get('status')}"
-                        )
+                        st.success(f"✅ 已上传：{r.get('title')} — 索引状态：{r.get('status')}")
                         st.info("后台正在解析与切块，刷新「我的书架」查看进度。")
 
     # —————————————————————————————
@@ -204,11 +202,13 @@ def show_knowledge_base():
                 ):
                     st.caption(
                         " / ".join(
-                            x for x in [
+                            x
+                            for x in [
                                 r.get("chapter"),
                                 r.get("section"),
                                 f"第{r['page']}页" if r.get("page") else None,
-                            ] if x
+                            ]
+                            if x
                         )
                     )
                     st.write(r.get("content", ""))
@@ -241,8 +241,17 @@ def show_knowledge_base():
             with c2:
                 obj = st.selectbox(
                     "审计目标",
-                    ["", "余额完整性", "收入截止性", "可回收性 / 坏账", "存货跌价",
-                     "成本结转准确性", "关联交易", "在建工程转固", "公允价值计量"],
+                    [
+                        "",
+                        "余额完整性",
+                        "收入截止性",
+                        "可回收性 / 坏账",
+                        "存货跌价",
+                        "成本结转准确性",
+                        "关联交易",
+                        "在建工程转固",
+                        "公允价值计量",
+                    ],
                 )
                 kb_cat = st.selectbox("限定知识库分类", [""] + KB_CATEGORIES, key="ann_cat")
             risk = st.text_area("风险点描述 (可选)")
@@ -312,9 +321,5 @@ def show_knowledge_base():
                 with st.spinner("生成中...每个科目都会调用一次 AI，预计较慢"):
                     r = _api("POST", "/api/workbooks/audit-note/batch", json=payload)
                 if r:
-                    st.success(
-                        f"✅ 已生成 {r.get('notes_count')} 条审计说明并写回底稿"
-                    )
-                    st.markdown(
-                        f"📥 [下载更新后的底稿]({API_BASE_URL}{r.get('download_url')})"
-                    )
+                    st.success(f"✅ 已生成 {r.get('notes_count')} 条审计说明并写回底稿")
+                    st.markdown(f"📥 [下载更新后的底稿]({API_BASE_URL}{r.get('download_url')})")

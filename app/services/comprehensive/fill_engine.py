@@ -13,13 +13,11 @@
   - 前端：用于一次性问答界面 + 预览
   - Excel 写入器：把 values 写回模板
 """
+
 from __future__ import annotations
 
 import ast
-import asyncio
 import logging
-import re
-from functools import lru_cache
 from typing import Any, Optional
 
 from app.services.comprehensive.field_mapper import (
@@ -31,7 +29,6 @@ from app.services.comprehensive.rule_engine import RuleEngine
 from app.services.comprehensive.schemas import (
     FillReport,
     FillResult,
-    TemplateField,
     TemplateSchema,
 )
 from app.services.comprehensive.web_search_engine import WebSearchEngine
@@ -43,27 +40,47 @@ logger = logging.getLogger(__name__)
 
 # 允许的内置函数白名单（const tuple，便于 AST 节点直接比对）
 _SAFE_FUNCTIONS: dict[str, Any] = {
-    "abs": abs, "min": min, "max": max, "round": round, "sum": sum,
-    "len": len, "int": int, "float": float, "pow": pow,
+    "abs": abs,
+    "min": min,
+    "max": max,
+    "round": round,
+    "sum": sum,
+    "len": len,
+    "int": int,
+    "float": float,
+    "pow": pow,
 }
 
 # 拒绝的 AST 节点（语句级 / 属性反射 / 海龟式逃逸）
 _FORBIDDEN_NODES = (
-    ast.Call,           # 任意函数调用都禁止（仅白名单可放行）
-    ast.Attribute,      # 属性访问（避免 x.__class__ 等逃逸）
-    ast.Subscript,      # 下标
-    ast.Lambda,         # 匿名函数
-    ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef,  # 嵌套定义
-    ast.Import, ast.ImportFrom,
-    ast.Starred, ast.Yield, ast.YieldFrom,
-    ast.NamedExpr,      # walrus :=
+    ast.Call,  # 任意函数调用都禁止（仅白名单可放行）
+    ast.Attribute,  # 属性访问（避免 x.__class__ 等逃逸）
+    ast.Subscript,  # 下标
+    ast.Lambda,  # 匿名函数
+    ast.FunctionDef,
+    ast.ClassDef,
+    ast.AsyncFunctionDef,  # 嵌套定义
+    ast.Import,
+    ast.ImportFrom,
+    ast.Starred,
+    ast.Yield,
+    ast.YieldFrom,
+    ast.NamedExpr,  # walrus :=
     # 任何 comprehension 内的循环
-    ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
-    ast.For, ast.AsyncFor, ast.While,
-    ast.Try, ast.Raise,
-    ast.Global, ast.Nonlocal,
-    ast.IfExp,          # 表达式级 if-else 也禁（避免写花式逻辑）
-    ast.Dict, ast.Set,  # 容器字面量（与本场景无关）
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.Try,
+    ast.Raise,
+    ast.Global,
+    ast.Nonlocal,
+    ast.IfExp,  # 表达式级 if-else 也禁（避免写花式逻辑）
+    ast.Dict,
+    ast.Set,  # 容器字面量（与本场景无关）
 )
 
 
@@ -103,8 +120,10 @@ def _safe_eval(expr: str, namespace: dict[str, Any]) -> Any:
             if isinstance(func, ast.Name) and func.id in _SAFE_FUNCTIONS:
                 # 校验所有参数为合法字面量/变量
                 for arg in node.args:
-                    if not isinstance(arg, (ast.Constant, ast.Name, ast.BinOp,
-                                            ast.UnaryOp, ast.Compare, ast.BoolOp)):
+                    if not isinstance(
+                        arg,
+                        (ast.Constant, ast.Name, ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp),
+                    ):
                         raise _SafeEvalError(
                             f"白名单函数的参数仅支持字面量/变量/表达式: {type(arg).__name__}"
                         )
@@ -143,20 +162,30 @@ def _eval_node(node: ast.AST, namespace: dict[str, Any]) -> Any:
         raise _SafeEvalError(f"未定义变量: {node.id}")
     if isinstance(node, ast.UnaryOp):
         operand = _eval_node(node.operand, namespace)
-        if isinstance(node.op, ast.UAdd): return +operand
-        if isinstance(node.op, ast.USub): return -operand
-        if isinstance(node.op, ast.Not): return not operand
+        if isinstance(node.op, ast.UAdd):
+            return +operand
+        if isinstance(node.op, ast.USub):
+            return -operand
+        if isinstance(node.op, ast.Not):
+            return not operand
         raise _SafeEvalError(f"不支持的一元运算: {type(node.op).__name__}")
     if isinstance(node, ast.BinOp):
         left = _eval_node(node.left, namespace)
         right = _eval_node(node.right, namespace)
-        if isinstance(node.op, ast.Add): return left + right
-        if isinstance(node.op, ast.Sub): return left - right
-        if isinstance(node.op, ast.Mult): return left * right
-        if isinstance(node.op, ast.Div): return left / right
-        if isinstance(node.op, ast.FloorDiv): return left // right
-        if isinstance(node.op, ast.Mod): return left % right
-        if isinstance(node.op, ast.Pow): return left ** right
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, ast.Div):
+            return left / right
+        if isinstance(node.op, ast.FloorDiv):
+            return left // right
+        if isinstance(node.op, ast.Mod):
+            return left % right
+        if isinstance(node.op, ast.Pow):
+            return left**right
         raise _SafeEvalError(f"不支持的二元运算: {type(node.op).__name__}")
     if isinstance(node, ast.Compare):
         # 仅支持单层比较 (a < b)
@@ -169,8 +198,10 @@ def _eval_node(node: ast.AST, namespace: dict[str, Any]) -> Any:
         return True
     if isinstance(node, ast.BoolOp):
         values = [_eval_node(v, namespace) for v in node.values]
-        if isinstance(node.op, ast.And): return all(values)
-        if isinstance(node.op, ast.Or): return any(values)
+        if isinstance(node.op, ast.And):
+            return all(values)
+        if isinstance(node.op, ast.Or):
+            return any(values)
         raise _SafeEvalError(f"不支持的布尔运算: {type(node.op).__name__}")
     if isinstance(node, ast.Call):
         # 仅白名单函数（外层已校验）
@@ -183,16 +214,23 @@ def _eval_node(node: ast.AST, namespace: dict[str, Any]) -> Any:
 
 
 def _apply_compare(op: ast.AST, left: Any, right: Any) -> bool:
-    if isinstance(op, ast.Eq): return left == right
-    if isinstance(op, ast.NotEq): return left != right
-    if isinstance(op, ast.Lt): return left < right
-    if isinstance(op, ast.LtE): return left <= right
-    if isinstance(op, ast.Gt): return left > right
-    if isinstance(op, ast.GtE): return left >= right
+    if isinstance(op, ast.Eq):
+        return left == right
+    if isinstance(op, ast.NotEq):
+        return left != right
+    if isinstance(op, ast.Lt):
+        return left < right
+    if isinstance(op, ast.LtE):
+        return left <= right
+    if isinstance(op, ast.Gt):
+        return left > right
+    if isinstance(op, ast.GtE):
+        return left >= right
     raise _SafeEvalError(f"不支持的比较运算: {type(op).__name__}")
 
 
 # ============================== 编排器 ==============================
+
 
 class ComprehensiveFillEngine:
     """综合底稿自动填写编排器。"""
@@ -311,13 +349,15 @@ class ComprehensiveFillEngine:
                 continue
             values = await self.qa.apply_answer(q, ans)
             for fid, val in values.items():
-                report.results.append(FillResult(
-                    field_id=fid,
-                    value=val,
-                    source_used=f"human_qa:{q.question_id}",
-                    confidence=1.0,
-                    citation=f"问题 '{q.topic}' 的人工回答",
-                ))
+                report.results.append(
+                    FillResult(
+                        field_id=fid,
+                        value=val,
+                        source_used=f"human_qa:{q.question_id}",
+                        confidence=1.0,
+                        citation=f"问题 '{q.topic}' 的人工回答",
+                    )
+                )
         report.filled = sum(1 for r in report.results if r.value is not None)
         report.pending = report.total_fields - report.filled
         return report

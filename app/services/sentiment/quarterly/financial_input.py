@@ -4,6 +4,7 @@
     - 手工录入 (JSON 字段)
     - 上传 PDF/Excel (后续扩展, 此处只接 schema)
 """
+
 from __future__ import annotations
 
 import json
@@ -21,22 +22,23 @@ logger = logging.getLogger(__name__)
 
 # 季报关键数据 schema — 审计师必须填的核心字段
 REQUIRED_FIELDS: list[str] = [
-    "revenue",            # 营业收入 (元)
-    "net_profit",         # 净利润 (元)
+    "revenue",  # 营业收入 (元)
+    "net_profit",  # 净利润 (元)
     "non_recurring_pnl",  # 扣非净利润 (元)
-    "gross_margin",       # 毛利率 (%, 0-100)
-    "yoy_revenue",        # 营收同比 (%, 正负)
-    "yoy_net_profit",     # 净利同比 (%, 正负)
-    "total_assets",       # 期末总资产 (元)
-    "operating_cash_flow",# 经营活动现金流净额 (元)
+    "gross_margin",  # 毛利率 (%, 0-100)
+    "yoy_revenue",  # 营收同比 (%, 正负)
+    "yoy_net_profit",  # 净利同比 (%, 正负)
+    "total_assets",  # 期末总资产 (元)
+    "operating_cash_flow",  # 经营活动现金流净额 (元)
 ]
 
 
 @dataclass
 class FinancialInput:
     """季报关键数据 (内存表示)."""
+
     data: dict = field(default_factory=dict)
-    source: str = "manual"             # manual / uploaded_pdf / uploaded_excel
+    source: str = "manual"  # manual / uploaded_pdf / uploaded_excel
     verified_by: Optional[str] = None
     verified_at: Optional[str] = None
     note: Optional[str] = None

@@ -10,9 +10,9 @@
 - 防重入: max_instances=1, coalesce=True, misfire_grace_time=3600
 - 任务内新建 AsyncSessionLocal(), 不复用 request-scoped session
 """
+
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Optional
 
@@ -21,7 +21,6 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.models.db_models import SentimentSource
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +50,9 @@ async def start_scheduler() -> None:
         trigger = _parse_cron(settings.SENTIMENT_SCAN_CRON)
     except Exception as exc:
         logger.error("SENTIMENT_SCAN_CRON 解析失败 (%s), 使用默认 '30 8 * * 1-6'", exc)
-        trigger = CronTrigger.from_crontab("30 8 * * 1-6", timezone=settings.SENTIMENT_SCAN_TIMEZONE)
+        trigger = CronTrigger.from_crontab(
+            "30 8 * * 1-6", timezone=settings.SENTIMENT_SCAN_TIMEZONE
+        )
 
     _scheduler.add_job(
         daily_scan_job,
@@ -59,15 +60,16 @@ async def start_scheduler() -> None:
         id=JOB_ID_DAILY_SCAN,
         name="舆情每日扫描",
         replace_existing=True,
-        max_instances=1,        # 防重入
-        coalesce=True,          # 多次错过合并
+        max_instances=1,  # 防重入
+        coalesce=True,  # 多次错过合并
         misfire_grace_time=3600,
     )
 
     _scheduler.start()
     logger.info(
         "Scheduler 启动: cron='%s' tz='%s'",
-        settings.SENTIMENT_SCAN_CRON, settings.SENTIMENT_SCAN_TIMEZONE,
+        settings.SENTIMENT_SCAN_CRON,
+        settings.SENTIMENT_SCAN_TIMEZONE,
     )
 
     # 首次启动时注册默认信源 (幂等)
@@ -109,6 +111,7 @@ async def daily_scan_job() -> None:
         try:
             async with AsyncSessionLocal() as db:
                 from app.services.sentiment.notifier import create_notification
+
                 await create_notification(
                     db,
                     notification_type="scan_failed",

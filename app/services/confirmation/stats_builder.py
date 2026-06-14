@@ -26,8 +26,7 @@ import logging
 import random
 import re
 from collections import defaultdict
-from datetime import datetime
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,13 +59,13 @@ logger = logging.getLogger(__name__)
 
 
 # 科目关键字识别
-RECEIVABLE_ACCOUNTS = {"1122", "1123", "1221"}      # 应收账款/预付账款/其他应收款
-PAYABLE_ACCOUNTS = {"2202", "2203", "2241"}          # 应付账款/预收账款(或合同负债)/其他应付款
+RECEIVABLE_ACCOUNTS = {"1122", "1123", "1221"}  # 应收账款/预付账款/其他应收款
+PAYABLE_ACCOUNTS = {"2202", "2203", "2241"}  # 应付账款/预收账款(或合同负债)/其他应付款
 # 注意: 2203 预收账款是「客户往来」,由 _select_payables 单独按 party_type=customer 处理,
 #       不应与 1122/1221 应收类放在一起 — 修复重复发函 bug.
-BANK_ACCOUNTS = {"1002", "1012", "1101"}            # 银行存款/其他货币资金/理财
-LOAN_ACCOUNTS = {"2001", "2501", "2101"}            # 短期借款/长期借款/应付债券
-INVESTMENT_ACCOUNTS = {"1511", "1512", "1531"}      # 长投/投资性房地产/长期应收款（投资类）
+BANK_ACCOUNTS = {"1002", "1012", "1101"}  # 银行存款/其他货币资金/理财
+LOAN_ACCOUNTS = {"2001", "2501", "2101"}  # 短期借款/长期借款/应付债券
+INVESTMENT_ACCOUNTS = {"1511", "1512", "1531"}  # 长投/投资性房地产/长期应收款（投资类）
 
 
 class ConfirmationStatsBuilder:
@@ -86,8 +85,7 @@ class ConfirmationStatsBuilder:
         case = await self._get_case(req.case_id)
         if case.is_locked:
             raise ValueError(
-                f"案卷已锁定 (locked_at={case.locked_at})，不可重新生成。"
-                "请新建一个案卷。"
+                f"案卷已锁定 (locked_at={case.locked_at})，不可重新生成。请新建一个案卷。"
             )
 
         # 1) 拉取账套数据
@@ -106,10 +104,20 @@ class ConfirmationStatsBuilder:
         items: list[SubjectSelection] = []
         items.extend(self._select_banks(bank_groups, req))
         items.extend(self._select_receivables(receivable_groups, req, PARTY_TYPE_CUSTOMER))
-        items.extend(self._select_receivables(receivable_groups, req, PARTY_TYPE_OTHER_RECEIVABLE, account_codes={"1221"}))
+        items.extend(
+            self._select_receivables(
+                receivable_groups, req, PARTY_TYPE_OTHER_RECEIVABLE, account_codes={"1221"}
+            )
+        )
         items.extend(self._select_payables(payable_groups, req, PARTY_TYPE_SUPPLIER))
-        items.extend(self._select_payables(payable_groups, req, PARTY_TYPE_OTHER_PAYABLE, account_codes={"2241"}))
-        items.extend(self._select_payables(payable_groups, req, PARTY_TYPE_CUSTOMER, account_codes={"2203"}))  # 合同负债作客户函证
+        items.extend(
+            self._select_payables(
+                payable_groups, req, PARTY_TYPE_OTHER_PAYABLE, account_codes={"2241"}
+            )
+        )
+        items.extend(
+            self._select_payables(payable_groups, req, PARTY_TYPE_CUSTOMER, account_codes={"2203"})
+        )  # 合同负债作客户函证
         items.extend(self._select_loans(loan_groups, req))
         items.extend(self._select_investments(investment_groups, req))
 
@@ -160,32 +168,39 @@ class ConfirmationStatsBuilder:
             "case_id": case.id,
             "selected_count": len(items),
             "total_amount": round(sum(s.book_balance for s in items), 2),
-            "by_party_type": {k: {"count": v["count"], "amount": round(v["amount"], 2)} for k, v in by_type.items()},
+            "by_party_type": {
+                k: {"count": v["count"], "amount": round(v["amount"], 2)}
+                for k, v in by_type.items()
+            },
             "items": items,
         }
 
     # ---- 数据拉取 ------------------------------------------------------
 
     async def _get_case(self, case_id: int) -> ConfirmationCase:
-        res = await self.db.execute(
-            select(ConfirmationCase).where(ConfirmationCase.id == case_id)
-        )
+        res = await self.db.execute(select(ConfirmationCase).where(ConfirmationCase.id == case_id))
         case = res.scalar_one_or_none()
         if not case:
             raise ValueError(f"案卷不存在: {case_id}")
         return case
 
-    async def _fetch_balances(self, project_id: int, period_end: Optional[Any]) -> list[AccountBalance]:
+    async def _fetch_balances(
+        self, project_id: int, period_end: Optional[Any]
+    ) -> list[AccountBalance]:
         q = select(AccountBalance).where(AccountBalance.project_id == project_id)
         res = await self.db.execute(q)
         return list(res.scalars().all())
 
-    async def _fetch_journals(self, project_id: int, period_end: Optional[Any]) -> list[ChronologicalAccount]:
+    async def _fetch_journals(
+        self, project_id: int, period_end: Optional[Any]
+    ) -> list[ChronologicalAccount]:
         q = select(ChronologicalAccount).where(ChronologicalAccount.project_id == project_id)
         res = await self.db.execute(q)
         return list(res.scalars().all())
 
-    async def _fetch_bank_statements(self, project_id: int, period_end: Optional[Any]) -> list[BankStatement]:
+    async def _fetch_bank_statements(
+        self, project_id: int, period_end: Optional[Any]
+    ) -> list[BankStatement]:
         q = select(BankStatement).where(BankStatement.project_id == project_id)
         res = await self.db.execute(q)
         return list(res.scalars().all())
@@ -201,11 +216,13 @@ class ConfirmationStatsBuilder:
         from sqlalchemy import delete
 
         # 检查: 若任何 item 已有 response, 则不允许重生成 (避免审计痕迹丢失)
-        has_response = (await self.db.execute(
-            select(func.count(ConfirmationResponse.id))
-            .join(ConfirmationLetter, ConfirmationResponse.letter_id == ConfirmationLetter.id)
-            .where(ConfirmationLetter.case_id == case_id)
-        )).scalar() or 0
+        has_response = (
+            await self.db.execute(
+                select(func.count(ConfirmationResponse.id))
+                .join(ConfirmationLetter, ConfirmationResponse.letter_id == ConfirmationLetter.id)
+                .where(ConfirmationLetter.case_id == case_id)
+            )
+        ).scalar() or 0
         if has_response:
             raise ValueError(
                 f"案卷下已有 {has_response} 条回函, 不能重新生成统计表。"
@@ -214,14 +231,28 @@ class ConfirmationStatsBuilder:
 
         # 顺序: responses -> photos -> letters -> items
         # 1) 找到所有 letter ids
-        letter_ids = (await self.db.execute(
-            select(ConfirmationLetter.id).where(ConfirmationLetter.case_id == case_id)
-        )).scalars().all()
+        letter_ids = (
+            (
+                await self.db.execute(
+                    select(ConfirmationLetter.id).where(ConfirmationLetter.case_id == case_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
         if letter_ids:
             # 2) 删 responses (会级联删 photos via cascade="all, delete-orphan")
-            response_ids = (await self.db.execute(
-                select(ConfirmationResponse.id).where(ConfirmationResponse.letter_id.in_(letter_ids))
-            )).scalars().all()
+            response_ids = (
+                (
+                    await self.db.execute(
+                        select(ConfirmationResponse.id).where(
+                            ConfirmationResponse.letter_id.in_(letter_ids)
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
             if response_ids:
                 await self.db.execute(
                     delete(ConfirmationResponsePhoto).where(
@@ -236,9 +267,7 @@ class ConfirmationStatsBuilder:
                 delete(ConfirmationLetter).where(ConfirmationLetter.id.in_(letter_ids))
             )
         # 4) 删 items
-        await self.db.execute(
-            delete(ConfirmationItem).where(ConfirmationItem.case_id == case_id)
-        )
+        await self.db.execute(delete(ConfirmationItem).where(ConfirmationItem.case_id == case_id))
 
     # ---- 聚合 ---------------------------------------------------------
 
@@ -311,20 +340,22 @@ class ConfirmationStatsBuilder:
         bank_subjects = self._get_default_subjects("1002")
         out: list[SubjectSelection] = []
         for key, d in by_account.items():
-            out.append(SubjectSelection(
-                account_code=", ".join(sorted(d["account_codes"])) or "1002",
-                account_name=", ".join(sorted(d["account_names"])) or "银行存款",
-                party_type=PARTY_TYPE_BANK,
-                party_name=d["party_name"] or key,
-                party_id=d["party_id"],
-                book_balance=round(d["book_balance"], 2),
-                book_balance_date=None,
-                subject_matters=bank_subjects,
-                importance="A",
-                selection_reason="银行询证函 - 必发",
-                contact_info=None,
-                account_codes=sorted(d["account_codes"]),
-            ))
+            out.append(
+                SubjectSelection(
+                    account_code=", ".join(sorted(d["account_codes"])) or "1002",
+                    account_name=", ".join(sorted(d["account_names"])) or "银行存款",
+                    party_type=PARTY_TYPE_BANK,
+                    party_name=d["party_name"] or key,
+                    party_id=d["party_id"],
+                    book_balance=round(d["book_balance"], 2),
+                    book_balance_date=None,
+                    subject_matters=bank_subjects,
+                    importance="A",
+                    selection_reason="银行询证函 - 必发",
+                    contact_info=None,
+                    account_codes=sorted(d["account_codes"]),
+                )
+            )
         return out
 
     def _aggregate_receivables(
@@ -363,8 +394,8 @@ class ConfirmationStatsBuilder:
         balance_by_code: dict[str, float] = {}
         for b in balances:
             if b.account_code in account_codes:
-                balance_by_code[b.account_code] = (
-                    balance_by_code.get(b.account_code, 0.0) + (b.ending_balance or 0)
+                balance_by_code[b.account_code] = balance_by_code.get(b.account_code, 0.0) + (
+                    b.ending_balance or 0
                 )
 
         # 2) 从序时账按对方聚合
@@ -492,26 +523,30 @@ class ConfirmationStatsBuilder:
             bal = d["ending_balance"]
             if abs(bal) < 1e-6 and not req.include_zero_balance:
                 continue
-            importance = "A" if abs(bal) >= threshold * 5 else ("B" if abs(bal) >= threshold else "C")
+            importance = (
+                "A" if abs(bal) >= threshold * 5 else ("B" if abs(bal) >= threshold else "C")
+            )
             reason = (
                 f"金额 {bal:,.2f} ≥ 必发阈值 {threshold:,.0f}"
                 if abs(bal) >= threshold
                 else f"金额 {bal:,.2f} 抽样补充"
             )
-            out.append(SubjectSelection(
-                account_code=", ".join(sorted(d["account_codes"])) or "1122",
-                account_name=", ".join(sorted(d["account_names"])) or "应收账款",
-                party_type=party_type,
-                party_name=d["party_name"],
-                party_id=d["party_id"],
-                book_balance=round(bal, 2),
-                book_balance_date=None,
-                subject_matters=default_subjects,
-                importance=importance,
-                selection_reason=reason,
-                contact_info=None,
-                account_codes=sorted(d["account_codes"]),
-            ))
+            out.append(
+                SubjectSelection(
+                    account_code=", ".join(sorted(d["account_codes"])) or "1122",
+                    account_name=", ".join(sorted(d["account_names"])) or "应收账款",
+                    party_type=party_type,
+                    party_name=d["party_name"],
+                    party_id=d["party_id"],
+                    book_balance=round(bal, 2),
+                    book_balance_date=None,
+                    subject_matters=default_subjects,
+                    importance=importance,
+                    selection_reason=reason,
+                    contact_info=None,
+                    account_codes=sorted(d["account_codes"]),
+                )
+            )
 
         # 阈值以下随机补充
         below = [g for g in groups.values() if abs(g["ending_balance"]) < threshold]
@@ -525,20 +560,22 @@ class ConfirmationStatsBuilder:
                 if account_codes and not (d["account_codes"] & account_codes):
                     continue
                 bal = d["ending_balance"]
-                out.append(SubjectSelection(
-                    account_code=", ".join(sorted(d["account_codes"])) or "1122",
-                    account_name=", ".join(sorted(d["account_names"])) or "应收账款",
-                    party_type=party_type,
-                    party_name=d["party_name"],
-                    party_id=d["party_id"],
-                    book_balance=round(bal, 2),
-                    book_balance_date=None,
-                    subject_matters=default_subjects,
-                    importance="C",
-                    selection_reason=f"金额 {bal:,.2f} 阈值以下随机抽样",
-                    contact_info=None,
-                    account_codes=sorted(d["account_codes"]),
-                ))
+                out.append(
+                    SubjectSelection(
+                        account_code=", ".join(sorted(d["account_codes"])) or "1122",
+                        account_name=", ".join(sorted(d["account_names"])) or "应收账款",
+                        party_type=party_type,
+                        party_name=d["party_name"],
+                        party_id=d["party_id"],
+                        book_balance=round(bal, 2),
+                        book_balance_date=None,
+                        subject_matters=default_subjects,
+                        importance="C",
+                        selection_reason=f"金额 {bal:,.2f} 阈值以下随机抽样",
+                        contact_info=None,
+                        account_codes=sorted(d["account_codes"]),
+                    )
+                )
         return out
 
     def _select_payables(
@@ -569,26 +606,30 @@ class ConfirmationStatsBuilder:
             bal = d["ending_balance"]
             if abs(bal) < 1e-6 and not req.include_zero_balance:
                 continue
-            importance = "A" if abs(bal) >= threshold * 5 else ("B" if abs(bal) >= threshold else "C")
+            importance = (
+                "A" if abs(bal) >= threshold * 5 else ("B" if abs(bal) >= threshold else "C")
+            )
             reason = (
                 f"金额 {bal:,.2f} ≥ 必发阈值 {threshold:,.0f}"
                 if abs(bal) >= threshold
                 else f"金额 {bal:,.2f} 抽样补充"
             )
-            out.append(SubjectSelection(
-                account_code=", ".join(sorted(d["account_codes"])) or "2202",
-                account_name=", ".join(sorted(d["account_names"])) or "应付账款",
-                party_type=party_type,
-                party_name=d["party_name"],
-                party_id=d["party_id"],
-                book_balance=round(bal, 2),
-                book_balance_date=None,
-                subject_matters=default_subjects,
-                importance=importance,
-                selection_reason=reason,
-                contact_info=None,
-                account_codes=sorted(d["account_codes"]),
-            ))
+            out.append(
+                SubjectSelection(
+                    account_code=", ".join(sorted(d["account_codes"])) or "2202",
+                    account_name=", ".join(sorted(d["account_names"])) or "应付账款",
+                    party_type=party_type,
+                    party_name=d["party_name"],
+                    party_id=d["party_id"],
+                    book_balance=round(bal, 2),
+                    book_balance_date=None,
+                    subject_matters=default_subjects,
+                    importance=importance,
+                    selection_reason=reason,
+                    contact_info=None,
+                    account_codes=sorted(d["account_codes"]),
+                )
+            )
         return out
 
     def _select_loans(
@@ -602,20 +643,22 @@ class ConfirmationStatsBuilder:
             bal = d["ending_balance"]
             if abs(bal) < 1e-6 and not req.include_zero_balance:
                 continue
-            out.append(SubjectSelection(
-                account_code=", ".join(sorted(d["account_codes"])) or "2001",
-                account_name=", ".join(sorted(d["account_names"])) or "短期借款",
-                party_type=PARTY_TYPE_LOAN,
-                party_name=d["party_name"],
-                party_id=d["party_id"],
-                book_balance=round(bal, 2),
-                book_balance_date=None,
-                subject_matters=loan_subjects,
-                importance="A",
-                selection_reason=f"贷款余额 {bal:,.2f}，必发",
-                contact_info=None,
-                account_codes=sorted(d["account_codes"]),
-            ))
+            out.append(
+                SubjectSelection(
+                    account_code=", ".join(sorted(d["account_codes"])) or "2001",
+                    account_name=", ".join(sorted(d["account_names"])) or "短期借款",
+                    party_type=PARTY_TYPE_LOAN,
+                    party_name=d["party_name"],
+                    party_id=d["party_id"],
+                    book_balance=round(bal, 2),
+                    book_balance_date=None,
+                    subject_matters=loan_subjects,
+                    importance="A",
+                    selection_reason=f"贷款余额 {bal:,.2f}，必发",
+                    contact_info=None,
+                    account_codes=sorted(d["account_codes"]),
+                )
+            )
         return out
 
     def _select_investments(
@@ -629,20 +672,22 @@ class ConfirmationStatsBuilder:
             bal = d["ending_balance"]
             if abs(bal) < 1e-6 and not req.include_zero_balance:
                 continue
-            out.append(SubjectSelection(
-                account_code=", ".join(sorted(d["account_codes"])) or "1511",
-                account_name=", ".join(sorted(d["account_names"])) or "长期股权投资",
-                party_type=PARTY_TYPE_INVESTMENT,
-                party_name=d["party_name"],
-                party_id=d["party_id"],
-                book_balance=round(bal, 2),
-                book_balance_date=None,
-                subject_matters=inv_subjects,
-                importance="A",
-                selection_reason=f"投资余额 {bal:,.2f}，必发",
-                contact_info=None,
-                account_codes=sorted(d["account_codes"]),
-            ))
+            out.append(
+                SubjectSelection(
+                    account_code=", ".join(sorted(d["account_codes"])) or "1511",
+                    account_name=", ".join(sorted(d["account_names"])) or "长期股权投资",
+                    party_type=PARTY_TYPE_INVESTMENT,
+                    party_name=d["party_name"],
+                    party_id=d["party_id"],
+                    book_balance=round(bal, 2),
+                    book_balance_date=None,
+                    subject_matters=inv_subjects,
+                    importance="A",
+                    selection_reason=f"投资余额 {bal:,.2f}，必发",
+                    contact_info=None,
+                    account_codes=sorted(d["account_codes"]),
+                )
+            )
         return out
 
     @staticmethod

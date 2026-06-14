@@ -1,4 +1,5 @@
 """站内通知 — 驱动 Dashboard 红点."""
+
 from __future__ import annotations
 
 import logging
@@ -36,7 +37,9 @@ async def create_notification(
     await db.flush()  # 不 commit — 留给调用方事务
     logger.debug(
         "notifier: type=%s title=%s project_id=%s",
-        notification_type, title, project_id,
+        notification_type,
+        title,
+        project_id,
     )
     return n
 

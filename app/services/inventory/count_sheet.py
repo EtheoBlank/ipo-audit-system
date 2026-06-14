@@ -28,14 +28,15 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CountSheetStrategy:
     """与用户对话调整的抽样参数。"""
-    coverage_threshold: float = 0.80         # A 类金额累计覆盖率
-    b_sample_ratio: float = 0.20             # B 类抽样比例
-    c_sample_ratio: float = 0.05             # C 类覆盖性抽样比例
+
+    coverage_threshold: float = 0.80  # A 类金额累计覆盖率
+    b_sample_ratio: float = 0.20  # B 类抽样比例
+    c_sample_ratio: float = 0.05  # C 类覆盖性抽样比例
     high_value_warehouses: list[str] = field(default_factory=list)  # 必盘仓库
     must_include_categories: list[str] = field(default_factory=list)  # 必盘类别
-    must_include_codes: list[str] = field(default_factory=list)      # 必盘物料编码（如审计师指定）
-    min_unit_amount: float = 0.0             # 单行金额 < 此值的直接跳过 (省纸)
-    random_seed: int = 42                    # 抽样可复现
+    must_include_codes: list[str] = field(default_factory=list)  # 必盘物料编码（如审计师指定）
+    min_unit_amount: float = 0.0  # 单行金额 < 此值的直接跳过 (省纸)
+    random_seed: int = 42  # 抽样可复现
     # 重要性水平（如税前利润 5% 估算的金额）— 单条 ending_amount ≥ materiality 的物料强制入 A
     materiality: float = 0.0
     # B 类抽样方式：random=简单随机；mus=按金额加权（金额大的更易被抽中），更符合审计实务
@@ -48,7 +49,7 @@ class CountSheetStrategy:
         """对话式描述，回显给用户确认。"""
         parts = [
             f"A 类（金额累计覆盖 {self.coverage_threshold:.0%}）→ 全盘",
-            f"B 类（{ '金额加权抽' if self.b_sample_method == 'mus' else '随机抽' } {self.b_sample_ratio:.0%}）",
+            f"B 类（{'金额加权抽' if self.b_sample_method == 'mus' else '随机抽'} {self.b_sample_ratio:.0%}）",
             f"C 类（剩余）→ 覆盖性抽 {self.c_sample_ratio:.0%}",
         ]
         if self.materiality > 0:
@@ -66,13 +67,13 @@ class CountSheetStrategy:
 
 @dataclass
 class CountSheetResult:
-    rows: list[dict[str, Any]]              # 可直接写库的行
-    total_amount: float                     # 总期末金额
-    covered_amount: float                   # 选中的金额
-    coverage_ratio: float                   # = covered / total
-    total_items: int                        # 总物料数
-    selected_items: int                     # 选中的物料数
-    tier_summary: dict[str, dict[str, Any]] # {"A": {...}, "B": {...}, "C": {...}}
+    rows: list[dict[str, Any]]  # 可直接写库的行
+    total_amount: float  # 总期末金额
+    covered_amount: float  # 选中的金额
+    coverage_ratio: float  # = covered / total
+    total_items: int  # 总物料数
+    selected_items: int  # 选中的物料数
+    tier_summary: dict[str, dict[str, Any]]  # {"A": {...}, "B": {...}, "C": {...}}
     strategy: CountSheetStrategy
 
     def to_dict(self) -> dict[str, Any]:
@@ -135,22 +136,29 @@ class CountSheetBuilder:
                 continue
             if strategy.min_unit_amount > 0 and amount < strategy.min_unit_amount:
                 continue
-            raw.append({
-                "material_code": str(get("material_code") or ""),
-                "material_name": str(get("material_name") or ""),
-                "category": str(get("category") or ""),
-                "warehouse": str(get("warehouse") or ""),
-                "batch_no": str(get("batch_no") or ""),
-                "unit": str(get("unit") or ""),
-                "ending_qty": qty,
-                "unit_cost": unit_cost,
-                "ending_amount": amount,
-            })
+            raw.append(
+                {
+                    "material_code": str(get("material_code") or ""),
+                    "material_name": str(get("material_name") or ""),
+                    "category": str(get("category") or ""),
+                    "warehouse": str(get("warehouse") or ""),
+                    "batch_no": str(get("batch_no") or ""),
+                    "unit": str(get("unit") or ""),
+                    "ending_qty": qty,
+                    "unit_cost": unit_cost,
+                    "ending_amount": amount,
+                }
+            )
 
         if not raw:
             return CountSheetResult(
-                rows=[], total_amount=0.0, covered_amount=0.0, coverage_ratio=0.0,
-                total_items=0, selected_items=0, tier_summary={},
+                rows=[],
+                total_amount=0.0,
+                covered_amount=0.0,
+                coverage_ratio=0.0,
+                total_items=0,
+                selected_items=0,
+                tier_summary={},
                 strategy=strategy,
             )
 
@@ -189,7 +197,8 @@ class CountSheetBuilder:
         elif strategy.b_sample_method == "mus" and rest["ending_amount"].sum() > 0:
             # weights = ending_amount / sum，金额越大越易抽中
             b_df = rest.sample(
-                n=b_n, replace=False,
+                n=b_n,
+                replace=False,
                 weights=rest["ending_amount"].clip(lower=0.0001),
                 random_state=strategy.random_seed,
             )
@@ -199,13 +208,23 @@ class CountSheetBuilder:
 
         # ---- C 类：在剩余里覆盖性抽 -------------------------------------
         c_n = math.ceil(len(rest_after_b) * strategy.c_sample_ratio)
-        c_df = rest_after_b.sample(n=min(c_n, len(rest_after_b)), random_state=strategy.random_seed + 1) if c_n else rest_after_b.head(0)
-        rest_after_c = rest_after_b.drop(c_df.index)
+        c_df = (
+            rest_after_b.sample(
+                n=min(c_n, len(rest_after_b)), random_state=strategy.random_seed + 1
+            )
+            if c_n
+            else rest_after_b.head(0)
+        )
+        rest_after_b.drop(c_df.index)
 
         # ---- R 类：反向抽盘（物→账）— 从所有物料里再随机抽，验证账外存货 ----
         # 注意：R 类与 A/B/C 不互斥，可重复采（审计师同一物料既正向核对账面，也反向从实物查账）
         r_n = math.ceil(len(df) * strategy.reverse_sample_ratio)
-        r_df = df.sample(n=min(r_n, len(df)), random_state=strategy.random_seed + 2) if r_n else df.head(0)
+        r_df = (
+            df.sample(n=min(r_n, len(df)), random_state=strategy.random_seed + 2)
+            if r_n
+            else df.head(0)
+        )
 
         # 组装最终行
         rows: list[dict[str, Any]] = []
@@ -230,7 +249,9 @@ class CountSheetBuilder:
         for rank, (_, r) in enumerate(r_df.iterrows(), start=1):
             rows.append(cls._row_from_movement(r.to_dict(), "R", "反向抽盘(物→账)", rank))
 
-        covered = float(a_df["ending_amount"].sum() + b_df["ending_amount"].sum() + c_df["ending_amount"].sum())
+        covered = float(
+            a_df["ending_amount"].sum() + b_df["ending_amount"].sum() + c_df["ending_amount"].sum()
+        )
         coverage_ratio = covered / total_amount if total_amount else 0.0
 
         tier_summary = {
@@ -238,7 +259,8 @@ class CountSheetBuilder:
                 "items": int(sub.shape[0]),
                 "amount": round(float(sub["ending_amount"].sum()), 2),
                 "amount_pct": round(float(sub["ending_amount"].sum()) / total_amount, 4)
-                if total_amount else 0.0,
+                if total_amount
+                else 0.0,
             }
             for tier, sub in (("A", a_df), ("B", b_df), ("C", c_df), ("R", r_df))
         }
@@ -266,13 +288,15 @@ class CountSheetBuilder:
         mvs = list(movements)
         for s in strategies:
             r = cls.build(mvs, s)
-            out.append({
-                "strategy": s.describe(),
-                "coverage_ratio": round(r.coverage_ratio, 4),
-                "selected_items": r.selected_items,
-                "total_items": r.total_items,
-                "covered_amount": round(r.covered_amount, 2),
-                "total_amount": round(r.total_amount, 2),
-                "tier_summary": r.tier_summary,
-            })
+            out.append(
+                {
+                    "strategy": s.describe(),
+                    "coverage_ratio": round(r.coverage_ratio, 4),
+                    "selected_items": r.selected_items,
+                    "total_items": r.total_items,
+                    "covered_amount": round(r.covered_amount, 2),
+                    "total_amount": round(r.total_amount, 2),
+                    "tier_summary": r.tier_summary,
+                }
+            )
         return out

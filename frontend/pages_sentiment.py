@@ -12,6 +12,7 @@
     - 季度报告页: 双数据源录入 + 触发
     - 顶部红点: 调 /notifications/unread
 """
+
 from __future__ import annotations
 
 import json
@@ -55,7 +56,9 @@ def _pick_project() -> int:
     if not projects:
         st.warning("⚠️ 请先在『项目管理』中创建一个项目。")
         st.stop()
-    name_to_id = {f"{p['name']} (#{p['id']} · {p.get('company_name', '')})": p["id"] for p in projects}
+    name_to_id = {
+        f"{p['name']} (#{p['id']} · {p.get('company_name', '')})": p["id"] for p in projects
+    }
     label = st.selectbox("选择项目", list(name_to_id.keys()))
     return name_to_id[label]
 
@@ -98,8 +101,9 @@ def _tab_overview(project_id: int) -> None:
     with col1:
         if st.button("🔄 立即扫描"):
             with st.spinner("扫描中..."):
-                r = api_request("POST", "/api/sentiment/scheduler/scan/now",
-                                json={"project_id": project_id})
+                r = api_request(
+                    "POST", "/api/sentiment/scheduler/scan/now", json={"project_id": project_id}
+                )
             if r:
                 st.success(f"扫描完成: 新增 {r.get('events_added', 0)} 条事件")
                 st.rerun()
@@ -109,7 +113,9 @@ def _tab_overview(project_id: int) -> None:
     if sched:
         with col2:
             if sched.get("running"):
-                st.success(f"🟢 调度器运行中 · 下次扫描: {sched['jobs'][0]['next_run_time'] if sched.get('jobs') else '—'}")
+                st.success(
+                    f"🟢 调度器运行中 · 下次扫描: {sched['jobs'][0]['next_run_time'] if sched.get('jobs') else '—'}"
+                )
             else:
                 st.warning("🔴 调度器未运行")
                 if st.button("启动调度器"):
@@ -120,7 +126,9 @@ def _tab_overview(project_id: int) -> None:
 
     # 当日事件数 / 最近简报
     today = pd.Timestamp.now().strftime("%Y-%m-%d")
-    events_today = api_request("GET", f"/api/sentiment/events?project_id={project_id}&date_from={today}&date_to={today}")
+    events_today = api_request(
+        "GET", f"/api/sentiment/events?project_id={project_id}&date_from={today}&date_to={today}"
+    )
     briefings = api_request("GET", f"/api/sentiment/briefings?project_id={project_id}")
     reports = api_request("GET", f"/api/sentiment/reports?project_id={project_id}")
 
@@ -137,7 +145,9 @@ def _tab_overview(project_id: int) -> None:
             sev_counts[e["severity"]] = sev_counts.get(e["severity"], 0) + 1
         st.markdown("#### 今日事件严重度分布")
         cols = st.columns(4)
-        for i, (sev, label) in enumerate([("critical", "重大"), ("warn", "警示"), ("notice", "关注"), ("info", "一般")]):
+        for i, (sev, label) in enumerate(
+            [("critical", "重大"), ("warn", "警示"), ("notice", "关注"), ("info", "一般")]
+        ):
             cols[i].metric(label, sev_counts.get(sev, 0))
 
 
@@ -167,12 +177,19 @@ def _tab_events(project_id: int) -> None:
         return
 
     # DataFrame
-    df = pd.DataFrame(events)[["id", "publish_date", "severity", "title", "publisher", "review_status", "url"]]
-    df["严重度"] = df["severity"].map({"critical": "🔴 重大", "warn": "🟠 警示", "notice": "🟡 关注", "info": "⚪ 一般"})
+    df = pd.DataFrame(events)[
+        ["id", "publish_date", "severity", "title", "publisher", "review_status", "url"]
+    ]
+    df["严重度"] = df["severity"].map(
+        {"critical": "🔴 重大", "warn": "🟠 警示", "notice": "🟡 关注", "info": "⚪ 一般"}
+    )
     df["状态"] = df["review_status"].map({"unread": "未读", "read": "已读", "ignored": "已忽略"})
-    st.dataframe(df[["id", "publish_date", "严重度", "title", "publisher", "状态", "url"]],
-                 use_container_width=True, hide_index=True,
-                 column_config={"url": st.column_config.LinkColumn("链接")})
+    st.dataframe(
+        df[["id", "publish_date", "严重度", "title", "publisher", "状态", "url"]],
+        use_container_width=True,
+        hide_index=True,
+        column_config={"url": st.column_config.LinkColumn("链接")},
+    )
 
     # 详情 + 忽略
     st.divider()
@@ -181,7 +198,9 @@ def _tab_events(project_id: int) -> None:
     ev = api_request("GET", f"/api/sentiment/events/{event_id}")
     if ev:
         st.markdown(f"**{ev['title']}**")
-        st.caption(f"{ev.get('publisher', '—')} · {ev.get('publish_date', '—')} · {ev.get('url', '—')}")
+        st.caption(
+            f"{ev.get('publisher', '—')} · {ev.get('publish_date', '—')} · {ev.get('url', '—')}"
+        )
         st.text_area("原文", ev.get("content_text", ""), height=200, disabled=True)
         if ev.get("review_status") != "ignored":
             if st.button("标记忽略"):
@@ -198,11 +217,19 @@ def _tab_events(project_id: int) -> None:
             date = st.date_input("日期", value=pd.Timestamp.now())
             sev = st.selectbox("严重度", ["info", "notice", "warn", "critical"])
             if st.form_submit_button("录入"):
-                r = api_request("POST", "/api/sentiment/events/import", json={
-                    "project_id": project_id, "title": title, "content_text": content,
-                    "publisher": publisher, "url": url or None,
-                    "publish_date": str(date), "severity": sev,
-                })
+                r = api_request(
+                    "POST",
+                    "/api/sentiment/events/import",
+                    json={
+                        "project_id": project_id,
+                        "title": title,
+                        "content_text": content,
+                        "publisher": publisher,
+                        "url": url or None,
+                        "publish_date": str(date),
+                        "severity": sev,
+                    },
+                )
                 if r:
                     st.success(f"已录入事件 id={r['id']}")
                     st.rerun()
@@ -225,11 +252,15 @@ def _tab_briefings(project_id: int) -> None:
 
     if st.button("📝 生成简报"):
         with st.spinner("LLM 4 轮协议中 (提取/自检/挑刺/拼装)..."):
-            r = api_request("POST", "/api/sentiment/briefings/generate", json={
-                "project_id": project_id,
-                "briefing_date": str(target_date),
-                "force": force,
-            })
+            r = api_request(
+                "POST",
+                "/api/sentiment/briefings/generate",
+                json={
+                    "project_id": project_id,
+                    "briefing_date": str(target_date),
+                    "force": force,
+                },
+            )
         if r:
             if "detail" in r:
                 st.warning(f"未生成: {r['detail']}")
@@ -279,7 +310,10 @@ def _render_briefing_detail(br: dict, project_id: int) -> None:
 
     with tabs[1]:
         # 关联事件列表
-        events = api_request("GET", f"/api/sentiment/events?project_id={project_id}&date_from={br['briefing_date']}&date_to={br['briefing_date']}")
+        events = api_request(
+            "GET",
+            f"/api/sentiment/events?project_id={project_id}&date_from={br['briefing_date']}&date_to={br['briefing_date']}",
+        )
         if not events:
             st.info("无关联事件")
         else:
@@ -288,7 +322,13 @@ def _render_briefing_detail(br: dict, project_id: int) -> None:
                     st.caption(f"来源: {e.get('publisher', '—')} · {e.get('publish_date', '—')}")
                     if e.get("url"):
                         st.markdown(f"[原文链接]({e['url']})")
-                    st.text_area("内容", e.get("content_text", ""), height=150, disabled=True, key=f"e_{e['id']}")
+                    st.text_area(
+                        "内容",
+                        e.get("content_text", ""),
+                        height=150,
+                        disabled=True,
+                        key=f"e_{e['id']}",
+                    )
                     if e.get("review_status") == "unread":
                         if st.button("标已读", key=f"r_{e['id']}"):
                             # events 端点没有 /read, 用 ignore 代替 (后续可加 /read 端点)
@@ -312,7 +352,11 @@ def _render_briefing_detail(br: dict, project_id: int) -> None:
                 if not reviewer:
                     st.error("请填写审计师姓名")
                 else:
-                    api_request("POST", f"/api/sentiment/briefings/{br['id']}/submit", json={"reviewer": reviewer})
+                    api_request(
+                        "POST",
+                        f"/api/sentiment/briefings/{br['id']}/submit",
+                        json={"reviewer": reviewer},
+                    )
                     st.rerun()
         with c3:
             if st.button("🔁 重新核验", key=f"reverify_{br['id']}"):
@@ -325,21 +369,30 @@ def _render_briefing_detail(br: dict, project_id: int) -> None:
         c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("✅ 批准", key=f"approve_{br['id']}"):
-                api_request("POST", f"/api/sentiment/briefings/{br['id']}/approve",
-                            json={"reviewer": reviewer, "comment": comment})
+                api_request(
+                    "POST",
+                    f"/api/sentiment/briefings/{br['id']}/approve",
+                    json={"reviewer": reviewer, "comment": comment},
+                )
                 st.rerun()
         with c2:
             if st.button("❌ 驳回", key=f"reject_{br['id']}"):
                 if not comment:
                     st.error("驳回必须填写意见")
                 else:
-                    api_request("POST", f"/api/sentiment/briefings/{br['id']}/reject",
-                                json={"reviewer": reviewer, "comment": comment})
+                    api_request(
+                        "POST",
+                        f"/api/sentiment/briefings/{br['id']}/reject",
+                        json={"reviewer": reviewer, "comment": comment},
+                    )
                     st.rerun()
         with c3:
             if st.button("⬅️ 撤回", key=f"recall_{br['id']}"):
-                api_request("POST", f"/api/sentiment/briefings/{br['id']}/recall",
-                            json={"reviewer": reviewer, "comment": "撤回审阅"})
+                api_request(
+                    "POST",
+                    f"/api/sentiment/briefings/{br['id']}/recall",
+                    json={"reviewer": reviewer, "comment": "撤回审阅"},
+                )
                 st.rerun()
 
     elif br["status"] in ("approved", "frozen") or br["is_locked"]:
@@ -358,16 +411,25 @@ def _render_briefing_detail(br: dict, project_id: int) -> None:
                 if not reviser:
                     st.error("请填写修订人")
                 else:
-                    api_request("POST", f"/api/sentiment/briefings/{br['id']}/revise",
-                                json={"reviser": reviser, "change_note": "由领导批准后修订"})
+                    api_request(
+                        "POST",
+                        f"/api/sentiment/briefings/{br['id']}/revise",
+                        json={"reviser": reviser, "change_note": "由领导批准后修订"},
+                    )
                     st.rerun()
 
     elif br["status"] == "rejected":
         st.error(f"❌ 已驳回: {br.get('review_comment', '—')}")
         if st.button("🔄 重新生成", key=f"regen_{br['id']}"):
-            api_request("POST", "/api/sentiment/briefings/generate", json={
-                "project_id": project_id, "briefing_date": br["briefing_date"], "force": True,
-            })
+            api_request(
+                "POST",
+                "/api/sentiment/briefings/generate",
+                json={
+                    "project_id": project_id,
+                    "briefing_date": br["briefing_date"],
+                    "force": True,
+                },
+            )
             st.rerun()
 
 
@@ -387,10 +449,16 @@ def _tab_quarterly(project_id: int) -> None:
             fiscal_year = c2.number_input("年度", min_value=2000, max_value=2099, value=2025)
             trigger = c3.selectbox("触发方式", ["manual", "financials_uploaded", "scheduled"])
             if st.form_submit_button("创建"):
-                r = api_request("POST", "/api/sentiment/reports", json={
-                    "project_id": project_id, "period_type": period_type,
-                    "fiscal_year": int(fiscal_year), "trigger_type": trigger,
-                })
+                r = api_request(
+                    "POST",
+                    "/api/sentiment/reports",
+                    json={
+                        "project_id": project_id,
+                        "period_type": period_type,
+                        "fiscal_year": int(fiscal_year),
+                        "trigger_type": trigger,
+                    },
+                )
                 if r and "id" in r:
                     st.success(f"已创建报告 id={r['id']}")
                     st.rerun()
@@ -434,7 +502,9 @@ def _render_report_detail(rep: dict, project_id: int) -> None:
             revenue = c1.number_input("营业收入 (元)", min_value=0.0, value=1_000_000_000.0)
             net_profit = c1.number_input("净利润 (元)", value=50_000_000.0)
             non_recurring = c1.number_input("扣非净利润 (元)", value=45_000_000.0)
-            gross_margin = c2.number_input("毛利率 (%, 0-100)", min_value=-100.0, max_value=100.0, value=25.0)
+            gross_margin = c2.number_input(
+                "毛利率 (%, 0-100)", min_value=-100.0, max_value=100.0, value=25.0
+            )
             yoy_rev = c2.number_input("营收同比 (%, 正负)", value=12.0)
             yoy_np = c2.number_input("净利同比 (%, 正负)", value=-5.0)
             total_assets = c1.number_input("期末总资产 (元)", min_value=0.0, value=5_000_000_000.0)
@@ -442,12 +512,22 @@ def _render_report_detail(rep: dict, project_id: int) -> None:
             verified_by = st.text_input("审计师签名*")
             note = st.text_area("备注")
             if st.form_submit_button("💾 保存"):
-                r = api_request("POST", f"/api/sentiment/reports/{rep['id']}/financials", json={
-                    "revenue": revenue, "net_profit": net_profit, "non_recurring_pnl": non_recurring,
-                    "gross_margin": gross_margin, "yoy_revenue": yoy_rev, "yoy_net_profit": yoy_np,
-                    "total_assets": total_assets, "operating_cash_flow": op_cf,
-                    "verified_by": verified_by, "note": note,
-                })
+                r = api_request(
+                    "POST",
+                    f"/api/sentiment/reports/{rep['id']}/financials",
+                    json={
+                        "revenue": revenue,
+                        "net_profit": net_profit,
+                        "non_recurring_pnl": non_recurring,
+                        "gross_margin": gross_margin,
+                        "yoy_revenue": yoy_rev,
+                        "yoy_net_profit": yoy_np,
+                        "total_assets": total_assets,
+                        "operating_cash_flow": op_cf,
+                        "verified_by": verified_by,
+                        "note": note,
+                    },
+                )
                 if r and "id" in r:
                     st.success("已保存")
                     st.rerun()
@@ -479,7 +559,9 @@ def _render_report_detail(rep: dict, project_id: int) -> None:
     if rep["status"] == "draft":
         reviewer = st.text_input("提交人", key=f"rs_{rep['id']}")
         if st.button("✅ 提交审阅", key=f"rsub_{rep['id']}"):
-            api_request("POST", f"/api/sentiment/reports/{rep['id']}/submit", json={"reviewer": reviewer})
+            api_request(
+                "POST", f"/api/sentiment/reports/{rep['id']}/submit", json={"reviewer": reviewer}
+            )
             st.rerun()
 
     elif rep["status"] == "review":
@@ -487,13 +569,21 @@ def _render_report_detail(rep: dict, project_id: int) -> None:
         comment = st.text_area("意见", key=f"rcm_{rep['id']}")
         c1, c2 = st.columns(2)
         if c1.button("✅ 批准", key=f"rapp_{rep['id']}"):
-            api_request("POST", f"/api/sentiment/reports/{rep['id']}/approve", json={"reviewer": reviewer, "comment": comment})
+            api_request(
+                "POST",
+                f"/api/sentiment/reports/{rep['id']}/approve",
+                json={"reviewer": reviewer, "comment": comment},
+            )
             st.rerun()
         if c2.button("❌ 驳回", key=f"rrej_{rep['id']}"):
             if not comment:
                 st.error("驳回必须填写意见")
             else:
-                api_request("POST", f"/api/sentiment/reports/{rep['id']}/reject", json={"reviewer": reviewer, "comment": comment})
+                api_request(
+                    "POST",
+                    f"/api/sentiment/reports/{rep['id']}/reject",
+                    json={"reviewer": reviewer, "comment": comment},
+                )
                 st.rerun()
 
     elif rep["is_locked"]:
@@ -516,20 +606,32 @@ def _tab_settings(project_id: int) -> None:
     st.markdown("##### 搜索别名 (SentimentSubject)")
     subjects = api_request("GET", f"/api/sentiment/subjects?project_id={project_id}")
     if subjects:
-        df = pd.DataFrame(subjects)[["id", "alias_type", "alias_value", "match_mode", "weight", "is_active"]]
+        df = pd.DataFrame(subjects)[
+            ["id", "alias_type", "alias_value", "match_mode", "weight", "is_active"]
+        ]
         st.dataframe(df, use_container_width=True, hide_index=True)
 
     with st.form("add_subject"):
         c1, c2, c3, c4 = st.columns(4)
-        alias_type = c1.selectbox("类型", ["company", "brand", "product", "person", "domain", "code", "extra"])
+        alias_type = c1.selectbox(
+            "类型", ["company", "brand", "product", "person", "domain", "code", "extra"]
+        )
         alias_value = c2.text_input("值*")
         match_mode = c3.selectbox("匹配", ["contains", "exact", "regex"])
         weight = c4.number_input("权重", min_value=0, max_value=100, value=10)
         if st.form_submit_button("➕ 新增"):
-            r = api_request("POST", "/api/sentiment/subjects", json={
-                "project_id": project_id, "alias_type": alias_type, "alias_value": alias_value,
-                "match_mode": match_mode, "weight": int(weight), "is_active": True,
-            })
+            r = api_request(
+                "POST",
+                "/api/sentiment/subjects",
+                json={
+                    "project_id": project_id,
+                    "alias_type": alias_type,
+                    "alias_value": alias_value,
+                    "match_mode": match_mode,
+                    "weight": int(weight),
+                    "is_active": True,
+                },
+            )
             if r and "id" in r:
                 st.success(f"已添加 id={r['id']}")
                 st.rerun()
@@ -538,7 +640,17 @@ def _tab_settings(project_id: int) -> None:
     st.markdown("##### 信源 (SentimentSource)")
     sources = api_request("GET", "/api/sentiment/sources")
     if sources:
-        df = pd.DataFrame(sources)[["id", "code", "display_name", "is_paid", "is_enabled", "last_run_status", "last_run_at"]]
+        df = pd.DataFrame(sources)[
+            [
+                "id",
+                "code",
+                "display_name",
+                "is_paid",
+                "is_enabled",
+                "last_run_status",
+                "last_run_at",
+            ]
+        ]
         st.dataframe(df, use_container_width=True, hide_index=True)
 
         src_id = st.number_input("切换启用/停用 (信源 ID)", min_value=1, value=1, step=1)
@@ -547,7 +659,9 @@ def _tab_settings(project_id: int) -> None:
             new_state = not cur["is_enabled"]
             label = "✅ 启用" if new_state else "🚫 停用"
             if st.button(f"{label} #{src_id}"):
-                api_request("PUT", f"/api/sentiment/sources/{src_id}", json={"is_enabled": new_state})
+                api_request(
+                    "PUT", f"/api/sentiment/sources/{src_id}", json={"is_enabled": new_state}
+                )
                 st.rerun()
 
 

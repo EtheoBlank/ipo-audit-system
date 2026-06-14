@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
@@ -34,12 +34,8 @@ class ParsedSegment:
 # ----------------------------------------------------------------------
 
 
-_CHAPTER_PAT = re.compile(
-    r"^\s*(第[一二三四五六七八九十百零〇\d]+[章篇编]\s*[^\n]{0,40})"
-)
-_SECTION_PAT = re.compile(
-    r"^\s*(第[一二三四五六七八九十百零〇\d]+节\s*[^\n]{0,40})"
-)
+_CHAPTER_PAT = re.compile(r"^\s*(第[一二三四五六七八九十百零〇\d]+[章篇编]\s*[^\n]{0,40})")
+_SECTION_PAT = re.compile(r"^\s*(第[一二三四五六七八九十百零〇\d]+节\s*[^\n]{0,40})")
 
 
 def _scan_heading(line: str) -> tuple[Optional[str], Optional[str]]:
@@ -237,9 +233,7 @@ def load_document(path: Path) -> List[ParsedSegment]:
     elif suffix == "epub":
         segs = _load_epub(path)
     else:
-        raise ValueError(
-            f"不支持的文档类型: .{suffix} (支持 pdf / epub / docx / txt / md)"
-        )
+        raise ValueError(f"不支持的文档类型: .{suffix} (支持 pdf / epub / docx / txt / md)")
 
     # 去掉过短 / 纯页眉页脚
     cleaned = []

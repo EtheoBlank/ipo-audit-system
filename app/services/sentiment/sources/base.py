@@ -1,4 +1,5 @@
 """信源适配器抽象基类 — 照搬 app.services.regulation_scraper.BaseRegulationAdapter 风格."""
+
 from __future__ import annotations
 
 import logging

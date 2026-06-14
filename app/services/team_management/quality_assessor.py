@@ -2,11 +2,11 @@
 
 降级模式与 ``work_plan_generator`` 一致：AI 不可用时给出基于规则的结构化评估。
 """
+
 from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -87,11 +87,13 @@ def _fallback_assessment(ctx: MeetingQualityContext) -> MeetingQualityResult:
         strengths.append(f"形成 {len(ctx.decisions)} 项明确决策")
         # 检查每项决策是否同时有 owner + deadline (审计可追溯性)
         missing_owner = [
-            i for i, d in enumerate(ctx.decisions)
+            i
+            for i, d in enumerate(ctx.decisions)
             if not (isinstance(d, dict) and (d.get("owner") or d.get("负责人")))
         ]
         missing_due = [
-            i for i, d in enumerate(ctx.decisions)
+            i
+            for i, d in enumerate(ctx.decisions)
             if not (isinstance(d, dict) and (d.get("due") or d.get("deadline") or d.get("截止日")))
         ]
         if missing_owner:
@@ -111,11 +113,13 @@ def _fallback_assessment(ctx: MeetingQualityContext) -> MeetingQualityResult:
         score += min(15, len(ctx.action_items) * 3)
         strengths.append(f"列出 {len(ctx.action_items)} 项行动项")
         missing_action_owner = [
-            i for i, a in enumerate(ctx.action_items)
+            i
+            for i, a in enumerate(ctx.action_items)
             if not (isinstance(a, dict) and (a.get("owner") or a.get("负责人")))
         ]
         missing_action_due = [
-            i for i, a in enumerate(ctx.action_items)
+            i
+            for i, a in enumerate(ctx.action_items)
             if not (isinstance(a, dict) and (a.get("due") or a.get("deadline") or a.get("截止日")))
         ]
         if missing_action_owner:

@@ -53,7 +53,9 @@ def chunk_segments(
     current_section = segments[0].section
     current_page = segments[0].page
 
-    def _flush(next_chapter: Optional[str], next_section: Optional[str], next_page: Optional[int]) -> None:
+    def _flush(
+        next_chapter: Optional[str], next_section: Optional[str], next_page: Optional[int]
+    ) -> None:
         nonlocal buf, buf_len
         if not buf:
             return

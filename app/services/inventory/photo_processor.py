@@ -12,7 +12,6 @@ Returns counts of matched / unmatched rows so the API can report them.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -108,9 +107,9 @@ SYS_PROMPT_PARSE = (
     "字段含义或新增数据。"
     "\n\n"
     "请提取所有数据行，**只返回 JSON**，结构："
-    "{\"counted_by\":\"...\",\"counted_at\":\"YYYY-MM-DD\",\"rows\":["
-    "{\"material_code\":\"...\",\"material_name\":\"...\",\"warehouse\":\"...\","
-    "\"batch_no\":\"...\",\"counted_qty\": <数值>, \"remark\":\"...\"}"
+    '{"counted_by":"...","counted_at":"YYYY-MM-DD","rows":['
+    '{"material_code":"...","material_name":"...","warehouse":"...",'
+    '"batch_no":"...","counted_qty": <数值>, "remark":"..."}'
     "]}。若某行实盘数量空白或不可识别，counted_qty 写 null。"
     "若 OCR 文本质量极差无法识别表格，rows 返回空数组。"
     "**material_code 必须如实抄录原始 OCR 文本中出现的编码，禁止编造、扩展或翻译。**"
@@ -127,6 +126,7 @@ class CountPhotoProcessor:
 
     def ocr(self, file_path: str, filename: str) -> tuple[str, str]:
         from pathlib import Path
+
         try:
             engine, text = ContractOCR.run(Path(file_path), filename)
             return engine, text
@@ -169,11 +169,13 @@ class CountPhotoProcessor:
                     qty = _to_float(p)
                     if qty is not None:
                         break
-                result.parsed_rows.append(ParsedCountRow(
-                    material_code=parts[0],
-                    material_name=" ".join(parts[1:-1]) if len(parts) > 2 else "",
-                    counted_qty=qty,
-                ))
+                result.parsed_rows.append(
+                    ParsedCountRow(
+                        material_code=parts[0],
+                        material_name=" ".join(parts[1:-1]) if len(parts) > 2 else "",
+                        counted_qty=qty,
+                    )
+                )
             return self._filter_by_known_codes(result, known_codes)
 
         # 长文本切片调用，避免被默默 trim 8000 字符
@@ -192,7 +194,7 @@ class CountPhotoProcessor:
                 logger.warning("CountPhotoProcessor AI parse failed: %s", exc)
                 continue
 
-            for r in (data.get("rows") or []):
+            for r in data.get("rows") or []:
                 if isinstance(r, dict):
                     all_rows.append(ParsedCountRow.from_dict(r))
             if not counted_by_first:
@@ -271,7 +273,9 @@ class CountPhotoProcessor:
             cand = by_code.get(code_k, [])
             # warehouse / batch_no 进一步过滤
             if row.warehouse:
-                cand_w = [s for s in cand if str(getattr(s, "warehouse", "") or "") == row.warehouse]
+                cand_w = [
+                    s for s in cand if str(getattr(s, "warehouse", "") or "") == row.warehouse
+                ]
                 if cand_w:
                     cand = cand_w
             if row.batch_no:
@@ -325,7 +329,9 @@ class CountPhotoProcessor:
         by_warehouse: dict[str, dict[str, float]] = {}
         for s in rows:
             wh = str(getattr(s, "warehouse", "") or "未指定")
-            d = by_warehouse.setdefault(wh, {"total": 0, "counted": 0, "total_amount": 0.0, "counted_amount": 0.0})
+            d = by_warehouse.setdefault(
+                wh, {"total": 0, "counted": 0, "total_amount": 0.0, "counted_amount": 0.0}
+            )
             d["total"] += 1
             d["total_amount"] += float(getattr(s, "book_amount", 0) or 0)
             if getattr(s, "counted_qty", None) is not None:
@@ -368,9 +374,11 @@ class CountPhotoProcessor:
         uncovered_amount = 0.0
         if population_movements is not None:
             sheet_keys = {
-                (str(getattr(s, "material_code", "") or "").strip(),
-                 str(getattr(s, "warehouse", "") or "").strip(),
-                 str(getattr(s, "batch_no", "") or "").strip())
+                (
+                    str(getattr(s, "material_code", "") or "").strip(),
+                    str(getattr(s, "warehouse", "") or "").strip(),
+                    str(getattr(s, "batch_no", "") or "").strip(),
+                )
                 for s in rows
             }
             for m in population_movements:
@@ -384,14 +392,16 @@ class CountPhotoProcessor:
                     continue
                 if (code, wh, batch) in sheet_keys:
                     continue
-                uncovered.append({
-                    "material_code": code,
-                    "material_name": str(getattr(m, "material_name", "") or ""),
-                    "warehouse": wh,
-                    "batch_no": batch,
-                    "ending_qty": qty,
-                    "ending_amount": amt,
-                })
+                uncovered.append(
+                    {
+                        "material_code": code,
+                        "material_name": str(getattr(m, "material_name", "") or ""),
+                        "warehouse": wh,
+                        "batch_no": batch,
+                        "ending_qty": qty,
+                        "ending_amount": amt,
+                    }
+                )
                 uncovered_amount += amt
             uncovered.sort(key=lambda r: -r["ending_amount"])
 
@@ -415,7 +425,9 @@ class CountPhotoProcessor:
                     "items_rate": round(d["counted"] / d["total"], 4) if d["total"] else 0.0,
                     "total_amount": round(d["total_amount"], 2),
                     "counted_amount": round(d["counted_amount"], 2),
-                    "amount_rate": round(d["counted_amount"] / d["total_amount"], 4) if d["total_amount"] else 0.0,
+                    "amount_rate": round(d["counted_amount"] / d["total_amount"], 4)
+                    if d["total_amount"]
+                    else 0.0,
                 }
                 for wh, d in sorted(by_warehouse.items(), key=lambda x: -x[1]["total_amount"])
             ],
@@ -427,10 +439,28 @@ class CountPhotoProcessor:
                 "total_count": len(diff_rows_major) + len(diff_rows_minor),
                 "major_count": len(diff_rows_major),
                 "minor_count": len(diff_rows_minor),
-                "gain_count": sum(1 for r in diff_rows_major + diff_rows_minor if r["type"] == "盘盈"),
-                "loss_count": sum(1 for r in diff_rows_major + diff_rows_minor if r["type"] == "盘亏"),
-                "gain_amount": round(sum(r["delta_amount"] for r in diff_rows_major + diff_rows_minor if r["delta_amount"] > 0), 2),
-                "loss_amount": round(sum(r["delta_amount"] for r in diff_rows_major + diff_rows_minor if r["delta_amount"] < 0), 2),
+                "gain_count": sum(
+                    1 for r in diff_rows_major + diff_rows_minor if r["type"] == "盘盈"
+                ),
+                "loss_count": sum(
+                    1 for r in diff_rows_major + diff_rows_minor if r["type"] == "盘亏"
+                ),
+                "gain_amount": round(
+                    sum(
+                        r["delta_amount"]
+                        for r in diff_rows_major + diff_rows_minor
+                        if r["delta_amount"] > 0
+                    ),
+                    2,
+                ),
+                "loss_amount": round(
+                    sum(
+                        r["delta_amount"]
+                        for r in diff_rows_major + diff_rows_minor
+                        if r["delta_amount"] < 0
+                    ),
+                    2,
+                ),
             },
             "uncovered": uncovered,
         }

@@ -3,6 +3,7 @@
 按 Base / Create / Update / Response 四类分离模式，遵循项目内其他模块的
 ``audit.py`` / ``sales_ledger.py`` 风格。
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -41,7 +42,9 @@ class TeamMemberBase(BaseModel):
     full_name: str = Field(..., description="姓名")
     email: Optional[str] = Field(None, description="邮箱")
     phone: Optional[str] = Field(None, description="电话")
-    level: str = Field("auditor", description="级别: lead/senior_manager/manager/senior_auditor/auditor")
+    level: str = Field(
+        "auditor", description="级别: lead/senior_manager/manager/senior_auditor/auditor"
+    )
     specialties: Optional[str] = Field(None, description="擅长领域 (JSON 数组字符串)")
     status: str = Field("active", description="状态: active/inactive")
     joined_at: Optional[str] = Field(None, description="入职日期 YYYY-MM-DD")
@@ -462,7 +465,7 @@ class ProgressDashboardResponse(BaseModel):
     project: ProjectProgress
     blockers: BlockerSummary
     by_module: dict[str, int] = Field(default_factory=dict)  # module -> count
-    by_status: dict[str, int] = Field(default_factory=dict)   # status -> count
+    by_status: dict[str, int] = Field(default_factory=dict)  # status -> count
     recent_snapshots: list[ProgressSnapshotResponse] = Field(default_factory=list)
 
 

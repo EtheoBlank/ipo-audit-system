@@ -1,9 +1,34 @@
-"""SQLAlchemy database models for IPO Audit System."""
+"""SQLAlchemy database models for IPO Audit System.
+
+模块化拆分: 新增的 ORM (Pack A/B/C/D 等) 一律放到 ``app/models/db/<module>.py``
+子文件里, 本文件在顶部统一 ``from app.models.db import *`` 聚合, 保证:
+  - 现有 ``from app.models.db_models import X`` 调用 100% 兼容
+  - 新表通过子模块 ``__all__`` 透出后 ``Base.metadata`` 完整收齐
+  - 单文件不再无限膨胀
+
+老模型 (Project / AccountBalance / ConfirmationCase / Sentiment* / TeamMember
+等) 暂时仍在本文件里, 后续重构按需迁移; 迁移时只需把类剪到子文件、
+本文件保留 import 即可, 调用方无感知。
+"""
+
 from datetime import datetime, timezone
 from typing import Optional
-from sqlalchemy import String, Text, Float, Integer, DateTime, ForeignKey, Boolean, UniqueConstraint, Index
+from sqlalchemy import (
+    String,
+    Text,
+    Float,
+    Integer,
+    DateTime,
+    ForeignKey,
+    Boolean,
+    UniqueConstraint,
+    Index,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
+
+# 子模块聚合 — 新增模块在 app/models/db/__init__.py 加一行即可
+from app.models.db import *  # noqa: F401, F403
 
 
 def _utcnow() -> datetime:
@@ -17,6 +42,7 @@ def _utcnow() -> datetime:
 
 class Project(Base):
     """审计项目表"""
+
     __tablename__ = "projects"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -26,6 +52,14 @@ class Project(Base):
     fiscal_year: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="active")
 
+    # === 多租户硬隔离 (Pack A.2 — Roadmap "跨事务所多租户硬隔离") ===
+    # Project 是所有业务数据的入口表; 其他表都通过 project_id 外键挂在这里,
+    # 所以只要保证"用户只能访问 firm_id 匹配的 Project", 就实现了租户级数据隔离.
+    # firm_id 可空 — 老数据 / AUTH_ENABLED=false 时无所属事务所, 视作全局可见.
+    firm_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("auth_firms.id"), nullable=True, index=True
+    )
+
     # === 舆情跟踪扩展字段 (v0.2 追加，全 nullable，旧数据零迁移) ===
     stock_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
     stock_short_name: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -33,47 +67,100 @@ class Project(Base):
     legal_representative: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     actual_controller: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     industry_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
-    unified_credit_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, unique=True)
+    unified_credit_code: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True, unique=True
+    )
     registered_address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     website: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    keywords_extra: Mapped[Optional[str]] = mapped_column(Text, nullable=True)              # 审计师手填搜索别名（换行分隔）
-    directors_supervisors_executives: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 董监高 JSON
-    search_priority: Mapped[Optional[str]] = mapped_column(String(10), default="normal", nullable=True, index=True)
+    keywords_extra: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # 审计师手填搜索别名（换行分隔）
+    directors_supervisors_executives: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # 董监高 JSON
+    search_priority: Mapped[Optional[str]] = mapped_column(
+        String(10), default="normal", nullable=True, index=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     # 关联关系
-    account_balances: Mapped[list["AccountBalance"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    chronological_accounts: Mapped[list["ChronologicalAccount"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    bank_statements: Mapped[list["BankStatement"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    sales_documents: Mapped[list["SalesDocument"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    sales_records: Mapped[list["SalesRecord"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    contracts: Mapped[list["ContractDocument"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    inventory_movements: Mapped[list["InventoryMovement"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    inventory_count_plans: Mapped[list["InventoryCountPlan"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    inventory_count_sheets: Mapped[list["InventoryCountSheet"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    inventory_impairments: Mapped[list["InventoryImpairment"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    confirmation_cases: Mapped[list["ConfirmationCase"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    account_balances: Mapped[list["AccountBalance"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    chronological_accounts: Mapped[list["ChronologicalAccount"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    bank_statements: Mapped[list["BankStatement"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    sales_documents: Mapped[list["SalesDocument"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    sales_records: Mapped[list["SalesRecord"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    contracts: Mapped[list["ContractDocument"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    inventory_movements: Mapped[list["InventoryMovement"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    inventory_count_plans: Mapped[list["InventoryCountPlan"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    inventory_count_sheets: Mapped[list["InventoryCountSheet"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    inventory_impairments: Mapped[list["InventoryImpairment"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    confirmation_cases: Mapped[list["ConfirmationCase"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
 
     # 舆情跟踪关联
-    sentiment_subjects: Mapped[list["SentimentSubject"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    sentiment_events: Mapped[list["SentimentEvent"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    daily_briefings: Mapped[list["SentimentDailyBriefing"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    quarterly_reports: Mapped[list["SentimentQuarterlyReport"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    sentiment_subjects: Mapped[list["SentimentSubject"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    sentiment_events: Mapped[list["SentimentEvent"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    daily_briefings: Mapped[list["SentimentDailyBriefing"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    quarterly_reports: Mapped[list["SentimentQuarterlyReport"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
 
     # 项目组管理关联
-    project_assignments: Mapped[list["ProjectAssignment"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    work_plans: Mapped[list["WorkPlan"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    meetings: Mapped[list["Meeting"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    daily_reports: Mapped[list["DailyReport"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    blockers: Mapped[list["Blocker"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    progress_snapshots: Mapped[list["ProgressSnapshot"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    management_recommendations: Mapped[list["ManagementRecommendation"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    project_assignments: Mapped[list["ProjectAssignment"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    work_plans: Mapped[list["WorkPlan"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    meetings: Mapped[list["Meeting"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    daily_reports: Mapped[list["DailyReport"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    blockers: Mapped[list["Blocker"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    progress_snapshots: Mapped[list["ProgressSnapshot"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    management_recommendations: Mapped[list["ManagementRecommendation"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
 
 
 class AccountBalance(Base):
     """科目余额表"""
+
     __tablename__ = "account_balances"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -93,6 +180,7 @@ class AccountBalance(Base):
 
 class ChronologicalAccount(Base):
     """序时账"""
+
     __tablename__ = "chronological_accounts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -113,6 +201,7 @@ class ChronologicalAccount(Base):
 
 class BankStatement(Base):
     """银行对账单"""
+
     __tablename__ = "bank_statements"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -132,11 +221,14 @@ class BankStatement(Base):
 
 class RegulatoryCase(Base):
     """监管案例库"""
+
     __tablename__ = "regulatory_cases"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     case_no: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
-    case_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # 问询函/处罚决定
+    case_type: Mapped[str] = mapped_column(
+        String(50), nullable=False, index=True
+    )  # 问询函/处罚决定
     source: Mapped[str] = mapped_column(String(100), nullable=False)  # 证监会/交易所
     publish_date: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
@@ -150,6 +242,7 @@ class RegulatoryCase(Base):
 
 class AuditRisk(Base):
     """审计风险记录"""
+
     __tablename__ = "audit_risks"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -159,7 +252,9 @@ class AuditRisk(Base):
     risk_description: Mapped[str] = mapped_column(Text, nullable=False)
     affected_accounts: Mapped[str] = mapped_column(Text, nullable=True)
     recommendation: Mapped[str] = mapped_column(Text, nullable=True)
-    related_case_id: Mapped[int] = mapped_column(Integer, ForeignKey("regulatory_cases.id"), nullable=True)
+    related_case_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("regulatory_cases.id"), nullable=True
+    )
     is_resolved: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     resolved_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
@@ -173,10 +268,13 @@ class SalesDocument(Base):
     """用户上传的原始销售文档（销售合同/发票/发货单/报关单等）。
     解析后的纯文本/表格内容存于 raw_text，供 AI 抽取。
     """
+
     __tablename__ = "sales_documents"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     doc_type: Mapped[str] = mapped_column(String(20), nullable=False)  # docx / pdf / xlsx
     raw_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -184,18 +282,25 @@ class SalesDocument(Base):
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     project: Mapped["Project"] = relationship(back_populates="sales_documents")
-    records: Mapped[list["SalesRecord"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+    records: Mapped[list["SalesRecord"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
 
 
 class SalesRecord(Base):
     """销售清单行（AI 合成后入库，可由审计师在前端核对修改）。
     字段对应"销售清单"底稿要求：金额、发货/确认时间、数量/单价、产品编号、成本、可直接对应销售费用。
     """
+
     __tablename__ = "sales_records"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
-    document_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("sales_documents.id"), nullable=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
+    document_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("sales_documents.id"), nullable=True
+    )
 
     # 业务主标识
     contract_no: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
@@ -206,40 +311,44 @@ class SalesRecord(Base):
     # 销售发票与税务 (新增 — 增值税底稿闭环)
     invoice_no: Mapped[Optional[str]] = mapped_column(String(100), index=True, nullable=True)
     currency: Mapped[Optional[str]] = mapped_column(String(10), default="CNY", nullable=True)
-    tax_rate: Mapped[float] = mapped_column(Float, default=0.0)         # 税率，如 0.13
-    tax_amount: Mapped[float] = mapped_column(Float, default=0.0)       # 税额
-    gross_amount: Mapped[float] = mapped_column(Float, default=0.0)     # 价税合计 (revenue + tax)
+    tax_rate: Mapped[float] = mapped_column(Float, default=0.0)  # 税率，如 0.13
+    tax_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 税额
+    gross_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 价税合计 (revenue + tax)
 
     # 数量与金额
     quantity: Mapped[float] = mapped_column(Float, default=0)
-    unit_price: Mapped[float] = mapped_column(Float, default=0)         # 不含税单价
-    revenue_amount: Mapped[float] = mapped_column(Float, default=0)     # 不含税收入金额
-    cost_amount: Mapped[float] = mapped_column(Float, default=0)        # 对应成本（用于毛利率分析）
+    unit_price: Mapped[float] = mapped_column(Float, default=0)  # 不含税单价
+    revenue_amount: Mapped[float] = mapped_column(Float, default=0)  # 不含税收入金额
+    cost_amount: Mapped[float] = mapped_column(Float, default=0)  # 对应成本（用于毛利率分析）
 
     # 与销售直接对应的费用
-    shipping_fee: Mapped[float] = mapped_column(Float, default=0)       # 运费
-    customs_fee: Mapped[float] = mapped_column(Float, default=0)        # 报关费
-    other_direct_fee: Mapped[float] = mapped_column(Float, default=0)   # 其他直接费用
+    shipping_fee: Mapped[float] = mapped_column(Float, default=0)  # 运费
+    customs_fee: Mapped[float] = mapped_column(Float, default=0)  # 报关费
+    other_direct_fee: Mapped[float] = mapped_column(Float, default=0)  # 其他直接费用
 
     # 退换货 / 折扣 / 返利 (新增 — 毛利真实性)
-    return_amount: Mapped[float] = mapped_column(Float, default=0.0)    # 退货冲减金额
+    return_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 退货冲减金额
     discount_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 折扣折让
-    rebate_amount: Mapped[float] = mapped_column(Float, default=0.0)    # 销售返利
+    rebate_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 销售返利
 
     # 时间
     ship_date: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
-    receipt_date: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True, nullable=True)  # 新增: 签收/验收日
+    receipt_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, index=True, nullable=True
+    )  # 新增: 签收/验收日
     revenue_confirm_date: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
 
     # 函证状态 (新增 — 审计轨迹闭环)
-    confirmation_status: Mapped[Optional[str]] = mapped_column(String(20), default="未发函", nullable=True)  # 未发函/已发函/已回函/未回函/作废
+    confirmation_status: Mapped[Optional[str]] = mapped_column(
+        String(20), default="未发函", nullable=True
+    )  # 未发函/已发函/已回函/未回函/作废
     confirmation_ref: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     confirmation_diff: Mapped[float] = mapped_column(Float, default=0.0)
 
     # 溯源
-    source: Mapped[str] = mapped_column(String(255), nullable=True)     # 来源文档名 / 备注
-    confidence: Mapped[float] = mapped_column(Float, default=1.0)       # AI 合成置信度（0-1）
-    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)   # 人工核对标志
+    source: Mapped[str] = mapped_column(String(255), nullable=True)  # 来源文档名 / 备注
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)  # AI 合成置信度（0-1）
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)  # 人工核对标志
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
@@ -250,15 +359,22 @@ class SalesRecord(Base):
 
 class ContractDocument(Base):
     """收入合同（图片/PDF/扫描件）+ OCR 文本 + 要点 / CAS 14 五步法分析。"""
+
     __tablename__ = "contracts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
 
     # 原始信息
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
-    media_type: Mapped[str] = mapped_column(String(20), nullable=False)  # image/jpeg, image/png, application/pdf
-    ocr_engine: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # paddleocr / easyocr / tesseract / manual
+    media_type: Mapped[str] = mapped_column(
+        String(20), nullable=False
+    )  # image/jpeg, image/png, application/pdf
+    ocr_engine: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )  # paddleocr / easyocr / tesseract / manual
     ocr_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
@@ -286,26 +402,37 @@ class InventoryMovement(Base):
     一行 = 一个物料 × 一个仓库 × 一个批次（可选）的期间记录。
     支持按月/季度/年导入；如果 ERP 只给汇总数，可只用期初/期末/本期入出。
     """
+
     __tablename__ = "inventory_movements"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
 
     # 物料基本信息
     material_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     material_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)  # 原材料/在产品/库存商品/低值易耗品
-    spec: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)                  # 规格型号
-    unit: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)                   # 计量单位
+    category: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, index=True
+    )  # 原材料/在产品/库存商品/低值易耗品
+    spec: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # 规格型号
+    unit: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 计量单位
 
     # 仓储信息
-    warehouse: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True) # 仓库
-    batch_no: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)  # 批次号
-    inbound_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)  # 该批次入库日
+    warehouse: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)  # 仓库
+    batch_no: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, index=True
+    )  # 批次号
+    inbound_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, index=True
+    )  # 该批次入库日
 
     # 期间口径
-    period_end: Mapped[str] = mapped_column(String(20), nullable=False, index=True)          # 报告期截止日 YYYY-MM-DD
-    is_prior_year: Mapped[bool] = mapped_column(Boolean, default=False)                      # 是否上年同期数据
+    period_end: Mapped[str] = mapped_column(
+        String(20), nullable=False, index=True
+    )  # 报告期截止日 YYYY-MM-DD
+    is_prior_year: Mapped[bool] = mapped_column(Boolean, default=False)  # 是否上年同期数据
 
     # 期初
     opening_qty: Mapped[float] = mapped_column(Float, default=0.0)
@@ -333,32 +460,39 @@ class InventoryCountPlan(Base):
 
     包含时间表 / 人员 / 行业化特殊事项；可由 AI 初稿、用户对话式修改。
     """
+
     __tablename__ = "inventory_count_plans"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
 
     title: Mapped[str] = mapped_column(String(200), nullable=False, default="存货监盘计划")
     industry: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    period_end: Mapped[str] = mapped_column(String(20), nullable=False)             # 盘点基准日
+    period_end: Mapped[str] = mapped_column(String(20), nullable=False)  # 盘点基准日
     count_date_start: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     count_date_end: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
     # 行业特点 / 注意事项 / 团队安排 (Markdown 或 JSON 字符串)
-    objectives: Mapped[Optional[str]] = mapped_column(Text, nullable=True)          # 监盘目标
-    scope: Mapped[Optional[str]] = mapped_column(Text, nullable=True)               # 监盘范围（仓库列表）
-    team: Mapped[Optional[str]] = mapped_column(Text, nullable=True)                # 监盘小组（JSON）
-    procedures: Mapped[Optional[str]] = mapped_column(Text, nullable=True)          # 监盘程序
-    special_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)       # 行业化特殊事项
-    risks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)               # 重大风险
+    objectives: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 监盘目标
+    scope: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 监盘范围（仓库列表）
+    team: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 监盘小组（JSON）
+    procedures: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 监盘程序
+    special_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 行业化特殊事项
+    risks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 重大风险
 
-    revision_log: Mapped[Optional[str]] = mapped_column(Text, nullable=True)        # JSON 数组：每次用户对话修改
+    revision_log: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # JSON 数组：每次用户对话修改
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     project: Mapped["Project"] = relationship(back_populates="inventory_count_plans")
-    sheets: Mapped[list["InventoryCountSheet"]] = relationship(back_populates="plan", cascade="all, delete-orphan")
+    sheets: Mapped[list["InventoryCountSheet"]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan"
+    )
 
 
 class InventoryCountSheet(Base):
@@ -366,11 +500,16 @@ class InventoryCountSheet(Base):
 
     生成口径：金额优先 + 阈值覆盖；包含账面数 / 留空的实盘列。
     """
+
     __tablename__ = "inventory_count_sheets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
-    plan_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("inventory_count_plans.id"), nullable=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
+    plan_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("inventory_count_plans.id"), nullable=True
+    )
 
     material_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     material_name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -390,7 +529,7 @@ class InventoryCountSheet(Base):
     # 抽样信息
     sample_tier: Mapped[str] = mapped_column(String(20), default="A")  # A=全盘, B=抽样, C=覆盖性抽
     sample_reason: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    coverage_rank: Mapped[int] = mapped_column(Integer, default=0)     # 排名（金额降序）
+    coverage_rank: Mapped[int] = mapped_column(Integer, default=0)  # 排名（金额降序）
 
     counted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     counted_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
@@ -408,10 +547,13 @@ class InventoryImpairment(Base):
 
     每个物料一行：保存 FIFO 推算的库龄分层、NRV、跌价准备、本年计提/转回。
     """
+
     __tablename__ = "inventory_impairments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
 
     material_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     material_name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -432,23 +574,29 @@ class InventoryImpairment(Base):
     weighted_avg_age: Mapped[float] = mapped_column(Float, default=0.0)  # 加权平均库龄(天)
 
     # NRV / 跌价
-    nrv_unit_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)   # 可变现净值单价
-    nrv_source: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)    # 销售清单/手工/外部询价
-    nrv_amount: Mapped[float] = mapped_column(Float, default=0.0)                   # = ending_qty * nrv_unit_price
-    estimated_sell_cost: Mapped[float] = mapped_column(Float, default=0.0)          # 销售费用 + 税费
-    impairment_current: Mapped[float] = mapped_column(Float, default=0.0)           # 本期末应计提跌价 (按物料)
+    nrv_unit_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # 可变现净值单价
+    nrv_source: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )  # 销售清单/手工/外部询价
+    nrv_amount: Mapped[float] = mapped_column(Float, default=0.0)  # = ending_qty * nrv_unit_price
+    estimated_sell_cost: Mapped[float] = mapped_column(Float, default=0.0)  # 销售费用 + 税费
+    impairment_current: Mapped[float] = mapped_column(
+        Float, default=0.0
+    )  # 本期末应计提跌价 (按物料)
 
     # 期初跌价 / 转回 / 本年计提
-    impairment_opening: Mapped[float] = mapped_column(Float, default=0.0)           # 上年末（即本年期初）跌价
-    impairment_reversal: Mapped[float] = mapped_column(Float, default=0.0)          # 本期跌价转回
-    impairment_provision: Mapped[float] = mapped_column(Float, default=0.0)         # 本期新增计提
-    net_impairment_change: Mapped[float] = mapped_column(Float, default=0.0)        # provision - reversal
+    impairment_opening: Mapped[float] = mapped_column(
+        Float, default=0.0
+    )  # 上年末（即本年期初）跌价
+    impairment_reversal: Mapped[float] = mapped_column(Float, default=0.0)  # 本期跌价转回
+    impairment_provision: Mapped[float] = mapped_column(Float, default=0.0)  # 本期新增计提
+    net_impairment_change: Mapped[float] = mapped_column(Float, default=0.0)  # provision - reversal
 
     # 转回拆分（CAS 1 第 21 条）：已售出部分应"转销营业成本"，仍在库部分才"转回资产减值损失"
     reversal_to_cogs: Mapped[float] = mapped_column(Float, default=0.0)
     reversal_to_loss: Mapped[float] = mapped_column(Float, default=0.0)
 
-    method: Mapped[str] = mapped_column(String(20), default="aging")                # aging / nrv / combined
+    method: Mapped[str] = mapped_column(String(20), default="aging")  # aging / nrv / combined
     note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
@@ -463,13 +611,16 @@ class InventoryCodeMapping(Base):
     跌价转回时按上年编码找不到 → 损益表少一笔。该表用于在 compute 时
     把上年 prior_impairments 的 key 翻译为本年编码。
     """
+
     __tablename__ = "inventory_code_mappings"
     __table_args__ = (
         UniqueConstraint("project_id", "old_code", name="uq_code_mapping_project_old"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     old_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     new_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     note: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -483,16 +634,16 @@ class InventoryCodeMapping(Base):
 
 # ---- 函证对象类型 ------------------------------------------------------
 
-PARTY_TYPE_BANK = "bank"          # 银行询证函
+PARTY_TYPE_BANK = "bank"  # 银行询证函
 PARTY_TYPE_CUSTOMER = "customer"  # 客户询证函（应收账款）
 PARTY_TYPE_SUPPLIER = "supplier"  # 供应商询证函（应付账款）
-PARTY_TYPE_OTHER_RECEIVABLE = "other_recv"   # 其他应收款
-PARTY_TYPE_OTHER_PAYABLE = "other_pay"       # 其他应付款
-PARTY_TYPE_LOAN = "loan"          # 贷款 / 借款
+PARTY_TYPE_OTHER_RECEIVABLE = "other_recv"  # 其他应收款
+PARTY_TYPE_OTHER_PAYABLE = "other_pay"  # 其他应付款
+PARTY_TYPE_LOAN = "loan"  # 贷款 / 借款
 PARTY_TYPE_INVESTMENT = "investment"  # 投资 / 投资款
 PARTY_TYPE_REGULATOR = "regulator"  # 监管机构询证（如保税区/海关）
 PARTY_TYPE_LITIGATION = "litigation"  # 诉讼对手方
-PARTY_TYPE_OTHER = "other"        # 其他自定义
+PARTY_TYPE_OTHER = "other"  # 其他自定义
 
 
 PARTY_TYPE_LABELS: dict[str, str] = {
@@ -512,15 +663,15 @@ PARTY_TYPE_LABELS: dict[str, str] = {
 # ---- 函证状态机 -------------------------------------------------------
 
 # 选样阶段
-ITEM_STATUS_DRAFT = "draft"                 # 草稿（统计表生成后未确认）
-ITEM_STATUS_CONFIRMED = "confirmed"         # 已确定发函（进入发函阶段）
-ITEM_STATUS_SENT = "sent"                   # 已发函（发函日期已锁定）
-ITEM_STATUS_RESPONDED = "responded"         # 已回函
-ITEM_STATUS_PARTIAL = "partial"             # 部分相符回函
-ITEM_STATUS_NO_REPLY = "no_reply"           # 未回函（已发函但到期未回）
-ITEM_STATUS_REJECTED = "rejected"           # 拒函
-ITEM_STATUS_MISMATCH = "mismatch"           # 不符
-ITEM_STATUS_VOIDED = "voided"               # 作废
+ITEM_STATUS_DRAFT = "draft"  # 草稿（统计表生成后未确认）
+ITEM_STATUS_CONFIRMED = "confirmed"  # 已确定发函（进入发函阶段）
+ITEM_STATUS_SENT = "sent"  # 已发函（发函日期已锁定）
+ITEM_STATUS_RESPONDED = "responded"  # 已回函
+ITEM_STATUS_PARTIAL = "partial"  # 部分相符回函
+ITEM_STATUS_NO_REPLY = "no_reply"  # 未回函（已发函但到期未回）
+ITEM_STATUS_REJECTED = "rejected"  # 拒函
+ITEM_STATUS_MISMATCH = "mismatch"  # 不符
+ITEM_STATUS_VOIDED = "voided"  # 作废
 
 ITEM_STATUS_LABELS: dict[str, str] = {
     ITEM_STATUS_DRAFT: "草稿",
@@ -536,11 +687,11 @@ ITEM_STATUS_LABELS: dict[str, str] = {
 
 
 # 回函差异状态
-RESPONSE_MATCH = "match"          # 相符
-RESPONSE_PARTIAL = "partial"      # 部分相符
-RESPONSE_MISMATCH = "mismatch"    # 不符
-RESPONSE_REJECT = "reject"        # 拒函
-RESPONSE_UNCLEAR = "unclear"      # 不清楚 / 模糊
+RESPONSE_MATCH = "match"  # 相符
+RESPONSE_PARTIAL = "partial"  # 部分相符
+RESPONSE_MISMATCH = "mismatch"  # 不符
+RESPONSE_REJECT = "reject"  # 拒函
+RESPONSE_UNCLEAR = "unclear"  # 不清楚 / 模糊
 
 RESPONSE_STATUS_LABELS: dict[str, str] = {
     RESPONSE_MATCH: "相符",
@@ -557,13 +708,18 @@ class ConfirmationCase(Base):
     一旦「确定发函」(confirm) 后即锁定：发函日期、内容快照、金额快照不可再修改。
     避免后续账套数据更新导致多版本混乱——这是审计函证管理的核心约束。
     """
+
     __tablename__ = "confirmation_cases"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
 
     case_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    period_end: Mapped[str] = mapped_column(String(20), nullable=False, index=True)   # 报告期截止日 YYYY-MM-DD
+    period_end: Mapped[str] = mapped_column(
+        String(20), nullable=False, index=True
+    )  # 报告期截止日 YYYY-MM-DD
     fiscal_year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
 
     # 是否锁定：true 之后不能修改 items / letter 的金额与发函日期
@@ -599,42 +755,53 @@ class ConfirmationItem(Base):
     一旦所在 case 锁定，本行的金额快照由 ConfirmationLetter.amount_snapshot
     固化；本表自身的 book_balance 仅作历史参考。
     """
+
     __tablename__ = "confirmation_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    case_id: Mapped[int] = mapped_column(Integer, ForeignKey("confirmation_cases.id"), nullable=False, index=True)
+    case_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("confirmation_cases.id"), nullable=False, index=True
+    )
 
     # 函证方
     party_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     party_name: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
-    party_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)  # 银行账号/客户编号
+    party_id: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, index=True
+    )  # 银行账号/客户编号
     contact_person: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    contact_info: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)            # 地址/电话/邮箱
+    contact_info: Mapped[Optional[str]] = mapped_column(
+        String(300), nullable=True
+    )  # 地址/电话/邮箱
 
     # 我方核算信息
     account_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
     account_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    book_balance: Mapped[float] = mapped_column(Float, default=0.0)              # 账面余额
+    book_balance: Mapped[float] = mapped_column(Float, default=0.0)  # 账面余额
     book_balance_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
     # 函证项 (JSON 数组)
     #   银行:   ["存款余额","贷款余额","银行承兑汇票","保函/担保","信用证","委托贷款"...]
     #   客户:   ["应收账款余额","本期销售额","本期回款额","已背书票据","关键合同条款","在执行订单"...]
     #   供应商: ["应付账款余额","本期采购额","本期付款额","已背书票据","关键合同条款"...]
-    subject_matters: Mapped[str] = mapped_column(Text, default="[]")             # JSON 字符串
+    subject_matters: Mapped[str] = mapped_column(Text, default="[]")  # JSON 字符串
 
     # 金额汇总（多函证项时的合计）— 用 lock 时固化
-    total_confirm_amount: Mapped[float] = mapped_column(Float, default=0.0)      # 发函时需要对方确认的合计
+    total_confirm_amount: Mapped[float] = mapped_column(
+        Float, default=0.0
+    )  # 发函时需要对方确认的合计
 
     # 快照字段 (锁定时固化, 后续不可改)
-    subject_matters_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # send_letter 时固化
+    subject_matters_snapshot: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # send_letter 时固化
     total_confirm_amount_snapshot: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     book_balance_snapshot: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     # 选样
-    selection_method: Mapped[str] = mapped_column(String(30), default="auto")    # auto/manual
+    selection_method: Mapped[str] = mapped_column(String(30), default="auto")  # auto/manual
     selection_reason: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
-    importance: Mapped[str] = mapped_column(String(10), default="B")             # A=必发 / B=抽样 / C=补充
+    importance: Mapped[str] = mapped_column(String(10), default="B")  # A=必发 / B=抽样 / C=补充
 
     # 乐观锁版本号
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
@@ -661,20 +828,31 @@ class ConfirmationLetter(Base):
     `content_snapshot` / `amount_snapshot` 是 JSON 字符串，保存发出那一刻的
     完整内容；后续账套数据变化不影响已发函。
     """
+
     __tablename__ = "confirmation_letters"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    case_id: Mapped[int] = mapped_column(Integer, ForeignKey("confirmation_cases.id"), nullable=False, index=True)
-    item_id: Mapped[int] = mapped_column(Integer, ForeignKey("confirmation_items.id"), nullable=False, index=True)
+    case_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("confirmation_cases.id"), nullable=False, index=True
+    )
+    item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("confirmation_items.id"), nullable=False, index=True
+    )
 
     letter_no: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
-    letter_type: Mapped[str] = mapped_column(String(30), nullable=False)         # 同 party_type
-    template_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # bank_official / customer_std / supplier_std ...
-    seq: Mapped[int] = mapped_column(Integer, default=1, nullable=False)        # 同 case+item 下的发函序号
+    letter_type: Mapped[str] = mapped_column(String(30), nullable=False)  # 同 party_type
+    template_id: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )  # bank_official / customer_std / supplier_std ...
+    seq: Mapped[int] = mapped_column(
+        Integer, default=1, nullable=False
+    )  # 同 case+item 下的发函序号
 
     # 锁定字段 (发函日期确定后不能改)
     sent_date: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-    sent_method: Mapped[str] = mapped_column(String(30), default="邮寄")           # 邮寄/电子邮件/跟函/电邮+邮寄
+    sent_method: Mapped[str] = mapped_column(
+        String(30), default="邮寄"
+    )  # 邮寄/电子邮件/跟函/电邮+邮寄
     sent_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     sender_firm: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
@@ -683,10 +861,16 @@ class ConfirmationLetter(Base):
     courier_no: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # 快递单号
 
     # 锁定快照 (JSON)
-    content_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)        # 函证正文(文本/Markdown)
-    amount_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)        # {subject: amount, ...} 锁定金额
-    file_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)        # 生成的 docx/pdf 路径
-    file_format: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)       # docx/pdf
+    content_snapshot: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # 函证正文(文本/Markdown)
+    amount_snapshot: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # {subject: amount, ...} 锁定金额
+    file_path: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )  # 生成的 docx/pdf 路径
+    file_format: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # docx/pdf
 
     # 状态
     letter_status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
@@ -710,21 +894,24 @@ class ConfirmationResponse(Base):
 
     收到回函时录入：可手工录入，也可上传回函照片自动 OCR + AI 解析。
     """
+
     __tablename__ = "confirmation_responses"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     letter_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("confirmation_letters.id"), nullable=False, unique=True, index=True
     )
-    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)     # 历次覆写 +1
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # 历次覆写 +1
 
     received_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
-    response_method: Mapped[str] = mapped_column(String(30), default="纸质原件")   # 纸质原件/扫描件/电邮/传真
+    response_method: Mapped[str] = mapped_column(
+        String(30), default="纸质原件"
+    )  # 纸质原件/扫描件/电邮/传真
     response_status: Mapped[str] = mapped_column(String(20), default=RESPONSE_UNCLEAR, index=True)
 
     # 回函核心结论
-    amount_confirmed: Mapped[float] = mapped_column(Float, default=0.0)        # 对方确认金额
-    amount_difference: Mapped[float] = mapped_column(Float, default=0.0)       # 差异 = 对方 - 我方
+    amount_confirmed: Mapped[float] = mapped_column(Float, default=0.0)  # 对方确认金额
+    amount_difference: Mapped[float] = mapped_column(Float, default=0.0)  # 差异 = 对方 - 我方
     difference_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     response_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -732,8 +919,8 @@ class ConfirmationResponse(Base):
     subjects_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # OCR / AI
-    raw_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)        # OCR 原始文本
-    ai_extracted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)     # AI 抽取结果 JSON
+    raw_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # OCR 原始文本
+    ai_extracted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # AI 抽取结果 JSON
     is_manually_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     confirmed_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -750,6 +937,7 @@ class ConfirmationResponse(Base):
 
 class ConfirmationResponsePhoto(Base):
     """回函照片 — 纸质回函拍照后上传 → OCR + AI 解析 → 回填到 ConfirmationResponse。"""
+
     __tablename__ = "confirmation_response_photos"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -764,10 +952,12 @@ class ConfirmationResponsePhoto(Base):
     ocr_text: Mapped[str] = mapped_column(Text, default="")
 
     # AI 解析结果
-    parsed_data: Mapped[Optional[str]] = mapped_column(Text, nullable=True)       # JSON
-    match_status: Mapped[str] = mapped_column(String(20), default="pending")    # pending/parsed/matched/failed
+    parsed_data: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
+    match_status: Mapped[str] = mapped_column(
+        String(20), default="pending"
+    )  # pending/parsed/matched/failed
     matched_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    matched_subjects: Mapped[Optional[str]] = mapped_column(Text, nullable=True) # JSON 数组
+    matched_subjects: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 数组
 
     note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
@@ -786,22 +976,33 @@ class InventoryCountPhoto(Base):
     "实盘数量" 列，回填到 InventoryCountSheet.counted_qty。每张照片可能覆盖
     多行（解析结果以 JSON 数组保存在 matched_rows）。
     """
+
     __tablename__ = "inventory_count_photos"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
-    plan_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("inventory_count_plans.id"), nullable=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
+    plan_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("inventory_count_plans.id"), nullable=True
+    )
 
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
-    media_type: Mapped[str] = mapped_column(String(20), nullable=False)              # image/jpeg, image/png, application/pdf
-    file_path: Mapped[str] = mapped_column(String(500), nullable=False)              # 存盘相对路径
-    ocr_engine: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)    # paddleocr / easyocr / tesseract / manual
+    media_type: Mapped[str] = mapped_column(
+        String(20), nullable=False
+    )  # image/jpeg, image/png, application/pdf
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)  # 存盘相对路径
+    ocr_engine: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )  # paddleocr / easyocr / tesseract / manual
     ocr_text: Mapped[str] = mapped_column(Text, default="")
 
     # AI 解析结果 (JSON 字符串)
-    parsed_rows: Mapped[Optional[str]] = mapped_column(Text, nullable=True)         # [{material_code, counted_qty, ...}]
-    matched_count: Mapped[int] = mapped_column(Integer, default=0)                  # 成功回填的行数
-    unmatched_count: Mapped[int] = mapped_column(Integer, default=0)                # 未匹配的行数
+    parsed_rows: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # [{material_code, counted_qty, ...}]
+    matched_count: Mapped[int] = mapped_column(Integer, default=0)  # 成功回填的行数
+    unmatched_count: Mapped[int] = mapped_column(Integer, default=0)  # 未匹配的行数
     counted_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     counted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
@@ -856,7 +1057,9 @@ class Regulation(Base):
     attachments: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 数组
 
     # 内容指纹（去重）
-    content_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    content_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
 
     # 元数据
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
@@ -988,7 +1191,7 @@ class KnowledgeRetrievalLog(Base):
     # 触发位置：account_code/template_type/risk_id 等
 
     top_chunk_ids: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 数组
-    top_scores: Mapped[Optional[str]] = mapped_column(Text, nullable=True)     # JSON 数组
+    top_scores: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 数组
     result_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
@@ -1000,10 +1203,10 @@ class KnowledgeRetrievalLog(Base):
 
 
 # ---- 舆情事件严重度 ----------------------------------------------------
-SENTIMENT_SEVERITY_INFO = "info"           # 一般资讯（参考性）
-SENTIMENT_SEVERITY_NOTICE = "notice"       # 关注（需审计师过目）
-SENTIMENT_SEVERITY_WARN = "warn"           # 警示（潜在风险）
-SENTIMENT_SEVERITY_CRITICAL = "critical"   # 重大风险（领导必看）
+SENTIMENT_SEVERITY_INFO = "info"  # 一般资讯（参考性）
+SENTIMENT_SEVERITY_NOTICE = "notice"  # 关注（需审计师过目）
+SENTIMENT_SEVERITY_WARN = "warn"  # 警示（潜在风险）
+SENTIMENT_SEVERITY_CRITICAL = "critical"  # 重大风险（领导必看）
 
 SENTIMENT_SEVERITY_LABELS: dict[str, str] = {
     SENTIMENT_SEVERITY_INFO: "一般",
@@ -1014,12 +1217,12 @@ SENTIMENT_SEVERITY_LABELS: dict[str, str] = {
 
 
 # ---- 舆情事件来源类型 --------------------------------------------------
-SENTIMENT_SOURCE_REGULATOR = "regulator"   # 监管/交易所/工商
-SENTIMENT_SOURCE_NEWS = "news"            # 财经新闻媒体
-SENTIMENT_SOURCE_ANNOUNCE = "announce"    # 公司公告/招股书
-SENTIMENT_SOURCE_RSS = "rss"              # RSS 订阅
-SENTIMENT_SOURCE_PAID_API = "paid_api"    # 付费搜索 API
-SENTIMENT_SOURCE_MANUAL = "manual"        # 审计师手工录入
+SENTIMENT_SOURCE_REGULATOR = "regulator"  # 监管/交易所/工商
+SENTIMENT_SOURCE_NEWS = "news"  # 财经新闻媒体
+SENTIMENT_SOURCE_ANNOUNCE = "announce"  # 公司公告/招股书
+SENTIMENT_SOURCE_RSS = "rss"  # RSS 订阅
+SENTIMENT_SOURCE_PAID_API = "paid_api"  # 付费搜索 API
+SENTIMENT_SOURCE_MANUAL = "manual"  # 审计师手工录入
 SENTIMENT_SOURCE_OTHER = "other"
 
 SENTIMENT_SOURCE_TYPE_LABELS: dict[str, str] = {
@@ -1034,10 +1237,10 @@ SENTIMENT_SOURCE_TYPE_LABELS: dict[str, str] = {
 
 
 # ---- 事件审核状态 -------------------------------------------------------
-SENTIMENT_EVENT_STATUS_UNREAD = "unread"           # 未读
-SENTIMENT_EVENT_STATUS_READ = "read"               # 已读
-SENTIMENT_EVENT_STATUS_IGNORED = "ignored"         # 已忽略
-SENTIMENT_EVENT_STATUS_ATTACHED = "attached"       # 已挂入某简报
+SENTIMENT_EVENT_STATUS_UNREAD = "unread"  # 未读
+SENTIMENT_EVENT_STATUS_READ = "read"  # 已读
+SENTIMENT_EVENT_STATUS_IGNORED = "ignored"  # 已忽略
+SENTIMENT_EVENT_STATUS_ATTACHED = "attached"  # 已挂入某简报
 
 SENTIMENT_EVENT_STATUS_LABELS: dict[str, str] = {
     SENTIMENT_EVENT_STATUS_UNREAD: "未读",
@@ -1051,7 +1254,7 @@ SENTIMENT_EVENT_STATUS_LABELS: dict[str, str] = {
 SENTIMENT_SOURCE_STATUS_SUCCESS = "success"
 SENTIMENT_SOURCE_STATUS_PARTIAL = "partial"
 SENTIMENT_SOURCE_STATUS_FAILED = "failed"
-SENTIMENT_SOURCE_STATUS_SKIPPED = "skipped"        # 付费源无 key 时
+SENTIMENT_SOURCE_STATUS_SKIPPED = "skipped"  # 付费源无 key 时
 SENTIMENT_SOURCE_STATUS_DISABLED = "disabled"
 
 SENTIMENT_SOURCE_STATUS_LABELS: dict[str, str] = {
@@ -1064,11 +1267,11 @@ SENTIMENT_SOURCE_STATUS_LABELS: dict[str, str] = {
 
 
 # ---- 简报/报告审阅状态机 ------------------------------------------------
-SENTIMENT_DOC_STATUS_DRAFT = "draft"         # 草稿（AI 跑完待人工核对）
-SENTIMENT_DOC_STATUS_REVIEW = "review"       # 已提交审阅
-SENTIMENT_DOC_STATUS_APPROVED = "approved"   # 已批准
-SENTIMENT_DOC_STATUS_REJECTED = "rejected"   # 已驳回
-SENTIMENT_DOC_STATUS_FROZEN = "frozen"       # 锁定快照（与 is_locked 联动）
+SENTIMENT_DOC_STATUS_DRAFT = "draft"  # 草稿（AI 跑完待人工核对）
+SENTIMENT_DOC_STATUS_REVIEW = "review"  # 已提交审阅
+SENTIMENT_DOC_STATUS_APPROVED = "approved"  # 已批准
+SENTIMENT_DOC_STATUS_REJECTED = "rejected"  # 已驳回
+SENTIMENT_DOC_STATUS_FROZEN = "frozen"  # 锁定快照（与 is_locked 联动）
 
 SENTIMENT_DOC_STATUS_LABELS: dict[str, str] = {
     SENTIMENT_DOC_STATUS_DRAFT: "草稿",
@@ -1080,8 +1283,16 @@ SENTIMENT_DOC_STATUS_LABELS: dict[str, str] = {
 
 # 合法状态流转图：key = 当前状态，value = 允许的下一状态集合
 SENTIMENT_DOC_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    SENTIMENT_DOC_STATUS_DRAFT: {SENTIMENT_DOC_STATUS_REVIEW, SENTIMENT_DOC_STATUS_FROZEN, SENTIMENT_DOC_STATUS_REJECTED},
-    SENTIMENT_DOC_STATUS_REVIEW: {SENTIMENT_DOC_STATUS_APPROVED, SENTIMENT_DOC_STATUS_REJECTED, SENTIMENT_DOC_STATUS_DRAFT},
+    SENTIMENT_DOC_STATUS_DRAFT: {
+        SENTIMENT_DOC_STATUS_REVIEW,
+        SENTIMENT_DOC_STATUS_FROZEN,
+        SENTIMENT_DOC_STATUS_REJECTED,
+    },
+    SENTIMENT_DOC_STATUS_REVIEW: {
+        SENTIMENT_DOC_STATUS_APPROVED,
+        SENTIMENT_DOC_STATUS_REJECTED,
+        SENTIMENT_DOC_STATUS_DRAFT,
+    },
     SENTIMENT_DOC_STATUS_APPROVED: {SENTIMENT_DOC_STATUS_FROZEN},
     SENTIMENT_DOC_STATUS_REJECTED: {SENTIMENT_DOC_STATUS_DRAFT, SENTIMENT_DOC_STATUS_REVIEW},
     SENTIMENT_DOC_STATUS_FROZEN: set(),  # 冻结后任何状态都不允许直转
@@ -1090,7 +1301,7 @@ SENTIMENT_DOC_STATUS_TRANSITIONS: dict[str, set[str]] = {
 
 # ---- 季度报告期次类型 ---------------------------------------------------
 SENTIMENT_PERIOD_TYPE_Q1 = "Q1"
-SENTIMENT_PERIOD_TYPE_H1 = "H1"     # 半年报
+SENTIMENT_PERIOD_TYPE_H1 = "H1"  # 半年报
 SENTIMENT_PERIOD_TYPE_Q3 = "Q3"
 SENTIMENT_PERIOD_TYPE_ANNUAL = "ANNUAL"
 
@@ -1153,6 +1364,7 @@ class SentimentSubject(Base):
     match_mode 取值: exact / contains / regex
     weight 用于多别名同时出现时取最高权重。
     """
+
     __tablename__ = "sentiment_subjects"
     __table_args__ = (
         UniqueConstraint("project_id", "alias_value", name="uq_sentiment_subjects_project_alias"),
@@ -1182,6 +1394,7 @@ class SentimentSource(Base):
     provider_type 取值: free_rss / free_scrape / paid_api / manual
     is_paid=True 时 scheduler 会检查 api_key_ref 对应的 settings 字段非空才执行。
     """
+
     __tablename__ = "sentiment_sources"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -1191,8 +1404,10 @@ class SentimentSource(Base):
     base_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     is_paid: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    api_key_ref: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # 例: TAVILY_API_KEY
-    config_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)         # 抓取参数 JSON
+    api_key_ref: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )  # 例: TAVILY_API_KEY
+    config_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 抓取参数 JSON
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
 
     last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -1209,30 +1424,43 @@ class SentimentEvent(Base):
 
     content_hash = SHA256(source_code|title|url|publish_date)，唯一索引（防重抓）。
     """
+
     __tablename__ = "sentiment_events"
     __table_args__ = (
         UniqueConstraint("content_hash", name="uq_sentiment_events_content_hash"),
         Index("ix_sentiment_events_project_date", "project_id", "publish_date"),
-        Index("ix_sentiment_events_project_severity_status", "project_id", "severity", "review_status"),
+        Index(
+            "ix_sentiment_events_project_severity_status", "project_id", "severity", "review_status"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False)
-    source_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("sentiment_sources.id"), nullable=True)
+    source_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("sentiment_sources.id"), nullable=True
+    )
     source_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
 
-    event_kind: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, index=True)  # 处罚/问询/公告/...
-    severity: Mapped[str] = mapped_column(String(20), default=SENTIMENT_SEVERITY_INFO, nullable=False, index=True)
-    review_status: Mapped[str] = mapped_column(String(20), default=SENTIMENT_EVENT_STATUS_UNREAD, nullable=False, index=True)
+    event_kind: Mapped[Optional[str]] = mapped_column(
+        String(30), nullable=True, index=True
+    )  # 处罚/问询/公告/...
+    severity: Mapped[str] = mapped_column(
+        String(20), default=SENTIMENT_SEVERITY_INFO, nullable=False, index=True
+    )
+    review_status: Mapped[str] = mapped_column(
+        String(20), default=SENTIMENT_EVENT_STATUS_UNREAD, nullable=False, index=True
+    )
 
     title: Mapped[str] = mapped_column(Text, nullable=False)
     url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     publisher: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    publish_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)  # YYYY-MM-DD
-    content_text: Mapped[str] = mapped_column(Text, default="", nullable=False)               # 限 8K
+    publish_date: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True, index=True
+    )  # YYYY-MM-DD
+    content_text: Mapped[str] = mapped_column(Text, default="", nullable=False)  # 限 8K
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     matched_alias: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    raw_payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)                    # 原始 JSON
+    raw_payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 原始 JSON
 
     attached_briefing_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("sentiment_daily_briefings.id"), nullable=True, index=True
@@ -1256,6 +1484,7 @@ class SentimentDailyBriefing(Base):
     修订必须新建 SentimentDailyBriefingRevision。
     状态机：draft → review → approved/frozen，rejected → draft/review。
     """
+
     __tablename__ = "sentiment_daily_briefings"
     __table_args__ = (
         UniqueConstraint("project_id", "briefing_date", name="uq_sentiment_briefings_project_date"),
@@ -1285,11 +1514,15 @@ class SentimentDailyBriefing(Base):
     word_report_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
 
     # 校验
-    verification_failed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    verification_failed: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
     verification_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # 审阅流
-    status: Mapped[str] = mapped_column(String(20), default=SENTIMENT_DOC_STATUS_DRAFT, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        String(20), default=SENTIMENT_DOC_STATUS_DRAFT, nullable=False, index=True
+    )
     submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     submitted_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -1302,12 +1535,15 @@ class SentimentDailyBriefing(Base):
 
     project: Mapped["Project"] = relationship(back_populates="daily_briefings")
     revisions: Mapped[list["SentimentDailyBriefingRevision"]] = relationship(
-        back_populates="briefing", cascade="all, delete-orphan", order_by="SentimentDailyBriefingRevision.version_no"
+        back_populates="briefing",
+        cascade="all, delete-orphan",
+        order_by="SentimentDailyBriefingRevision.version_no",
     )
 
 
 class SentimentDailyBriefingRevision(Base):
     """每日简报版本历史 — 任何对已锁简报的修订都新建一行。"""
+
     __tablename__ = "sentiment_daily_briefing_revisions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -1325,9 +1561,12 @@ class SentimentDailyBriefingRevision(Base):
 
 class SentimentQuarterlyReport(Base):
     """季度跟踪报告 — 季报发布后触发，结合窗口期简报集 + 季报数据生成。"""
+
     __tablename__ = "sentiment_quarterly_reports"
     __table_args__ = (
-        UniqueConstraint("project_id", "period_type", "fiscal_year", name="uq_sentiment_quarterly_project_period"),
+        UniqueConstraint(
+            "project_id", "period_type", "fiscal_year", name="uq_sentiment_quarterly_project_period"
+        ),
         Index("ix_sentiment_quarterly_project_status", "project_id", "status"),
     )
 
@@ -1340,8 +1579,12 @@ class SentimentQuarterlyReport(Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
 
     # 触发
-    trigger_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)   # manual / financials_uploaded / scheduled
-    trigger_event_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("sentiment_events.id"), nullable=True)
+    trigger_type: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True
+    )  # manual / financials_uploaded / scheduled
+    trigger_event_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("sentiment_events.id"), nullable=True
+    )
 
     # 输入窗口
     daily_briefing_window_start: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
@@ -1351,7 +1594,9 @@ class SentimentQuarterlyReport(Base):
 
     # 财务输入
     financial_input_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    financial_input_source: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # manual / uploaded_pdf / uploaded_excel
+    financial_input_source: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )  # manual / uploaded_pdf / uploaded_excel
     financial_input_verified_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     financial_input_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
@@ -1368,7 +1613,9 @@ class SentimentQuarterlyReport(Base):
     word_report_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
 
     # 校验
-    verification_failed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    verification_failed: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
     verification_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # 锁定 + 审阅
@@ -1377,7 +1624,9 @@ class SentimentQuarterlyReport(Base):
     locked_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     lock_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
-    status: Mapped[str] = mapped_column(String(20), default=SENTIMENT_DOC_STATUS_DRAFT, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        String(20), default=SENTIMENT_DOC_STATUS_DRAFT, nullable=False, index=True
+    )
     submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     submitted_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -1389,12 +1638,15 @@ class SentimentQuarterlyReport(Base):
 
     project: Mapped["Project"] = relationship(back_populates="quarterly_reports")
     revisions: Mapped[list["SentimentQuarterlyReportRevision"]] = relationship(
-        back_populates="report", cascade="all, delete-orphan", order_by="SentimentQuarterlyReportRevision.version_no"
+        back_populates="report",
+        cascade="all, delete-orphan",
+        order_by="SentimentQuarterlyReportRevision.version_no",
     )
 
 
 class SentimentQuarterlyReportRevision(Base):
     """季度报告版本历史。"""
+
     __tablename__ = "sentiment_quarterly_report_revisions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -1413,13 +1665,14 @@ class SentimentQuarterlyReportRevision(Base):
 
 class SentimentNotification(Base):
     """站内通知 — 驱动红点。"""
+
     __tablename__ = "sentiment_notifications"
-    __table_args__ = (
-        Index("ix_sentiment_notifications_project_read", "project_id", "is_read"),
-    )
+    __table_args__ = (Index("ix_sentiment_notifications_project_read", "project_id", "is_read"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    project_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=True, index=True
+    )
     notification_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -1436,12 +1689,12 @@ class SentimentNotification(Base):
 
 # ---- 人员级别 -------------------------------------------------------
 
-MEMBER_LEVEL_LEAD = "lead"                       # 项目负责人 / 合伙人
-MEMBER_LEVEL_SENIOR_MANAGER = "senior_manager"   # 高级经理
-MEMBER_LEVEL_MANAGER = "manager"                 # 经理
-MEMBER_LEVEL_SENIOR_AUDITOR = "senior_auditor"   # 高级审计员
-MEMBER_LEVEL_AUDITOR = "auditor"                 # 审计员
-MEMBER_LEVEL_INTERN = "intern"                   # 实习生
+MEMBER_LEVEL_LEAD = "lead"  # 项目负责人 / 合伙人
+MEMBER_LEVEL_SENIOR_MANAGER = "senior_manager"  # 高级经理
+MEMBER_LEVEL_MANAGER = "manager"  # 经理
+MEMBER_LEVEL_SENIOR_AUDITOR = "senior_auditor"  # 高级审计员
+MEMBER_LEVEL_AUDITOR = "auditor"  # 审计员
+MEMBER_LEVEL_INTERN = "intern"  # 实习生
 
 MEMBER_LEVEL_LABELS: dict[str, str] = {
     MEMBER_LEVEL_LEAD: "项目负责人",
@@ -1471,11 +1724,11 @@ MEMBER_STATUS_LABELS: dict[str, str] = {
 
 # ---- 任务状态 -------------------------------------------------------
 
-TASK_STATUS_PENDING = "pending"           # 待办
-TASK_STATUS_IN_PROGRESS = "in_progress"   # 进行中
-TASK_STATUS_BLOCKED = "blocked"           # 卡点阻塞
-TASK_STATUS_DONE = "done"                 # 完成
-TASK_STATUS_CANCELLED = "cancelled"       # 取消
+TASK_STATUS_PENDING = "pending"  # 待办
+TASK_STATUS_IN_PROGRESS = "in_progress"  # 进行中
+TASK_STATUS_BLOCKED = "blocked"  # 卡点阻塞
+TASK_STATUS_DONE = "done"  # 完成
+TASK_STATUS_CANCELLED = "cancelled"  # 取消
 
 TASK_STATUS_LABELS: dict[str, str] = {
     TASK_STATUS_PENDING: "待办",
@@ -1496,10 +1749,10 @@ TASK_PRIORITY_LABELS: dict[str, str] = {
 }
 
 # 计划状态
-WORK_PLAN_STATUS_DRAFT = "draft"          # 草稿（AI 已生成但未确认）
-WORK_PLAN_STATUS_ACTIVE = "active"        # 进行中
+WORK_PLAN_STATUS_DRAFT = "draft"  # 草稿（AI 已生成但未确认）
+WORK_PLAN_STATUS_ACTIVE = "active"  # 进行中
 WORK_PLAN_STATUS_COMPLETED = "completed"  # 已完成
-WORK_PLAN_STATUS_ARCHIVED = "archived"    # 归档
+WORK_PLAN_STATUS_ARCHIVED = "archived"  # 归档
 
 WORK_PLAN_STATUS_LABELS: dict[str, str] = {
     WORK_PLAN_STATUS_DRAFT: "草稿",
@@ -1510,11 +1763,11 @@ WORK_PLAN_STATUS_LABELS: dict[str, str] = {
 
 # ---- 会议 ----------------------------------------------------------
 
-MEETING_TYPE_DAILY = "daily"              # 站会
-MEETING_TYPE_WEEKLY = "weekly"            # 周会
-MEETING_TYPE_KICKOFF = "kickoff"          # 启动会
-MEETING_TYPE_REVIEW = "review"            # 复核会
-MEETING_TYPE_ADHOC = "adhoc"              # 临时
+MEETING_TYPE_DAILY = "daily"  # 站会
+MEETING_TYPE_WEEKLY = "weekly"  # 周会
+MEETING_TYPE_KICKOFF = "kickoff"  # 启动会
+MEETING_TYPE_REVIEW = "review"  # 复核会
+MEETING_TYPE_ADHOC = "adhoc"  # 临时
 
 MEETING_TYPE_LABELS: dict[str, str] = {
     MEETING_TYPE_DAILY: "站会",
@@ -1603,7 +1856,9 @@ class TeamMember(Base):
     # 特长/擅长领域 (JSON 字符串数组), 例如 ["收入循环", "存货盘点"]
     specialties: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default=MEMBER_STATUS_ACTIVE, nullable=False)
-    joined_at: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 入职日期 YYYY-MM-DD
+    joined_at: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True
+    )  # 入职日期 YYYY-MM-DD
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
@@ -1613,9 +1868,7 @@ class TeamMember(Base):
     # 一旦删除成员，级联会静默删除该成员所有 ProjectAssignment / WorkPlanItem /
     # DailyReport / Blocker，破坏审计轨迹。删除成员前应先做软删除
     # (status='inactive') 或显式清理关联数据。
-    assignments: Mapped[list["ProjectAssignment"]] = relationship(
-        back_populates="member"
-    )
+    assignments: Mapped[list["ProjectAssignment"]] = relationship(back_populates="member")
     work_plan_items: Mapped[list["WorkPlanItem"]] = relationship(back_populates="assignee")
     daily_reports: Mapped[list["DailyReport"]] = relationship(back_populates="member")
     blockers: Mapped[list["Blocker"]] = relationship(back_populates="raised_by")
@@ -1630,9 +1883,15 @@ class ProjectAssignment(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
-    member_id: Mapped[int] = mapped_column(Integer, ForeignKey("team_members.id"), nullable=False, index=True)
-    role_in_project: Mapped[str] = mapped_column(String(50), default=PROJECT_ROLE_MEMBER, nullable=False)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
+    member_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("team_members.id"), nullable=False, index=True
+    )
+    role_in_project: Mapped[str] = mapped_column(
+        String(50), default=PROJECT_ROLE_MEMBER, nullable=False
+    )
     hourly_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     workload_pct: Mapped[float] = mapped_column(Float, default=100.0)  # 投入百分比
     start_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
@@ -1649,13 +1908,19 @@ class WorkPlan(Base):
     __tablename__ = "work_plans"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default=WORK_PLAN_STATUS_DRAFT, nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    generated_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # "ai" / "manual:<user>"
+    generated_by: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )  # "ai" / "manual:<user>"
     total_estimated_hours: Mapped[float] = mapped_column(Float, default=0.0)
-    ai_prompt_used: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 记录 AI 用了什么 prompt
+    ai_prompt_used: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # 记录 AI 用了什么 prompt
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
@@ -1673,7 +1938,9 @@ class WorkPlanItem(Base):
     __tablename__ = "work_plan_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    plan_id: Mapped[int] = mapped_column(Integer, ForeignKey("work_plans.id"), nullable=False, index=True)
+    plan_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("work_plans.id"), nullable=False, index=True
+    )
     member_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("team_members.id"), nullable=True, index=True
     )
@@ -1701,7 +1968,8 @@ class WorkPlanItem(Base):
     assignee: Mapped[Optional["TeamMember"]] = relationship(back_populates="work_plan_items")
     # 自引用：父子任务
     children: Mapped[list["WorkPlanItem"]] = relationship(
-        "WorkPlanItem", back_populates="parent",
+        "WorkPlanItem",
+        back_populates="parent",
         cascade="all, delete-orphan",
         remote_side="WorkPlanItem.parent_item_id",
     )
@@ -1716,14 +1984,20 @@ class Meeting(Base):
     __tablename__ = "meetings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
-    meeting_type: Mapped[str] = mapped_column(String(20), default=MEETING_TYPE_WEEKLY, nullable=False)
+    meeting_type: Mapped[str] = mapped_column(
+        String(20), default=MEETING_TYPE_WEEKLY, nullable=False
+    )
     scheduled_at: Mapped[str] = mapped_column(String(20), nullable=False)  # YYYY-MM-DD HH:MM
     duration_minutes: Mapped[int] = mapped_column(Integer, default=60)
     location: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     agenda: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default=MEETING_STATUS_SCHEDULED, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default=MEETING_STATUS_SCHEDULED, nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -1751,7 +2025,9 @@ class MeetingRecord(Base):
     attendees: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # AI 评估
     quality_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # 0-100
-    ai_assessment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON: {strengths, weaknesses, suggestions}
+    ai_assessment: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # JSON: {strengths, weaknesses, suggestions}
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     recorded_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     recorded_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
@@ -1765,16 +2041,18 @@ class DailyReport(Base):
     __tablename__ = "daily_reports"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     member_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("team_members.id"), nullable=False, index=True
     )
     report_date: Mapped[str] = mapped_column(String(20), nullable=False, index=True)  # YYYY-MM-DD
-    completed_work: Mapped[str] = mapped_column(Text, nullable=False)                # 已完成
-    in_progress_work: Mapped[Optional[str]] = mapped_column(Text, nullable=True)     # 进行中
-    blockers_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)      # 卡点摘要
-    next_day_plan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)         # 次日计划
-    hours_logged: Mapped[float] = mapped_column(Float, default=0.0)                  # 实际工时
+    completed_work: Mapped[str] = mapped_column(Text, nullable=False)  # 已完成
+    in_progress_work: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 进行中
+    blockers_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 卡点摘要
+    next_day_plan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 次日计划
+    hours_logged: Mapped[float] = mapped_column(Float, default=0.0)  # 实际工时
     submitted_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     member: Mapped["TeamMember"] = relationship(back_populates="daily_reports")
@@ -1787,7 +2065,9 @@ class Blocker(Base):
     __tablename__ = "blockers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     member_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("team_members.id"), nullable=False, index=True
     )
@@ -1796,7 +2076,9 @@ class Blocker(Base):
     )
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    severity: Mapped[str] = mapped_column(String(20), default=BLOCKER_SEVERITY_MEDIUM, nullable=False)
+    severity: Mapped[str] = mapped_column(
+        String(20), default=BLOCKER_SEVERITY_MEDIUM, nullable=False
+    )
     status: Mapped[str] = mapped_column(String(20), default=BLOCKER_STATUS_OPEN, nullable=False)
     raised_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -1815,7 +2097,9 @@ class ProgressSnapshot(Base):
     __tablename__ = "progress_snapshots"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     member_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("team_members.id"), nullable=True, index=True
     )
@@ -1839,10 +2123,14 @@ class ManagementRecommendation(Base):
     __tablename__ = "management_recommendations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    period_start: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 建议覆盖的开始日期
-    period_end: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)    # 结束日期
+    period_start: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True
+    )  # 建议覆盖的开始日期
+    period_end: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 结束日期
     # 关键发现 — JSON 数组 [{category, severity, finding, evidence}]
     findings: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # 优先行动 — JSON 数组 [{action, owner, deadline, rationale}]
@@ -1860,9 +2148,11 @@ class ManagementRecommendation(Base):
 
     project: Mapped["Project"] = relationship(back_populates="management_recommendations")
 
+
 # ============================================================
 # 综合底稿自动生成 — 多所模板管理与历史底稿库
 # ============================================================
+
 
 class FirmTemplate(Base):
     """事务所综合底稿模板（多所隔离 + 版本管理）。

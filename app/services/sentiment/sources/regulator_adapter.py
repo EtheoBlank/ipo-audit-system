@@ -5,6 +5,7 @@
 - 增量逻辑: 解析 RegulationItem, 按 SentimentSubject 关键词过滤后转 RawSentimentItem
 - 失败时静默降级 (返回空列表), 不影响主流程
 """
+
 from __future__ import annotations
 
 import logging
@@ -60,7 +61,11 @@ class RegulatorAdapter(BaseSentimentSourceAdapter):
             if not matched:
                 continue
             # 严重度: 处罚/问询 → critical/warn
-            sev = "critical" if "处罚" in title or "罚" in title else ("warn" if "问询" in title or "关注" in title else "notice")
+            sev = (
+                "critical"
+                if "处罚" in title or "罚" in title
+                else ("warn" if "问询" in title or "关注" in title else "notice")
+            )
             out.append(
                 RawSentimentItem(
                     project_id=project.id,

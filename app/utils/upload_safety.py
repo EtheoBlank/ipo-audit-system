@@ -32,7 +32,7 @@ def sanitize_filename(name: Optional[str], default: str = "upload") -> str:
     """Return a path-safe basename (no separators, no NUL, length <= 240)."""
     if not name:
         return default
-    base = Path(name).name        # strip any directory parts
+    base = Path(name).name  # strip any directory parts
     base = base.replace("\x00", "_")
     base = _FILENAME_KEEP.sub("_", base)
     base = base.strip("._") or default
@@ -83,6 +83,7 @@ def unique_save_path(base_dir: Path, safe_name: str) -> Path:
     already created ``base_dir``.
     """
     from datetime import datetime
+
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     uniq = uuid.uuid4().hex[:8]
     target = base_dir / f"{ts}_{uniq}_{safe_name}"
@@ -111,7 +112,9 @@ def neutralize_formula(value: object) -> object:
 
 def neutralize_dataframe_strings(df, columns: Optional[Iterable[str]] = None):
     """In-place neutralise DDE prefixes in selected string columns."""
-    cols = list(columns) if columns is not None else [c for c in df.columns if df[c].dtype == object]
+    cols = (
+        list(columns) if columns is not None else [c for c in df.columns if df[c].dtype == object]
+    )
     for c in cols:
         if c in df.columns:
             df[c] = df[c].apply(neutralize_formula)
