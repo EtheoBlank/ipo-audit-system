@@ -64,10 +64,12 @@ async def authenticate(
         ):
             user.is_locked = True
             logger.warning("账户 %s 失败次数 %s 达阈值, 已锁定", username, user.failed_login_count)
+        # 先 commit 再 raise — 失败计数必须落库, 否则攻击者可无限重试
         try:
             await db.commit()
         except Exception:  # noqa: BLE001
             await db.rollback()
+            logger.exception("登录失败计数落库失败, 安全风险: 账户 %s 可被暴力破解", username)
         raise AuthenticationError("用户名或密码错误")
 
     # 成功

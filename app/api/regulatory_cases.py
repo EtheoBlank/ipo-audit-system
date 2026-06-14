@@ -56,7 +56,7 @@ async def list_regulatory_cases(
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """List regulatory cases with optional filters."""
-    query = select(RegulatoryCase).where(RegulatoryCase.is_active == True)
+    query = select(RegulatoryCase).where(RegulatoryCase.is_active.is_(True))
 
     if case_type:
         query = query.where(RegulatoryCase.case_type == case_type)
@@ -93,7 +93,7 @@ async def search_by_keywords(
     """Search regulatory cases by keywords."""
     keyword_list = [kw.strip() for kw in keywords.split(",")]
 
-    result = await db.execute(select(RegulatoryCase).where(RegulatoryCase.is_active == True))
+    result = await db.execute(select(RegulatoryCase).where(RegulatoryCase.is_active.is_(True)))
     all_cases = result.scalars().all()
 
     scraper = RegulatoryCaseScraper()
@@ -119,7 +119,7 @@ async def search_by_industry(
     result = await db.execute(
         select(RegulatoryCase).where(
             RegulatoryCase.industry == industry,
-            RegulatoryCase.is_active == True,
+            RegulatoryCase.is_active.is_(True),
         )
     )
     cases = result.scalars().all()

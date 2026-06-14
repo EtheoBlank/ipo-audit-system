@@ -350,7 +350,7 @@ def _tab_completion(project_id: int, default_pe: date):
     with col2:
         mat = st.number_input(
             "重要性水平金额（元）", value=0.0, min_value=0.0, key="comp_mat",
-            help="≥ 该值的差异归入"重大差异"组，需重点关注；常按税前利润 5% 估算",
+            help="≥ 该值的差异归入『重大差异』组，需重点关注；常按税前利润 5% 估算",
         )
     if st.button("🔄 刷新统计", key="comp_refresh"):
         st.cache_data.clear()
@@ -568,17 +568,15 @@ def _tab_export(project_id: int, default_pe: date):
     st.caption("生成的工作簿含：收发存明细 / 盘点计划 / 盘点用表 / 已盘点情况 / 盘点率统计 / 库龄分析 / 跌价测试 / 跌价汇总")
     pe = st.date_input("报告期截止日", value=default_pe, key="exp_pe")
     if st.button("📥 生成并下载", type="primary", key="exp_btn"):
-        url = f"{API_BASE_URL}/api/inventory/projects/{project_id}/export?period_end={pe.isoformat()}"
-        try:
-            r = requests.get(url, timeout=120)
-            if r.status_code >= 400:
-                st.error(f"导出失败：{r.text}")
-                return
+        # 走统一的 _api (auth 头 + 统一错误处理), 不再直连 requests
+        content = _api(
+            "GET",
+            f"/api/inventory/projects/{project_id}/export?period_end={pe.isoformat()}",
+        )
+        if isinstance(content, bytes) and content:
             st.download_button(
                 "⬇️ 下载 Excel",
-                data=r.content,
+                data=content,
                 file_name=f"inventory_project_{project_id}_{pe.isoformat()}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-        except requests.exceptions.RequestException as exc:
-            st.error(f"下载失败：{exc}")

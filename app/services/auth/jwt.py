@@ -25,13 +25,23 @@ class JWTError(Exception):
 
 # 优先 python-jose
 _jose_jwt = None
+
+
+class _JoseErrorSentinel(Exception):
+    """python-jose 不可用时的占位异常类型 — 仅用于 except 分支结构.
+
+    之前用 ``_JoseError = Exception`` 会把"任何异常"当成 JWT 错误吞掉, 真实的编程 bug
+    (TypeError 等) 会被掩盖. 用独立占位类型避免这个问题.
+    """
+
+
+_JoseError = _JoseErrorSentinel
 try:  # pragma: no cover
     from jose import jwt as _jose_jwt  # type: ignore
     from jose import JWTError as _JoseError  # type: ignore
 except Exception as exc:  # noqa: BLE001
     logger.warning("python-jose 不可用, JWT 走 stdlib 兜底: %s", exc)
     _jose_jwt = None
-    _JoseError = Exception  # type: ignore
 
 
 def _utcnow() -> datetime:
@@ -85,6 +95,10 @@ def _stdlib_decode(token: str) -> Dict[str, Any]:
             raise JWTError("exp 字段格式错") from exc
         if exp_dt <= _utcnow():
             raise JWTError("token 已过期")
+    # 校验 iss — 防止别的部署/环境的 token 拿来重放 (即使 JWT_SECRET 不一致, 越权场景排除)
+    iss = payload.get("iss")
+    if iss is not None and iss != "ipo-audit-system":
+        raise JWTError(f"issuer 不匹配: {iss!r}")
     return payload
 
 

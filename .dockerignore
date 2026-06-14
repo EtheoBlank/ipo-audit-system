@@ -59,4 +59,4 @@ tests/
 Thumbs.db
 pre-commit-config.yaml
 *.yaml
-!streamlit/.streamlit/config.toml 2>/dev/null || true
+!streamlit/.streamlit/config.toml

@@ -9,6 +9,7 @@ IPO 最大雷区. 横跨主数据 / 识别引擎 / 交易公允性 / 资金占�
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from app.utils.datetime_helpers import utc_now
 from typing import Optional
 
 from sqlalchemy import (
@@ -70,10 +71,6 @@ __all__ = [
     "DISCLOSURE_GAP_REVIEW",
     "DISCLOSURE_GAP_OK",
 ]
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # === 关联方类型 (来自《企业会计准则第 36 号 — 关联方披露》) ===
@@ -182,9 +179,9 @@ class RelatedParty(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_by_display: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
     )
 
 
@@ -222,7 +219,7 @@ class RelatedPartyRelation(Base):
     since_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     until_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class RelatedPartyKeyPerson(Base):
@@ -240,7 +237,7 @@ class RelatedPartyKeyPerson(Base):
     holding_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     family_members: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class RelatedPartyTransaction(Base):
@@ -282,9 +279,9 @@ class RelatedPartyTransaction(Base):
     source_doc_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
     )
 
 
@@ -319,7 +316,7 @@ class RelatedPartyCapitalOccupation(Base):
     cleanup_voucher_refs: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class PeerCompetitionAssessment(Base):
@@ -348,7 +345,7 @@ class PeerCompetitionAssessment(Base):
     assessed_by_display: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     assessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class ProspectusDisclosureGap(Base):
@@ -382,4 +379,4 @@ class ProspectusDisclosureGap(Base):
     resolved_by_display: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

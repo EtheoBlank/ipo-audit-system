@@ -214,7 +214,7 @@ class KingdeeCloudAdapter(BaseERPAdapter):
             ERPColumnMapping("FEndBalanceCr", "ending_balance_cr", "number", "期末贷方"),
             # 序时账
             ERPColumnMapping("FDate", "voucher_date", "date", "日期"),
-            ERPColumnMapping("F billno", "voucher_no", "string", "单据编号"),
+            ERPColumnMapping("FBillNo", "voucher_no", "string", "单据编号"),
             ERPColumnMapping("FExp", "summary", "string", "摘要"),
             ERPColumnMapping("FAccountID", "account_code", "string", "科目"),
             ERPColumnMapping("FAmountDr", "debit_amount", "number", "借方金额"),

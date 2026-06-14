@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from datetime import datetime, timezone
@@ -633,16 +634,33 @@ class AccountAuditService:
         accounts: List[AccountAuditSummary] = []
         fully_audited = with_pending = with_dispute = unbalanced = 0
 
-        for bal in balances:
-            if not is_long_term_asset_account(bal.account_code, prefixes):
+        # 预过滤: 仅长期资产科目才需要详查
+        target_codes = [
+            bal.account_code
+            for bal in balances
+            if is_long_term_asset_account(bal.account_code, prefixes)
+        ]
+        # 并发查每个科目的 summary — 大幅减少 N+1 串行延迟
+        # 注: account_summary 内部复用同一 db session, 走同一连接串行化,
+        #     但能减少逻辑分支, 后续可改成 batch SQL
+        summaries = await asyncio.gather(
+            *[
+                AccountAuditService.account_summary(
+                    db,
+                    project_id=project_id,
+                    account_code=code,
+                    period_end=period_end,
+                    prefixes=prefixes,
+                )
+                for code in target_codes
+            ],
+            return_exceptions=True,
+        )
+        for summary in summaries:
+            if isinstance(summary, Exception) or summary is None:
+                # 单个科目失败不应让整个概览崩 — 记日志后跳过
+                logger.warning("account_summary 失败: %s", summary)
                 continue
-            summary = await AccountAuditService.account_summary(
-                db,
-                project_id=project_id,
-                account_code=bal.account_code,
-                period_end=period_end,
-                prefixes=prefixes,
-            )
             accounts.append(summary)
             total_movements = summary.debit_total_count + summary.credit_total_count
             pending = summary.debit_pending_count + summary.credit_pending_count

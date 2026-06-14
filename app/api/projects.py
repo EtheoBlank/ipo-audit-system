@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional
 import pandas as pd
+import uuid
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -173,7 +174,8 @@ async def upload_account_balances(
             break
 
     # Parse Excel with adapter
-    temp_path = settings.UPLOAD_DIR / f"temp_{file.filename}"
+    # 用 UUID 防止同名并发上传相互覆盖
+    temp_path = settings.UPLOAD_DIR / f"temp_{uuid.uuid4().hex}_{file.filename or 'upload'}"
     content = await file.read()
     with open(temp_path, "wb") as f:
         f.write(content)

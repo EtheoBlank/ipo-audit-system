@@ -9,7 +9,13 @@ from app.core.config import settings
 
 
 class RegulatoryCaseScraper:
-    """抓取证监会、交易所监管案例."""
+    """抓取证监会、交易所监管案例.
+
+    用作 async context manager:
+        async with RegulatoryCaseScraper() as s:
+            ...
+    自动确保 httpx 连接池关闭,避免连接泄露.
+    """
 
     def __init__(self):
         self.session = httpx.AsyncClient(timeout=30.0)
@@ -18,6 +24,12 @@ class RegulatoryCaseScraper:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
+
+    async def __aenter__(self) -> "RegulatoryCaseScraper":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.session.aclose()
 
     async def close(self):
         await self.session.aclose()
@@ -50,7 +62,7 @@ class RegulatoryCaseScraper:
 
     async def scrape_sse_inquiry(self, page: int = 1) -> List[Dict]:
         """抓取上交所问询函."""
-        url = f"{settings.SseUrl}/markets/stock/list/ inquiry"
+        url = f"{settings.SseUrl}/markets/stock/list/inquiry"
         params = {"page": page}
         cases = []
         try:

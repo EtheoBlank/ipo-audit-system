@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -110,7 +110,7 @@ async def _persist_items(items: list) -> dict:
             existing = await db.execute(select(Regulation).where(Regulation.content_hash == ch))
             row = existing.scalar_one_or_none()
             if row:
-                row.fetched_at = datetime.utcnow()
+                row.fetched_at = datetime.now(timezone.utc)
                 # 补完缺失字段（首次抓只拿到标题，第二次拿到详情）
                 for k, v in payload.items():
                     if k == "content_hash":
@@ -134,14 +134,14 @@ async def scrape_regulations(
 
     同步返回结果（适合手动触发）。如果要在后台跑，前端用 ``/scrape/async``。
     """
-    start = datetime.utcnow()
+    start = datetime.now(timezone.utc)
     service = RegulationScraperService()
     try:
         items = await service.scrape(sources=req.sources, max_pages=req.max_pages)
     finally:
         await service.close()
     stats = await _persist_items(items)
-    duration = (datetime.utcnow() - start).total_seconds()
+    duration = (datetime.now(timezone.utc) - start).total_seconds()
     requested = req.sources or service.SUPPORTED_SOURCES
     return ScrapeResult(
         requested_sources=requested,
@@ -209,13 +209,17 @@ async def list_regulations(
     if publish_before:
         conditions.append(Regulation.publish_date <= publish_before)
     if keyword:
-        like = f"%{keyword}%"
+        # 转义 LIKE 通配符 % _ \, 防止用户输入破坏搜索意图
+        escaped = (
+            keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        like = f"%{escaped}%"
         conditions.append(
             or_(
-                Regulation.title.like(like),
-                Regulation.full_text.like(like),
-                Regulation.keywords.like(like),
-                Regulation.document_no.like(like),
+                Regulation.title.like(like, escape="\\"),
+                Regulation.full_text.like(like, escape="\\"),
+                Regulation.keywords.like(like, escape="\\"),
+                Regulation.document_no.like(like, escape="\\"),
             )
         )
     if conditions:
@@ -286,13 +290,17 @@ async def search_regulations(
     if not keywords:
         return {"keywords": [], "count": 0, "results": []}
 
+    # 转义 LIKE 通配符 % _ \
+    def _escape_like(s: str) -> str:
+        return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
     field_matches = [
         or_(
-            Regulation.title.like(f"%{kw}%"),
-            Regulation.full_text.like(f"%{kw}%"),
-            Regulation.keywords.like(f"%{kw}%"),
-            Regulation.document_no.like(f"%{kw}%"),
-            Regulation.summary.like(f"%{kw}%"),
+            Regulation.title.like(f"%{_escape_like(kw)}%", escape="\\"),
+            Regulation.full_text.like(f"%{_escape_like(kw)}%", escape="\\"),
+            Regulation.keywords.like(f"%{_escape_like(kw)}%", escape="\\"),
+            Regulation.document_no.like(f"%{_escape_like(kw)}%", escape="\\"),
+            Regulation.summary.like(f"%{_escape_like(kw)}%", escape="\\"),
         )
         for kw in keywords
     ]

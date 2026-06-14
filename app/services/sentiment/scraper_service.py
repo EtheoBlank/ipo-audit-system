@@ -158,7 +158,7 @@ class SentimentScraperService:
             date_to = _utcnow().strftime("%Y-%m-%d")
         if not date_from:
             # 默认 7 天前
-            d = datetime.now() - timedelta(days=7)
+            d = _utcnow() - timedelta(days=7)
             date_from = d.strftime("%Y-%m-%d")
 
         # 收集要跑的信源
@@ -170,7 +170,9 @@ class SentimentScraperService:
 
         # 抓取 + 入库
         async with SentimentHttpClient() as http:
-            tasks = []
+            tasks: list[asyncio.Task] = []
+            # 记录任务与 source code 的对应关系, 避免 zip 错位 (跳过 unknown/skipped 源)
+            task_code_pairs: list[tuple[str, asyncio.Task]] = []
             for code in source_codes:
                 meta = _PROVIDER_REGISTRY.get(code)
                 if not meta:
@@ -188,14 +190,19 @@ class SentimentScraperService:
                 else:
                     adapter_cls = meta["factory"]()
                     adapter = adapter_cls(http)
-                tasks.append(self._run_one_source(adapter, project, subjects, date_from, date_to))
+                task = asyncio.create_task(
+                    self._run_one_source(adapter, project, subjects, date_from, date_to)
+                )
+                task_code_pairs.append((code, task))
 
             # 限频: 单项目最多 max_events 条入库
             results: list[list[RawSentimentItem]] = []
-            if tasks:
+            if task_code_pairs:
                 # 单个信源超时用 gather, 单个失败不阻断
+                codes = [c for c, _ in task_code_pairs]
+                tasks = [t for _, t in task_code_pairs]
                 gathered = await asyncio.gather(*tasks, return_exceptions=True)
-                for code, result in zip(source_codes, gathered):
+                for code, result in zip(codes, gathered):
                     if isinstance(result, Exception):
                         source_status[code] = "failed"
                         logger.warning("信源 %s 抓取失败: %s", code, result)
@@ -360,7 +367,8 @@ class SentimentScraperService:
         if project.legal_representative:
             names.append(("person", project.legal_representative))
         if project.keywords_extra:
-            for kw in project.keywords_extra.splitlines():
+            # 防 None: ORM 上可空, 即使 if Truthy 仍建议加防护
+            for kw in (project.keywords_extra or "").splitlines():
                 kw = kw.strip()
                 if kw:
                     names.append(("extra", kw))

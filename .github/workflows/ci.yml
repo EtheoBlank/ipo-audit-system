@@ -21,7 +21,7 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4  # 2026-06-16 后 GitHub 默认 Node 24, 此处尚能跑, 后续统一升 v5
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3

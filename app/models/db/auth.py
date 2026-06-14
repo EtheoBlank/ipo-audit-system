@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from app.utils.datetime_helpers import utc_now
 from typing import Optional
 
 from sqlalchemy import (
@@ -72,16 +73,6 @@ __all__ = [
     "AUDIT_ACTION_EXPORT",
     "AUDIT_ACTION_IMPORT",
 ]
-
-
-def _utcnow() -> datetime:
-    """UTC 当前时间 (naive — 与项目惯例 + db_models._utcnow 保持一致).
-
-    时间字段在 SQLAlchemy + aiosqlite 路径下用 naive datetime, 与 aware datetime
-    混合会触发 'can't subtract offset-naive and offset-aware datetimes' 错误.
-    所以这里统一 .replace(tzinfo=None) — 旧 db_models 也是同样规则.
-    """
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # === 五级签字角色 (从低到高) ===
@@ -150,9 +141,9 @@ class Firm(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
     )
 
     # 关系
@@ -199,9 +190,9 @@ class User(Base):
     password_changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
     )
 
     # 关系
@@ -219,7 +210,7 @@ class Role(Base):
     level: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # 与 ROLE_LEVEL 对齐
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class Permission(Base):
@@ -232,7 +223,7 @@ class Permission(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     module: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class RolePermission(Base):
@@ -248,7 +239,7 @@ class RolePermission(Base):
     permission_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("auth_permissions.id"), nullable=False, index=True
     )
-    granted_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    granted_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class ApprovalWorkflow(Base):
@@ -286,9 +277,9 @@ class ApprovalWorkflow(Base):
     # 流程定义 (JSON, 序列化的步骤列表), 可在创建时由用户自定义或走默认五级模板
     definition: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
     )
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
@@ -327,7 +318,7 @@ class ApprovalStep(Base):
     comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
     workflow: Mapped["ApprovalWorkflow"] = relationship(back_populates="steps")
 
@@ -390,7 +381,7 @@ class AuditLog(Base):
     error_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, nullable=False, index=True
+        DateTime, default=utc_now, nullable=False, index=True
     )
 
 

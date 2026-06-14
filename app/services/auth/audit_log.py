@@ -112,7 +112,10 @@ async def record_audit_log(
 def _escape_like(text: str) -> str:
     """转义 SQL LIKE 通配符 — 防止用户输入 % / _ 触发全表扫描.
 
-    P0 修复 (Agent #5 W16). 配合 ilike(..., escape='\\\\') 使用.
+    配合 SQLAlchemy 的 ``escape="\\"`` 使用. 注意: SQLAlchemy 把
+    Python 字符串里的 ``"\\\\"`` 当作 SQL 层的单个反斜杠 escape 字符,
+    所以我们要先把用户输入里的 ``\\`` 替换为 ``\\\\`` (Python 串里的
+    两个反斜杠 = SQL 层的单个反斜杠), 再用单反斜杠转义 ``%`` 和 ``_``.
     """
     if not text:
         return ""

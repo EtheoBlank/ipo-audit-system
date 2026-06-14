@@ -402,6 +402,7 @@ def show_confirmations():
                                 content = api_request(
                                     "GET",
                                     f"/api/confirmations/letters/{it['sent_letter_id']}/download",
+                                    expect_bytes=True,
                                 )
                                 if content:
                                     st.download_button(
@@ -655,7 +656,9 @@ def show_confirmations():
                 key="exp_case",
             )
             if case and st.button("📤 导出工作簿", type="primary"):
-                content = api_request("GET", f"/api/confirmations/cases/{case['id']}/export")
+                content = api_request(
+                    "GET", f"/api/confirmations/cases/{case['id']}/export", expect_bytes=True
+                )
                 if content and isinstance(content, bytes):
                     st.download_button(
                         "下载 Excel",

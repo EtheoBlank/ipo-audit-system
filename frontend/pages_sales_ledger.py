@@ -344,12 +344,14 @@ def show_sales_ledger() -> None:
         st.write("生成多 Sheet Excel 工作簿（销售清单、毛利率、异常、行业参考等）。")
         if st.button("📥 生成 Excel", type="primary"):
             with st.spinner("生成中……"):
-                url = f"{API_BASE_URL}/api/sales-ledger/projects/{project_id}/export?run_analysis=true"
-                r = requests.get(url, timeout=60)
-                if r.status_code != 200:
-                    st.error(f"导出失败：{r.status_code} {r.text[:300]}")
-                else:
-                    st.session_state["sl_xlsx"] = r.content
+                # 走统一 api_request (带 auth 头, 统一错误)
+                content = api_request(
+                    "GET",
+                    f"/api/sales-ledger/projects/{project_id}/export?run_analysis=true",
+                    expect_bytes=True,
+                )
+                if isinstance(content, bytes) and content:
+                    st.session_state["sl_xlsx"] = content
                     st.success("✅ 已生成，可点击下方下载")
         if st.session_state.get("sl_xlsx"):
             st.download_button(
