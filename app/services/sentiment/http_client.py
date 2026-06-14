@@ -10,6 +10,7 @@
     - 超时 / 重试从 SENTIMENT_FETCH_TIMEOUT / SENTIMENT_FETCH_RETRY 读
     - 不强制 Accept-Language (信源杂, 默认即可)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -77,7 +78,11 @@ class SentimentHttpClient:
                     wait = 0.5 * (attempt + 1)
                     logger.warning(
                         "GET %s failed (attempt %d/%d): %s; retry in %.1fs",
-                        url, attempt + 1, self.retry + 1, exc, wait,
+                        url,
+                        attempt + 1,
+                        self.retry + 1,
+                        exc,
+                        wait,
                     )
                     await asyncio.sleep(wait)
         # 最后一次仍失败 — 抛最后一次的异常
@@ -97,7 +102,11 @@ class SentimentHttpClient:
                     wait = 0.5 * (attempt + 1)
                     logger.warning(
                         "POST %s failed (attempt %d/%d): %s; retry in %.1fs",
-                        url, attempt + 1, self.retry + 1, exc, wait,
+                        url,
+                        attempt + 1,
+                        self.retry + 1,
+                        exc,
+                        wait,
                     )
                     await asyncio.sleep(wait)
         assert last_exc is not None

@@ -19,7 +19,6 @@ Notes:
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -56,7 +55,7 @@ SYS_PROMPT_RESPONSE = (
     '    "贷款余额": {"confirmed": ..., "difference": ..., "note": "..."},\n'
     '    "本期销售/采购额": {"confirmed": ..., "difference": ..., "note": "..."},\n'
     '    "已背书票据": {"confirmed": ..., "difference": ..., "note": "..."}\n'
-    '  },\n'
+    "  },\n"
     '  "response_summary": "回函关键结论(一句话)",\n'
     '  "signer": "签章人(若有)"\n'
     "}\n"
@@ -69,7 +68,7 @@ SYS_PROMPT_RESPONSE = (
 
 @dataclass
 class ParsedResponse:
-    response_status: str = "unclear"     # match / partial / mismatch / reject / unclear
+    response_status: str = "unclear"  # match / partial / mismatch / reject / unclear
     amount_confirmed: float = 0.0
     amount_difference: float = 0.0
     difference_reason: Optional[str] = None

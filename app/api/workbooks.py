@@ -1,4 +1,5 @@
 """API routes for workbook generation."""
+
 import logging
 from pathlib import Path
 from typing import List, Optional
@@ -12,7 +13,18 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.db_models import Project, AccountBalance
-from app.models.audit import WorkbookGenerateRequest, WorkbookGenerateResponse, TrialBalanceRequest, TrialBalanceResponse
+from app.models.db.auth import User
+from app.models.audit import (
+    WorkbookGenerateRequest,
+    WorkbookGenerateResponse,
+    TrialBalanceRequest,
+    TrialBalanceResponse,
+)
+from app.services.auth import (
+    ensure_project_in_firm,
+    get_current_user,
+    get_current_user_optional,
+)
 from app.services.workbook_generator import WorkbookGenerator
 from app.services.trial_balance import TrialBalanceService
 from app.services.audit_note_generator import (
@@ -30,13 +42,11 @@ router = APIRouter(prefix="/api/workbooks", tags=["底稿生成"])
 async def generate_workbook(
     request: WorkbookGenerateRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Generate audit workbook in Excel format."""
-    # Get project info
-    result = await db.execute(select(Project).where(Project.id == request.project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    # 多租户硬隔离 — 跨事务所访问 403
+    project = await ensure_project_in_firm(db, request.project_id, current_user)
 
     # Get account balances
     result = await db.execute(
@@ -62,10 +72,7 @@ async def generate_workbook(
     }
 
     if request.template_type not in template_generators:
-        raise HTTPException(
-            status_code=400,
-            detail=f"不支持的模板类型: {request.template_type}"
-        )
+        raise HTTPException(status_code=400, detail=f"不支持的模板类型: {request.template_type}")
 
     output_path = template_generators[request.template_type](df_balances)
 
@@ -77,7 +84,10 @@ async def generate_workbook(
 
 
 @router.get("/download/{filename}")
-async def download_workbook(filename: str):
+async def download_workbook(
+    filename: str,
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     """Download generated workbook file.
 
     Security: only allow alphanumeric + underscore/dash/dot filenames
@@ -112,6 +122,7 @@ async def download_workbook(filename: str):
 async def check_trial_balance(
     request: TrialBalanceRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Check trial balance for a project."""
     result = await db.execute(
@@ -169,6 +180,7 @@ class AuditNoteResponse(BaseModel):
 async def generate_audit_note(
     req: AuditNoteRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """为指定底稿/科目生成审计说明 — 自动调用知识库 + 法规库 + AI。
 
@@ -176,9 +188,9 @@ async def generate_audit_note(
     ``references_kb`` / ``references_regulations`` 列出引用依据，便于回溯。
     """
     # 项目存在性校验 (避免拿到陈旧 project_id)
-    project = (await db.execute(
-        select(Project).where(Project.id == req.project_id)
-    )).scalar_one_or_none()
+    project = (
+        await db.execute(select(Project).where(Project.id == req.project_id))
+    ).scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
 
@@ -196,12 +208,18 @@ async def generate_audit_note(
 
     # 如果调用方没传 balance_amount，但提供了 account_code，自动从库里捞一笔
     if req.balance_amount is None and req.account_code:
-        ab = (await db.execute(
-            select(AccountBalance).where(
-                AccountBalance.project_id == req.project_id,
-                AccountBalance.account_code == req.account_code,
+        ab = (
+            (
+                await db.execute(
+                    select(AccountBalance).where(
+                        AccountBalance.project_id == req.project_id,
+                        AccountBalance.account_code == req.account_code,
+                    )
+                )
             )
-        )).scalars().first()
+            .scalars()
+            .first()
+        )
         if ab:
             ctx.balance_amount = ab.ending_balance
             if not ctx.account_name:
@@ -251,11 +269,12 @@ class AuditNoteBatchResponse(BaseModel):
 async def generate_audit_notes_batch(
     req: AuditNoteBatchRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """为指定底稿批量生成审计说明，并写回 Excel 末尾的"审计说明"sheet。"""
-    project = (await db.execute(
-        select(Project).where(Project.id == req.project_id)
-    )).scalar_one_or_none()
+    project = (
+        await db.execute(select(Project).where(Project.id == req.project_id))
+    ).scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
 

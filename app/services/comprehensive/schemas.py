@@ -1,4 +1,5 @@
 """Pydantic schemas for comprehensive workpaper system."""
+
 from __future__ import annotations
 
 from typing import Literal, Optional
@@ -6,9 +7,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 # 字段类型
-FieldType = Literal[
-    "text", "text_long", "number", "percent", "date", "choice", "boolean"
-]
+FieldType = Literal["text", "text_long", "number", "percent", "date", "choice", "boolean"]
 
 # 填充来源前缀
 SourcePrefix = Literal["workpaper", "rule", "web_search", "human_qa", "calculated"]
@@ -36,9 +35,7 @@ class TemplateField(BaseModel):
         """校验 source 形如 'workpaper:xxx' / 'human_qa' / 'calculated:xxx'。"""
         valid_prefixes = ("workpaper:", "rule:", "web_search:", "human_qa", "calculated:")
         if not any(v == p.rstrip(":") or v.startswith(p) for p in valid_prefixes):
-            raise ValueError(
-                f"source 必须以以下前缀之一开头: {valid_prefixes}，实际为 '{v}'"
-            )
+            raise ValueError(f"source 必须以以下前缀之一开头: {valid_prefixes}，实际为 '{v}'")
         return v
 
     @field_validator("options", mode="before")

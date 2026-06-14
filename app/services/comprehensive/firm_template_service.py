@@ -4,13 +4,14 @@
 - FirmTemplateService：模板上传、列表、按 firm 隔离、版本管理
 - HistoricalLibraryService：历史底稿脱敏、入库、检索（作为第 4 类信息源）
 """
+
 from __future__ import annotations
 
 import hashlib
 import logging
 import re
 from io import BytesIO
-from typing import Iterable, Optional
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 # ============================== 多所模板服务 ==============================
+
 
 class FirmTemplateService:
     """多所模板管理。"""
@@ -153,12 +155,20 @@ _ENTITY_PATTERNS = [
     re.compile(r"[一-龥A-Za-z0-9·　]{2,20}(?:集团|控股|总公司)"),
     re.compile(r"[一-龥A-Za-z0-9·　]{2,15}公司"),
     # 中文机构（银行/医院/学校/事务所/厂/局/中心/合作社/基金会）
-    re.compile(r"[一-龥]{2,20}(?:银行|医院|学校|事务所|事务所|大学|学院|厂|局|中心|合作社|基金会|研究院|研究所)"),
+    re.compile(
+        r"[一-龥]{2,20}(?:银行|医院|学校|事务所|事务所|大学|学院|厂|局|中心|合作社|基金会|研究院|研究所)"
+    ),
     # 四大 + 常见咨询 / 律所 / 评级机构
-    re.compile(r"\b(?:PWC|KPMG|Deloitte|EY|安永|毕马威|普华永道|德勤|永安|中注协|大华|天健|立信|致同|信永中和|大信|中审众环|容诚|天衡|公证天业|祥恒)\b"),
+    re.compile(
+        r"\b(?:PWC|KPMG|Deloitte|EY|安永|毕马威|普华永道|德勤|永安|中注协|大华|天健|立信|致同|信永中和|大信|中审众环|容诚|天衡|公证天业|祥恒)\b"
+    ),
     # 英文公司（带 Corp/Inc/Ltd/LLC/LLP/Company/Group 等后缀）
-    re.compile(r"\b[A-Z][A-Za-z0-9&.\- ]{1,40}\s(?:Corp\.?|Inc\.?|Ltd\.?|LLC|LLP|Company|Co\.,?\sInc|GmbH|AG|S\.A\.|Group|PLC)\b"),
-    re.compile(r"\b[A-Z][A-Za-z0-9&.\- ]{1,40}\s(?:Corporation|Company|Group|Holdings|Industries)\b"),
+    re.compile(
+        r"\b[A-Z][A-Za-z0-9&.\- ]{1,40}\s(?:Corp\.?|Inc\.?|Ltd\.?|LLC|LLP|Company|Co\.,?\sInc|GmbH|AG|S\.A\.|Group|PLC)\b"
+    ),
+    re.compile(
+        r"\b[A-Z][A-Za-z0-9&.\- ]{1,40}\s(?:Corporation|Company|Group|Holdings|Industries)\b"
+    ),
     # 统一社会信用代码（18 位）
     re.compile(r"[0-9A-HJ-NPQRTUWXY]{2}\d{6}[0-9A-HJ-NPQRTUWXY]{10}"),
     # 身份证号（18 位）
@@ -177,7 +187,9 @@ _ENTITY_PATTERNS = [
 _PERSON_NAME_PATTERNS = [
     # 姓名（独立 2~4 字中文，2~4 字都有）
     re.compile(r"(?<![一-龥])([一-龥]{2,4})(?:先生|女士|同志|律师|教授|博士|医生)(?![一-龥])"),
-    re.compile(r"((?:项目负责人|项目经理|签字会计师|审计师|合伙人|质量复核|项目组|复核人)[：:]\s*)?([一-龥]{2,4})"),
+    re.compile(
+        r"((?:项目负责人|项目经理|签字会计师|审计师|合伙人|质量复核|项目组|复核人)[：:]\s*)?([一-龥]{2,4})"
+    ),
 ]
 
 # 中文姓名模式：2~3 字普通姓名（仅在特定上下文如"审计员 X"中触发，避免误伤正常词）
@@ -202,8 +214,11 @@ def _anonymize_text(text: str, counter: dict[str, int]) -> str:
     return out
 
 
-def _replace_pat(text: str, pat: re.Pattern, counter: dict[str, int], prefix: str, group: int | None = None) -> str:
+def _replace_pat(
+    text: str, pat: re.Pattern, counter: dict[str, int], prefix: str, group: int | None = None
+) -> str:
     """用正则匹配并替换为 ``<{prefix}_n>``，相同 token 复用同一编号。"""
+
     def _sub(m: re.Match) -> str:
         if group is not None and group <= len(m.groups()):
             name = m.group(group)
@@ -214,6 +229,7 @@ def _replace_pat(text: str, pat: re.Pattern, counter: dict[str, int], prefix: st
         if name not in counter:
             counter[name] = len(counter) + 1
         return f"<{prefix}_{counter[name]}>"
+
     return pat.sub(_sub, text)
 
 
@@ -323,9 +339,7 @@ class HistoricalLibraryService:
         if not keywords:
             return []
 
-        or_clauses = [
-            HistoricalWorkpaper.text_excerpt.contains(kw) for kw in keywords
-        ]
+        or_clauses = [HistoricalWorkpaper.text_excerpt.contains(kw) for kw in keywords]
         stmt = (
             select(HistoricalWorkpaper)
             .where(

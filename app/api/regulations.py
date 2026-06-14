@@ -21,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal, get_db
 from app.models.db_models import Regulation, RegulationFavorite
+from app.models.db.auth import User
+from app.services.auth import get_current_user, get_current_user_optional
 from app.services.regulation_scraper import (
     RegulationScraperService,
     item_to_dict,
@@ -105,9 +107,7 @@ async def _persist_items(items: list) -> dict:
             if not ch:
                 skipped += 1
                 continue
-            existing = await db.execute(
-                select(Regulation).where(Regulation.content_hash == ch)
-            )
+            existing = await db.execute(select(Regulation).where(Regulation.content_hash == ch))
             row = existing.scalar_one_or_none()
             if row:
                 row.fetched_at = datetime.utcnow()
@@ -126,7 +126,10 @@ async def _persist_items(items: list) -> dict:
 
 
 @router.post("/scrape", response_model=ScrapeResult)
-async def scrape_regulations(req: ScrapeRequest):
+async def scrape_regulations(
+    req: ScrapeRequest,
+    current_user: User = Depends(get_current_user),
+):
     """触发法规抓取并入库。
 
     同步返回结果（适合手动触发）。如果要在后台跑，前端用 ``/scrape/async``。
@@ -149,7 +152,11 @@ async def scrape_regulations(req: ScrapeRequest):
 
 
 @router.post("/scrape/async")
-async def scrape_regulations_async(req: ScrapeRequest, bg: BackgroundTasks):
+async def scrape_regulations_async(
+    req: ScrapeRequest,
+    bg: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+):
     """异步触发抓取 — 立即返回任务确认。"""
 
     async def _runner():
@@ -186,6 +193,7 @@ async def list_regulations(
     skip: int = 0,
     limit: int = Query(50, le=200),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """列出法规 — 支持多维过滤。"""
     q = select(Regulation)
@@ -218,7 +226,10 @@ async def list_regulations(
 
 
 @router.get("/sources")
-async def list_sources(db: AsyncSession = Depends(get_db)):
+async def list_sources(
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     """来源聚合 — 每个来源已抓的条数 + 最新发布日期。"""
     q = select(
         Regulation.source,
@@ -247,11 +258,16 @@ async def list_sources(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/categories")
-async def list_categories(db: AsyncSession = Depends(get_db)):
+async def list_categories(
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     """分类聚合 — 用于前端构建筛选器。"""
-    q = select(
-        Regulation.category, func.count(Regulation.id)
-    ).where(Regulation.category.is_not(None)).group_by(Regulation.category)
+    q = (
+        select(Regulation.category, func.count(Regulation.id))
+        .where(Regulation.category.is_not(None))
+        .group_by(Regulation.category)
+    )
     rows = (await db.execute(q)).all()
     return [{"category": c, "count": n} for c, n in rows if c]
 
@@ -263,6 +279,7 @@ async def search_regulations(
     source: Optional[str] = None,
     limit: int = Query(30, le=100),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """多关键词全文搜索 — 用于审计师在生成审计说明时即时查规。"""
     keywords = [k for k in q.split() if k]
@@ -291,14 +308,16 @@ async def search_regulations(
         "keywords": keywords,
         "mode": mode,
         "count": len(rows),
-        "results": [
-            RegulationOut.model_validate(r).model_dump(mode="json") for r in rows
-        ],
+        "results": [RegulationOut.model_validate(r).model_dump(mode="json") for r in rows],
     }
 
 
 @router.get("/{regulation_id}", response_model=RegulationOut)
-async def get_regulation(regulation_id: int, db: AsyncSession = Depends(get_db)):
+async def get_regulation(
+    regulation_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     result = await db.execute(select(Regulation).where(Regulation.id == regulation_id))
     reg = result.scalar_one_or_none()
     if not reg:
@@ -316,8 +335,11 @@ async def favorite_regulation(
     regulation_id: int,
     req: FavoriteRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    reg = (await db.execute(select(Regulation).where(Regulation.id == regulation_id))).scalar_one_or_none()
+    reg = (
+        await db.execute(select(Regulation).where(Regulation.id == regulation_id))
+    ).scalar_one_or_none()
     if not reg:
         raise HTTPException(status_code=404, detail="法规不存在")
     fav = RegulationFavorite(
@@ -330,15 +352,19 @@ async def favorite_regulation(
     await db.commit()
     await db.refresh(fav)
     # 显式 expire-load regulation 关联
-    result = await db.execute(
-        select(RegulationFavorite).where(RegulationFavorite.id == fav.id)
-    )
+    result = await db.execute(select(RegulationFavorite).where(RegulationFavorite.id == fav.id))
     return result.scalar_one()
 
 
 @router.delete("/favorites/{favorite_id}")
-async def unfavorite(favorite_id: int, db: AsyncSession = Depends(get_db)):
-    fav = (await db.execute(select(RegulationFavorite).where(RegulationFavorite.id == favorite_id))).scalar_one_or_none()
+async def unfavorite(
+    favorite_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    fav = (
+        await db.execute(select(RegulationFavorite).where(RegulationFavorite.id == favorite_id))
+    ).scalar_one_or_none()
     if not fav:
         raise HTTPException(status_code=404, detail="收藏记录不存在")
     await db.delete(fav)
@@ -351,6 +377,7 @@ async def list_favorites(
     project_id: Optional[int] = None,
     tag: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     q = select(RegulationFavorite)
     if project_id is not None:

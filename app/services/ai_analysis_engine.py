@@ -1,8 +1,8 @@
 """AI分析引擎 - 第四阶段."""
+
 import httpx
 import json
-from typing import List, Dict, Optional, Any
-from datetime import datetime
+from typing import List, Dict, Optional
 from app.core.config import settings
 
 
@@ -26,7 +26,11 @@ class AIAnalysisEngine:
         payload = {
             "model": "abab6.5s-chat",
             "messages": [
-                {"role": "system", "content": system_prompt or "你是一位专业的IPO审计专家，擅长识别财务风险和合规问题。"},
+                {
+                    "role": "system",
+                    "content": system_prompt
+                    or "你是一位专业的IPO审计专家，擅长识别财务风险和合规问题。",
+                },
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.7,
@@ -34,7 +38,9 @@ class AIAnalysisEngine:
         }
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(f"{self.api_base}/text/chatcompletion_pro", headers=headers, json=payload)
+                response = await client.post(
+                    f"{self.api_base}/text/chatcompletion_pro", headers=headers, json=payload
+                )
                 response.raise_for_status()
                 result = response.json()
                 return result.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -47,12 +53,12 @@ class AIAnalysisEngine:
 作为IPO审计专家，请分析以下财务数据的风险等级：
 
 行业: {industry}
-总资产: {financial_data.get('total_assets', 0):,.2f}
-营业收入: {financial_data.get('revenue', 0):,.2f}
-净利润: {financial_data.get('net_profit', 0):,.2f}
-毛利率: {financial_data.get('gross_margin', 0):.2f}%
-应收账款周转天数: {financial_data.get('receivable_turnover_days', 0)}
-存货周转天数: {financial_data.get('inventory_turnover_days', 0)}
+总资产: {financial_data.get("total_assets", 0):,.2f}
+营业收入: {financial_data.get("revenue", 0):,.2f}
+净利润: {financial_data.get("net_profit", 0):,.2f}
+毛利率: {financial_data.get("gross_margin", 0):.2f}%
+应收账款周转天数: {financial_data.get("receivable_turnover_days", 0)}
+存货周转天数: {financial_data.get("inventory_turnover_days", 0)}
 
 请分析：
 1. 风险等级（高/中/低）
@@ -66,9 +72,15 @@ class AIAnalysisEngine:
         try:
             return json.loads(response)
         except:
-            return {"risk_level": "中", "risk_points": ["AI响应解析失败"], "recommendations": ["请检查API配置"]}
+            return {
+                "risk_level": "中",
+                "risk_points": ["AI响应解析失败"],
+                "recommendations": ["请检查API配置"],
+            }
 
-    async def detect_anomalies(self, account_balances: List[Dict], chronological_accounts: List[Dict]) -> List[Dict]:
+    async def detect_anomalies(
+        self, account_balances: List[Dict], chronological_accounts: List[Dict]
+    ) -> List[Dict]:
         """检测财务异常."""
         prompt = f"""
 作为IPO审计专家，请分析以下财务数据中的异常情况：
@@ -95,7 +107,9 @@ class AIAnalysisEngine:
         except:
             return []
 
-    async def generate_audit_program(self, risk_points: List[Dict], regulatory_cases: List[Dict]) -> List[Dict]:
+    async def generate_audit_program(
+        self, risk_points: List[Dict], regulatory_cases: List[Dict]
+    ) -> List[Dict]:
         """生成审计程序建议."""
         prompt = f"""
 作为IPO审计专家，请根据风险点和监管案例生成详细审计程序：
@@ -128,10 +142,10 @@ class AIAnalysisEngine:
 请分析{industry}行业公司IPO过程中的常见监管关注点：
 
 公司信息：
-- 名称：{company_info.get('name', '')}
+- 名称：{company_info.get("name", "")}
 - 行业：{industry}
-- 主营业务：{company_info.get('main_business', '')}
-- 营收规模：{company_info.get('revenue', 0):,.2f}
+- 主营业务：{company_info.get("main_business", "")}
+- 营收规模：{company_info.get("revenue", 0):,.2f}
 
 请识别：
 1. 该行业IPO最常见被质疑的问题
@@ -155,34 +169,40 @@ class RiskIdentifier:
     def identify_revenue_recognition_risk(account_balances: List[Dict]) -> List[Dict]:
         """识别收入确认风险."""
         risks = []
-        revenue_accounts = [ab for ab in account_balances if "5" in str(ab.get("account_code", ""))[:1]]
+        revenue_accounts = [
+            ab for ab in account_balances if "5" in str(ab.get("account_code", ""))[:1]
+        ]
 
         for ab in revenue_accounts:
             ending = ab.get("ending_balance", 0)
-            debit = ab.get("debit_amount", 0)
+            ab.get("debit_amount", 0)
             credit = ab.get("credit_amount", 0)
 
             # 期末突然大量确认收入
             if credit > 5000000 and ending > 0:
-                risks.append({
-                    "risk_type": "收入确认",
-                    "account_code": ab.get("account_code"),
-                    "account_name": ab.get("account_name"),
-                    "risk_level": "高",
-                    "description": f"期末大额确认收入{credit:,.2f}，可能存在提前确认",
-                    "indicator": "期末突击确认收入",
-                })
+                risks.append(
+                    {
+                        "risk_type": "收入确认",
+                        "account_code": ab.get("account_code"),
+                        "account_name": ab.get("account_name"),
+                        "risk_level": "高",
+                        "description": f"期末大额确认收入{credit:,.2f}，可能存在提前确认",
+                        "indicator": "期末突击确认收入",
+                    }
+                )
 
             # 收入与应收账款不匹配
             if ending > credit * 2:
-                risks.append({
-                    "risk_type": "收入确认",
-                    "account_code": ab.get("account_code"),
-                    "account_name": ab.get("account_name"),
-                    "risk_level": "中",
-                    "description": f"应收账款({ending:,.2f})远超收入({credit:,.2f})，需关注收入确认时点",
-                    "indicator": "应收账款异常偏高",
-                })
+                risks.append(
+                    {
+                        "risk_type": "收入确认",
+                        "account_code": ab.get("account_code"),
+                        "account_name": ab.get("account_name"),
+                        "risk_level": "中",
+                        "description": f"应收账款({ending:,.2f})远超收入({credit:,.2f})，需关注收入确认时点",
+                        "indicator": "应收账款异常偏高",
+                    }
+                )
 
         return risks
 
@@ -196,14 +216,16 @@ class RiskIdentifier:
             summary = ca.get("summary", "")
             for kw in keywords:
                 if kw in summary:
-                    risks.append({
-                        "risk_type": "关联交易",
-                        "voucher_no": ca.get("voucher_no"),
-                        "account_name": ca.get("account_name"),
-                        "risk_level": "高",
-                        "description": f"凭证{ca.get('voucher_no')}包含关联关键词'{kw}'",
-                        "indicator": kw,
-                    })
+                    risks.append(
+                        {
+                            "risk_type": "关联交易",
+                            "voucher_no": ca.get("voucher_no"),
+                            "account_name": ca.get("account_name"),
+                            "risk_level": "高",
+                            "description": f"凭证{ca.get('voucher_no')}包含关联关键词'{kw}'",
+                            "indicator": kw,
+                        }
+                    )
                     break
 
         return risks[:10]  # 最多返回10条
@@ -212,27 +234,35 @@ class RiskIdentifier:
     def identify_goodwill_impairment_risk(account_balances: List[Dict]) -> List[Dict]:
         """识别商誉减值风险."""
         risks = []
-        goodwill_accounts = [ab for ab in account_balances if "商誉" in str(ab.get("account_name", ""))]
+        goodwill_accounts = [
+            ab for ab in account_balances if "商誉" in str(ab.get("account_name", ""))
+        ]
 
         for ab in goodwill_accounts:
             ending = ab.get("ending_balance", 0)
             if ending > 0:
                 # 商誉占资产比例过高
-                risks.append({
-                    "risk_type": "商誉减值",
-                    "account_code": ab.get("account_code"),
-                    "account_name": ab.get("account_name"),
-                    "risk_level": "中",
-                    "description": f"商誉余额{ending:,.2f}，需关注减值测试",
-                    "indicator": "大额商誉",
-                })
+                risks.append(
+                    {
+                        "risk_type": "商誉减值",
+                        "account_code": ab.get("account_code"),
+                        "account_name": ab.get("account_name"),
+                        "risk_level": "中",
+                        "description": f"商誉余额{ending:,.2f}，需关注减值测试",
+                        "indicator": "大额商誉",
+                    }
+                )
 
         return risks
 
     @staticmethod
     def identify_inventory_turnover_risk(account_balances: List[Dict], industry: str) -> Dict:
         """识别存货周转风险."""
-        inventory_accounts = [ab for ab in account_balances if any(kw in str(ab.get("account_name", "")) for kw in ["存货", "库存商品", "原材料"])]
+        inventory_accounts = [
+            ab
+            for ab in account_balances
+            if any(kw in str(ab.get("account_name", "")) for kw in ["存货", "库存商品", "原材料"])
+        ]
         total_inventory = sum(ab.get("ending_balance", 0) for ab in inventory_accounts)
 
         industry_thresholds = {
@@ -241,7 +271,7 @@ class RiskIdentifier:
             "医药生物": 120,
             "信息技术": 90,
         }
-        threshold = industry_thresholds.get(industry, 120)
+        industry_thresholds.get(industry, 120)
 
         if total_inventory > 0:
             # 简化计算，实际应用中需要结合销售成本
@@ -257,11 +287,19 @@ class RiskIdentifier:
     @staticmethod
     def identify_cash_flow_risk(account_balances: List[Dict]) -> Dict:
         """识别现金流风险."""
-        cash_accounts = [ab for ab in account_balances if any(kw in str(ab.get("account_name", "")) for kw in ["银行存款", "货币资金"])]
+        cash_accounts = [
+            ab
+            for ab in account_balances
+            if any(kw in str(ab.get("account_name", "")) for kw in ["银行存款", "货币资金"])
+        ]
         total_cash = sum(ab.get("ending_balance", 0) for ab in cash_accounts)
 
         # 查找短期借款
-        short_borrowing = sum(ab.get("ending_balance", 0) for ab in account_balances if "短期借款" in str(ab.get("account_name", "")))
+        short_borrowing = sum(
+            ab.get("ending_balance", 0)
+            for ab in account_balances
+            if "短期借款" in str(ab.get("account_name", ""))
+        )
 
         if total_cash < short_borrowing:
             return {
@@ -291,13 +329,15 @@ class AnomalyDetector:
         for ab in account_balances:
             ending = ab.get("ending_balance", 0)
             if ending != 0 and ending % 10000 == 0 and ending > 100000:
-                anomalies.append({
-                    "account_code": ab.get("account_code"),
-                    "account_name": ab.get("account_name"),
-                    "amount": ending,
-                    "anomaly_type": "整数金额",
-                    "description": f"期末余额{ending:,.2f}为整万，可能存在估计或调节",
-                })
+                anomalies.append(
+                    {
+                        "account_code": ab.get("account_code"),
+                        "account_name": ab.get("account_name"),
+                        "amount": ending,
+                        "anomaly_type": "整数金额",
+                        "description": f"期末余额{ending:,.2f}为整万，可能存在估计或调节",
+                    }
+                )
         return anomalies
 
     @staticmethod
@@ -309,21 +349,25 @@ class AnomalyDetector:
             ending = ab.get("ending_balance", 0)
 
             if direction == "借" and ending < 0:
-                anomalies.append({
-                    "account_code": ab.get("account_code"),
-                    "account_name": ab.get("account_name"),
-                    "amount": ending,
-                    "anomaly_type": "余额方向异常",
-                    "description": "借方科目出现贷方余额",
-                })
+                anomalies.append(
+                    {
+                        "account_code": ab.get("account_code"),
+                        "account_name": ab.get("account_name"),
+                        "amount": ending,
+                        "anomaly_type": "余额方向异常",
+                        "description": "借方科目出现贷方余额",
+                    }
+                )
             elif direction == "贷" and ending > 0:
-                anomalies.append({
-                    "account_code": ab.get("account_code"),
-                    "account_name": ab.get("account_name"),
-                    "amount": ending,
-                    "anomaly_type": "余额方向异常",
-                    "description": "贷方科目出现借方余额",
-                })
+                anomalies.append(
+                    {
+                        "account_code": ab.get("account_code"),
+                        "account_name": ab.get("account_name"),
+                        "amount": ending,
+                        "anomaly_type": "余额方向异常",
+                        "description": "贷方科目出现借方余额",
+                    }
+                )
         return anomalies
 
     @staticmethod
@@ -336,20 +380,24 @@ class AnomalyDetector:
             credit = ab.get("credit_amount", 0)
 
             if ending != 0 and debit == 0 and credit == 0:
-                anomalies.append({
-                    "account_code": ab.get("account_code"),
-                    "account_name": ab.get("account_name"),
-                    "amount": ending,
-                    "anomaly_type": "无发生额但有余额",
-                    "description": "本期无发生额但期末有余额，可能存在账龄问题",
-                })
+                anomalies.append(
+                    {
+                        "account_code": ab.get("account_code"),
+                        "account_name": ab.get("account_name"),
+                        "amount": ending,
+                        "anomaly_type": "无发生额但有余额",
+                        "description": "本期无发生额但期末有余额，可能存在账龄问题",
+                    }
+                )
         return anomalies
 
     @staticmethod
     def detect_concentration_risk(account_balances: List[Dict], top_n: int = 5) -> Dict:
         """检测客户/供应商集中度风险."""
         # 按余额排序，检测集中度
-        sorted_accounts = sorted(account_balances, key=lambda x: abs(x.get("ending_balance", 0)), reverse=True)
+        sorted_accounts = sorted(
+            account_balances, key=lambda x: abs(x.get("ending_balance", 0)), reverse=True
+        )
         top_accounts = sorted_accounts[:top_n]
         total_balance = sum(ab.get("ending_balance", 0) for ab in account_balances)
 
@@ -358,7 +406,14 @@ class AnomalyDetector:
             if top_ratio > 0.8:
                 return {
                     "risk_type": "集中度风险",
-                    "top_accounts": [{"code": a.get("account_code"), "name": a.get("account_name"), "balance": a.get("ending_balance")} for a in top_accounts],
+                    "top_accounts": [
+                        {
+                            "code": a.get("account_code"),
+                            "name": a.get("account_name"),
+                            "balance": a.get("ending_balance"),
+                        }
+                        for a in top_accounts
+                    ],
                     "concentration_ratio": top_ratio,
                     "risk_level": "高" if top_ratio > 0.9 else "中",
                     "description": f"前{top_n}名合计占总余额{top_ratio:.1%}，集中度较高",

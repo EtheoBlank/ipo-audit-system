@@ -17,7 +17,6 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urljoin
 
@@ -38,11 +37,11 @@ logger = logging.getLogger(__name__)
 class RegulationItem:
     """统一的法规条目结构 — 直接 ``**asdict(item)`` 入 ``Regulation`` 表。"""
 
-    source: str                                    # CSRC / MOF / STA / SAFE / PBOC / LOCAL / OTHER
+    source: str  # CSRC / MOF / STA / SAFE / PBOC / LOCAL / OTHER
     title: str
     source_url: Optional[str] = None
     issuing_authority: Optional[str] = None
-    category: Optional[str] = None                 # 公告 / 通知 / 规章 / 准则 / 问答 ...
+    category: Optional[str] = None  # 公告 / 通知 / 规章 / 准则 / 问答 ...
     document_no: Optional[str] = None
     publish_date: Optional[str] = None
     effective_date: Optional[str] = None
@@ -93,7 +92,9 @@ class _HttpClient:
                 resp.raise_for_status()
                 return resp
             except httpx.HTTPStatusError as e:
-                logger.warning("HTTP %s — %s (attempt %d)", e.response.status_code, url, attempt + 1)
+                logger.warning(
+                    "HTTP %s — %s (attempt %d)", e.response.status_code, url, attempt + 1
+                )
                 if e.response.status_code in (404, 403, 401):
                     return None
             except httpx.HTTPError as e:
@@ -185,9 +186,18 @@ class CSRCAdapter(BaseRegulationAdapter):
 
     # 法律法规库主入口（含规章 / 规范性文件 / 法律 / 行政法规）
     LIST_URLS = [
-        ("法律法规", "/searchList/00000000fa0000fmifn/?_isAgg=true&_isJson=true&_pageSize=20&_template=index&_keyword=&_rangeTimeGte=&_channelName=%E6%B3%95%E5%BE%8B%E6%B3%95%E8%A7%84"),
-        ("部门规章", "/searchList/00000000fa0000fmifn/?_isAgg=true&_isJson=true&_pageSize=20&_template=index&_keyword=&_rangeTimeGte=&_channelName=%E9%83%A8%E9%97%A8%E8%A7%84%E7%AB%A0"),
-        ("规范性文件", "/searchList/00000000fa0000fmifn/?_isAgg=true&_isJson=true&_pageSize=20&_template=index&_keyword=&_rangeTimeGte=&_channelName=%E8%A7%84%E8%8C%83%E6%80%A7%E6%96%87%E4%BB%B6"),
+        (
+            "法律法规",
+            "/searchList/00000000fa0000fmifn/?_isAgg=true&_isJson=true&_pageSize=20&_template=index&_keyword=&_rangeTimeGte=&_channelName=%E6%B3%95%E5%BE%8B%E6%B3%95%E8%A7%84",
+        ),
+        (
+            "部门规章",
+            "/searchList/00000000fa0000fmifn/?_isAgg=true&_isJson=true&_pageSize=20&_template=index&_keyword=&_rangeTimeGte=&_channelName=%E9%83%A8%E9%97%A8%E8%A7%84%E7%AB%A0",
+        ),
+        (
+            "规范性文件",
+            "/searchList/00000000fa0000fmifn/?_isAgg=true&_isJson=true&_pageSize=20&_template=index&_keyword=&_rangeTimeGte=&_channelName=%E8%A7%84%E8%8C%83%E6%80%A7%E6%96%87%E4%BB%B6",
+        ),
     ]
 
     async def fetch(self, max_pages: int = 0) -> List[RegulationItem]:
@@ -211,11 +221,7 @@ class CSRCAdapter(BaseRegulationAdapter):
         items: List[RegulationItem] = []
         try:
             data = json.loads(body)
-            rows = (
-                data.get("data", {}).get("results")
-                or data.get("results")
-                or []
-            )
+            rows = data.get("data", {}).get("results") or data.get("results") or []
             for r in rows:
                 title = self._clean(r.get("title") or r.get("name") or "")
                 if not title:
@@ -227,7 +233,9 @@ class CSRCAdapter(BaseRegulationAdapter):
                         category=category,
                         title=title,
                         document_no=self._extract_doc_no(title) or r.get("articleNumber"),
-                        publish_date=self._norm_date(r.get("publishedTimeStr") or r.get("publishDate") or ""),
+                        publish_date=self._norm_date(
+                            r.get("publishedTimeStr") or r.get("publishDate") or ""
+                        ),
                         source_url=r.get("url"),
                         summary=self._clean(r.get("description") or ""),
                         full_text=self._clean(r.get("description") or "")[:4000],
@@ -266,7 +274,11 @@ class MOFAdapter(BaseRegulationAdapter):
     issuing_authority = "中华人民共和国财政部"
 
     LIST_URLS = [
-        ("会计司公告", "{base}/zhengwuxinxi/zhengcefabu/", "{accounting}/zhengwuxinxi/gongzuotongzhi/"),
+        (
+            "会计司公告",
+            "{base}/zhengwuxinxi/zhengcefabu/",
+            "{accounting}/zhengwuxinxi/gongzuotongzhi/",
+        ),
         ("会计准则", "{accounting}/zhengwuxinxi/zhengcefabu/kuaijizhuze/"),
         ("准则解释", "{accounting}/zhengwuxinxi/zhengcefabu/zhunzejieshi/"),
         ("准则问答", "{accounting}/zhengwuxinxi/zhengcefabu/zhunzewenda/"),
@@ -449,7 +461,11 @@ class PBOCAdapter(BaseRegulationAdapter):
         items: List[RegulationItem] = []
         base = f"{settings.PBOC_URL}/zhengcehuobisi/125207/125213/index.html"
         for page in range(1, max_pages + 1):
-            url = base if page == 1 else f"{settings.PBOC_URL}/zhengcehuobisi/125207/125213/index_{page}.html"
+            url = (
+                base
+                if page == 1
+                else f"{settings.PBOC_URL}/zhengcehuobisi/125207/125213/index_{page}.html"
+            )
             resp = await self.http.get(url)
             if not resp:
                 break
@@ -555,7 +571,9 @@ class RegulationScraperService:
 
         logger.info(
             "Regulation 抓取完成：%d 条 (去重前 %d 条)，来源 %s",
-            len(unique), len(all_items), codes,
+            len(unique),
+            len(all_items),
+            codes,
         )
         return unique
 

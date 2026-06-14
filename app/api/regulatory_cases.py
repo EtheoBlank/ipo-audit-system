@@ -1,4 +1,5 @@
 """API routes for regulatory cases."""
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -6,14 +7,18 @@ from typing import List, Optional
 
 from app.core.database import get_db
 from app.models.db_models import RegulatoryCase
+from app.models.db.auth import User
 from app.models.audit import RegulatoryCaseCreate, RegulatoryCaseResponse
+from app.services.auth import get_current_user, get_current_user_optional
 from app.services.regulatory_scraper import RegulatoryCaseScraper
 
 router = APIRouter(prefix="/api/regulatory-cases", tags=["监管案例"])
 
 
 @router.post("/scrape")
-async def scrape_regulatory_cases():
+async def scrape_regulatory_cases(
+    current_user: User = Depends(get_current_user),
+):
     """Scrape regulatory cases from CSRC and stock exchanges."""
     scraper = RegulatoryCaseScraper()
     try:
@@ -30,6 +35,7 @@ async def scrape_regulatory_cases():
 async def create_regulatory_case(
     case: RegulatoryCaseCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Manually add a regulatory case."""
     db_case = RegulatoryCase(**case.model_dump())
@@ -47,6 +53,7 @@ async def list_regulatory_cases(
     source: Optional[str] = None,
     industry: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """List regulatory cases with optional filters."""
     query = select(RegulatoryCase).where(RegulatoryCase.is_active == True)
@@ -67,11 +74,10 @@ async def list_regulatory_cases(
 async def get_regulatory_case(
     case_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Get regulatory case by ID."""
-    result = await db.execute(
-        select(RegulatoryCase).where(RegulatoryCase.id == case_id)
-    )
+    result = await db.execute(select(RegulatoryCase).where(RegulatoryCase.id == case_id))
     case = result.scalar_one_or_none()
     if not case:
         raise HTTPException(status_code=404, detail="案例不存在")
@@ -82,13 +88,12 @@ async def get_regulatory_case(
 async def search_by_keywords(
     keywords: str = Query(..., description="逗号分隔的关键词"),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Search regulatory cases by keywords."""
     keyword_list = [kw.strip() for kw in keywords.split(",")]
 
-    result = await db.execute(
-        select(RegulatoryCase).where(RegulatoryCase.is_active == True)
-    )
+    result = await db.execute(select(RegulatoryCase).where(RegulatoryCase.is_active == True))
     all_cases = result.scalars().all()
 
     scraper = RegulatoryCaseScraper()
@@ -108,6 +113,7 @@ async def search_by_keywords(
 async def search_by_industry(
     industry: str = Query(..., description="所属行业"),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Search regulatory cases by industry."""
     result = await db.execute(

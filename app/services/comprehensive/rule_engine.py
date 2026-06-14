@@ -8,6 +8,7 @@
 - 可组合：规则可级联（A 规则产生 risk_level，B 规则根据 risk_level 触发）
 - 可追溯：每条结论都附 rule_id 与条件命中说明
 """
+
 from __future__ import annotations
 
 import logging
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from app.services.comprehensive.schemas import FillResult, TemplateField
 
@@ -25,9 +26,19 @@ logger = logging.getLogger(__name__)
 # ============================== 规则定义 ==============================
 
 Operator = Literal[
-    "==", "!=", ">", "<", ">=", "<=",
-    "in", "not_in", "between",
-    "is_none", "is_not_none", "contains", "starts_with",
+    "==",
+    "!=",
+    ">",
+    "<",
+    ">=",
+    "<=",
+    "in",
+    "not_in",
+    "between",
+    "is_none",
+    "is_not_none",
+    "contains",
+    "starts_with",
 ]
 
 
@@ -98,7 +109,9 @@ class Rule(BaseModel):
 
     id: str
     description: Optional[str] = None
-    target_field: str = Field(..., description="规则产出的字段 ID（与模板 _meta 中的 field_id 对齐）")
+    target_field: str = Field(
+        ..., description="规则产出的字段 ID（与模板 _meta 中的 field_id 对齐）"
+    )
     conditions: list[RuleCondition] = Field(default_factory=list)
     action: RuleAction
     priority: int = Field(0, description="数值越大越优先；同字段多规则命中时取最高优先级")
@@ -121,6 +134,7 @@ class RuleBook(BaseModel):
 
 
 # ============================== 引擎 ==============================
+
 
 class RuleEngine:
     """规则引擎。"""

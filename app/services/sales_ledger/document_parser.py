@@ -11,9 +11,7 @@ Parsing strategy:
 
 from __future__ import annotations
 
-import io
 import logging
-import tempfile
 from pathlib import Path
 from typing import Tuple
 
@@ -41,9 +39,7 @@ class DocumentParser:
         """Parse an uploaded file and return (doc_type, raw_text)."""
         ext = cls.ext_of(upload.filename or "")
         if ext not in SUPPORTED_EXTS:
-            raise DocumentParserError(
-                f"不支持的文件类型: {ext}。仅支持 {sorted(SUPPORTED_EXTS)}"
-            )
+            raise DocumentParserError(f"不支持的文件类型: {ext}。仅支持 {sorted(SUPPORTED_EXTS)}")
 
         save_dir.mkdir(parents=True, exist_ok=True)
         # Persist to disk so the various parsers can re-open the file.

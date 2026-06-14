@@ -5,6 +5,7 @@
     RegulationItem.__post_init__ 用 source|title|document_no|publish_date 算 SHA-256.
     SentimentEvent.content_hash 用 source_code|title|url|publish_date 算 SHA-256.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -38,6 +39,7 @@ class RawSentimentItem:
 
     与 ORM SentimentEvent 字段几乎一致, 但用 dataclass 轻便. 入库时算 hash.
     """
+
     project_id: int
     source_code: str
     source_id: Optional[int] = None
@@ -54,5 +56,8 @@ class RawSentimentItem:
     @property
     def content_hash(self) -> str:
         return compute_content_hash(
-            self.source_code, self.title, self.url, self.publish_date,
+            self.source_code,
+            self.title,
+            self.url,
+            self.publish_date,
         )

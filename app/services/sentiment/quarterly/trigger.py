@@ -1,4 +1,5 @@
 """季度报告触发 — 手动 / 财务数据上传后 / scheduled."""
+
 from __future__ import annotations
 
 import logging
@@ -8,11 +9,8 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import AsyncSessionLocal
 from app.models.db_models import (
-    Project,
     SENTIMENT_PERIOD_TYPE_LABELS,
-    SentimentDailyBriefing,
     SentimentNotification,
     SentimentQuarterlyReport,
 )
@@ -27,11 +25,12 @@ def _utcnow() -> datetime:
 @dataclass
 class QuarterlyPeriodSpec:
     """季度报告期次规格."""
-    period_type: str         # Q1/H1/Q3/ANNUAL
+
+    period_type: str  # Q1/H1/Q3/ANNUAL
     fiscal_year: int
-    period_end: str          # YYYY-MM-DD
-    window_start: str        # 简报/事件窗口起点
-    window_end: str          # 简报/事件窗口终点
+    period_end: str  # YYYY-MM-DD
+    window_start: str  # 简报/事件窗口起点
+    window_end: str  # 简报/事件窗口终点
 
     @property
     def title(self) -> str:
@@ -55,7 +54,13 @@ class QuarterlyPeriodSpec:
             ws, we = f"{fiscal_year}-01-01", f"{fiscal_year}-12-31"
         else:
             raise ValueError(f"未知 period_type={period_type}")
-        return cls(period_type=period_type, fiscal_year=fiscal_year, period_end=pe, window_start=ws, window_end=we)
+        return cls(
+            period_type=period_type,
+            fiscal_year=fiscal_year,
+            period_end=pe,
+            window_start=ws,
+            window_end=we,
+        )
 
 
 async def create_or_get_report(
@@ -111,7 +116,13 @@ async def create_or_get_report(
             return existing
         raise  # 真出错了, 抛
     await db.refresh(rep)
-    logger.info("create_or_get_report: project=%s period=%s/%s id=%s", project_id, period_type, fiscal_year, rep.id)
+    logger.info(
+        "create_or_get_report: project=%s period=%s/%s id=%s",
+        project_id,
+        period_type,
+        fiscal_year,
+        rep.id,
+    )
     return rep
 
 
@@ -122,7 +133,9 @@ async def mark_briefing_ready(
 ) -> None:
     """报告就绪时给所有相关项目成员发红点通知."""
     await _add_notification(
-        db, project_id, "report_ready",
+        db,
+        project_id,
+        "report_ready",
         title="季度跟踪报告已生成, 请审阅",
         link_url=f"/sentiment?project_id={project_id}&tab=quarterly&report_id={report_id}",
     )

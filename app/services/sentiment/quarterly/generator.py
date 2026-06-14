@@ -1,21 +1,20 @@
 """季度报告 4 轮 LLM 协议 — 与简报同结构, 多 1 个 financial_input 维度."""
+
 from __future__ import annotations
 
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
 from app.core.config import settings
 from app.services.sentiment.briefing.generator import (
-    BANNED_WORDS,
     ADVERSARIAL_SYSTEM,
     SELF_CHECK_SYSTEM,
     BriefingGenerator,
 )
 from app.services.sentiment.llm_client import LlmClientFactory
 from app.services.sentiment.quarterly.financial_input import (
-    FinancialInput, REQUIRED_FIELDS,
+    FinancialInput,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,8 +117,8 @@ class QuarterlyReportContent:
     extraction: QuarterlyExtraction
     self_check: dict
     adversarial: dict
-    safe_finding_keys: list[str]   # 用于 verifier
-    raw_input: dict                # 缓存原始输入, verifier 用
+    safe_finding_keys: list[str]  # 用于 verifier
+    raw_input: dict  # 缓存原始输入, verifier 用
 
 
 # ---- 主类 --------------------------------------------------------------
@@ -142,32 +141,39 @@ class QuarterlyReportGenerator:
         period_type: str,
         period_end: str,
         financial_input: FinancialInput,
-        briefings: list[dict],   # [{id, briefing_date, ai_summary, severity_breakdown, audit_verification_json}]
-        events: list[dict],      # [{id, title, content_text, severity, publish_date}]
+        briefings: list[
+            dict
+        ],  # [{id, briefing_date, ai_summary, severity_breakdown, audit_verification_json}]
+        events: list[dict],  # [{id, title, content_text, severity, publish_date}]
     ) -> QuarterlyReportContent:
         # 第 1 轮: 提取 (含双数据源)
-        r1_user = json.dumps({
-            "company_name": company_name,
-            "project_id": project_id,
-            "fiscal_year": fiscal_year,
-            "period_type": period_type,
-            "period_end": period_end,
-            "financial_input": financial_input.data,
-            "briefings": briefings[:30],  # 限 30 份简报, 避免 prompt 爆
-            "events": [
-                {
-                    "id": e.get("id"),
-                    "title": e.get("title", ""),
-                    "content_text": (e.get("content_text", "") or "")[:1500],
-                    "severity": e.get("severity", "info"),
-                    "publish_date": e.get("publish_date", ""),
-                    "url": e.get("url"),
-                }
-                for e in events[:200]  # 限 200 条
-            ],
-        }, ensure_ascii=False, default=str)
+        r1_user = json.dumps(
+            {
+                "company_name": company_name,
+                "project_id": project_id,
+                "fiscal_year": fiscal_year,
+                "period_type": period_type,
+                "period_end": period_end,
+                "financial_input": financial_input.data,
+                "briefings": briefings[:30],  # 限 30 份简报, 避免 prompt 爆
+                "events": [
+                    {
+                        "id": e.get("id"),
+                        "title": e.get("title", ""),
+                        "content_text": (e.get("content_text", "") or "")[:1500],
+                        "severity": e.get("severity", "info"),
+                        "publish_date": e.get("publish_date", ""),
+                        "url": e.get("url"),
+                    }
+                    for e in events[:200]  # 限 200 条
+                ],
+            },
+            ensure_ascii=False,
+            default=str,
+        )
         r1 = await self.client.chat_json(
-            Q_EXTRACT_SYSTEM, r1_user,
+            Q_EXTRACT_SYSTEM,
+            r1_user,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )
@@ -197,7 +203,11 @@ class QuarterlyReportGenerator:
         )
 
         # 第 4 轮: 拼装
-        safe_keys = [f.get("financial_field") or f"event_{f.get('event_id')}" for f in (r2.get("safe_facts") or []) if isinstance(f, dict) and f.get("verified")]
+        safe_keys = [
+            f.get("financial_field") or f"event_{f.get('event_id')}"
+            for f in (r2.get("safe_facts") or [])
+            if isinstance(f, dict) and f.get("verified")
+        ]
         r4 = await self.client.chat_json(
             Q_COMPOSE_SYSTEM,
             f"公司: {company_name}\n"
@@ -220,6 +230,7 @@ class QuarterlyReportGenerator:
         # 兜底标题
         if not md.strip().startswith("#"):
             from app.models.db_models import SENTIMENT_PERIOD_TYPE_LABELS
+
             label = SENTIMENT_PERIOD_TYPE_LABELS.get(period_type, period_type)
             md = f"# {company_name} {fiscal_year} {label} 跟踪报告\n\n" + md
         md = BriefingGenerator._strip_banned_words(md)

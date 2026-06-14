@@ -1,4 +1,5 @@
 """Database configuration and session management."""
+
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.core.config import settings
@@ -6,6 +7,7 @@ from app.core.config import settings
 
 class Base(DeclarativeBase):
     """Base class for all database models."""
+
     pass
 
 
@@ -55,5 +57,6 @@ async def init_db() -> None:
     """
     # 显式 import 所有 ORM 模型 — SQLAlchemy 靠 import-time 注册
     import app.models.db_models  # noqa: F401
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

@@ -7,6 +7,7 @@
 - 同一主题的多个字段合并为一个问题，答案自动写入所有相关字段
 - 问题生成可使用 LLM（可选），无 LLM 时回退到模板式问题
 """
+
 from __future__ import annotations
 
 import logging
@@ -52,6 +53,7 @@ def classify_topic(field: TemplateField) -> str:
 
 # ============================== 引擎 ==============================
 
+
 class QAEngine:
     """问答生成与聚类引擎。"""
 
@@ -74,9 +76,9 @@ class QAEngine:
         """为尚未填上的字段生成问题，按主题聚类并截断。"""
         # 1) 过滤：未填的 human_qa 字段
         pending = [
-            f for f in fields
-            if f.field_id not in filled_field_ids
-            and (f.source == "human_qa" or f.required)
+            f
+            for f in fields
+            if f.field_id not in filled_field_ids and (f.source == "human_qa" or f.required)
         ]
         if not pending:
             return []
@@ -120,10 +122,7 @@ class QAEngine:
         """构造一个 PendingQuestion。"""
         # 简单实现：模板化问题
         labels = "、".join(f.label for f in fields)
-        prompt_default = (
-            f"请就「{topic}」补充以下信息：{labels}。"
-            "请用一段话描述，不少于 100 字。"
-        )
+        prompt_default = f"请就「{topic}」补充以下信息：{labels}。请用一段话描述，不少于 100 字。"
         context_lines = [f"- {f.label}：{f.hint or '（无）'}" for f in fields]
 
         # 上下文：项目/期间等

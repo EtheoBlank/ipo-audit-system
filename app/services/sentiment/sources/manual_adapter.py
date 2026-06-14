@@ -1,4 +1,5 @@
 """手工录入信源 — 不抓取, 仅作为"事件库"录入入口的逻辑标签."""
+
 from __future__ import annotations
 
 import logging

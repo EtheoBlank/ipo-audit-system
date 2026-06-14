@@ -2,6 +2,7 @@
 
 降级原则同前两个 generator。
 """
+
 from __future__ import annotations
 
 import json
@@ -26,13 +27,17 @@ class RecommendationContext:
 
     project_id: int
     project_name: str
-    completion_rate: float            # 项目整体完成率 0-1
+    completion_rate: float  # 项目整体完成率 0-1
     blocked_count: int
     critical_blockers: int
-    overdue_items: int                # 逾期未完成的任务数
-    members_load: list[dict[str, Any]] = field(default_factory=list)   # [{name, level, completion_rate, hours_logged, open_blockers}]
-    recent_blockers: list[dict[str, Any]] = field(default_factory=list)  # [{title, severity, days_open}]
-    recent_summaries: list[str] = field(default_factory=list)         # 来自日报的摘要
+    overdue_items: int  # 逾期未完成的任务数
+    members_load: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # [{name, level, completion_rate, hours_logged, open_blockers}]
+    recent_blockers: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # [{title, severity, days_open}]
+    recent_summaries: list[str] = field(default_factory=list)  # 来自日报的摘要
     period_start: Optional[str] = None
     period_end: Optional[str] = None
 
@@ -41,9 +46,13 @@ class RecommendationContext:
 class RecommendationResult:
     """生成结果。"""
 
-    findings: list[dict[str, Any]] = field(default_factory=list)        # [{category, severity, finding, evidence}]
-    priority_actions: list[dict[str, Any]] = field(default_factory=list)  # [{action, owner, deadline, rationale}]
-    recommendations: str = ""                                            # Markdown 长文
+    findings: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # [{category, severity, finding, evidence}]
+    priority_actions: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # [{action, owner, deadline, rationale}]
+    recommendations: str = ""  # Markdown 长文
     ai_enabled: bool = False
     ai_raw: Optional[dict[str, Any]] = None
 
@@ -98,7 +107,9 @@ def _fallback_recommendations(ctx: RecommendationContext) -> RecommendationResul
                 "rationale": "完成率偏低，需调整任务结构",
             }
         )
-        md_lines.append(f"- 📉 **进度滞后**：完成率仅 {ctx.completion_rate:.0%}，建议聚焦关键路径。")
+        md_lines.append(
+            f"- 📉 **进度滞后**：完成率仅 {ctx.completion_rate:.0%}，建议聚焦关键路径。"
+        )
     elif ctx.completion_rate > 0.8:
         md_lines.append(f"- ✅ 进度良好，完成率 {ctx.completion_rate:.0%}。")
 
@@ -134,7 +145,7 @@ def _fallback_recommendations(ctx: RecommendationContext) -> RecommendationResul
                 "category": "进度风险",
                 "severity": "high",
                 "finding": f"{ctx.overdue_items} 项任务已逾期",
-                "evidence": f"due_date < today 且 status != done",
+                "evidence": "due_date < today 且 status != done",
             }
         )
         actions.append(

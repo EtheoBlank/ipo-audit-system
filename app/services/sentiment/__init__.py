@@ -14,6 +14,7 @@
         briefing/                  # 每日简报
         quarterly/                 # 季度跟踪报告
 """
+
 from __future__ import annotations
 
 __all__: list[str] = []

@@ -1,4 +1,5 @@
 """舆情抓取服务 — 照搬 RegulationScraperService.scrape() 模式 (asyncio.gather + dedup)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -15,7 +16,6 @@ from app.core.database import AsyncSessionLocal
 from app.models.db_models import (
     Project,
     SentimentEvent,
-    SentimentNotification,
     SentimentSource,
     SentimentSubject,
     PaidSourceMissingKey,
@@ -241,7 +241,10 @@ class SentimentScraperService:
         await db.commit()
         logger.info(
             "scrape_project: project=%s 命中 %d 条 (新增 %d) 各源状态=%s",
-            project.id, len(all_items), added, source_status,
+            project.id,
+            len(all_items),
+            added,
+            source_status,
         )
         return added, source_status
 

@@ -38,7 +38,9 @@ def setup_logging(
     if not root.handlers:
         root.addHandler(handler)
 
-    root.setLevel(level if isinstance(level, int) else getattr(logging, level.upper(), logging.INFO))
+    root.setLevel(
+        level if isinstance(level, int) else getattr(logging, level.upper(), logging.INFO)
+    )
 
     # Quieten noisy third-party loggers
     for noisy in ("httpx", "httpcore", "urllib3", "asyncio", "sqlalchemy.engine"):

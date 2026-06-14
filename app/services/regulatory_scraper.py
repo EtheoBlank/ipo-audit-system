@@ -10,8 +10,7 @@ import logging
 
 import httpx
 from bs4 import BeautifulSoup
-from typing import List, Dict, Optional
-from datetime import datetime
+from typing import List, Dict
 
 from app.core.config import settings
 
@@ -41,8 +40,7 @@ class RegulatoryCaseScraper:
         Returns:
             List of inquiry letter records
         """
-        url = f"{settings.CSRC_URL}/pub/newsite/sycyjgshjscxgshj/" \
-              f"shjshjwxshjwxindex_{page}.shtml"
+        url = f"{settings.CSRC_URL}/pub/newsite/sycyjgshjscxgshj/shjshjwxshjwxindex_{page}.shtml"
         cases = []
 
         try:
@@ -81,8 +79,10 @@ class RegulatoryCaseScraper:
         Returns:
             List of inquiry letter records
         """
-        url = f"{settings.SSE_URL}/lawandregulation/query/regulativerecord/" \
-              f"qaTypeNO%20IN%20(%27401%27)?page={page}"
+        url = (
+            f"{settings.SSE_URL}/lawandregulation/query/regulativerecord/"
+            f"qaTypeNO%20IN%20(%27401%27)?page={page}"
+        )
         cases = []
 
         try:
@@ -120,8 +120,10 @@ class RegulatoryCaseScraper:
         Returns:
             List of inquiry letter records
         """
-        url = f"{settings.SZSE_URL}/api/report/ShowReport/data" \
-              f"?SHOWTYPE=JSON&CATALOGID=1839&CATEGORY=xxpl/tzzscx&page={page}"
+        url = (
+            f"{settings.SZSE_URL}/api/report/ShowReport/data"
+            f"?SHOWTYPE=JSON&CATALOGID=1839&CATEGORY=xxpl/tzzscx&page={page}"
+        )
         cases = []
 
         try:
@@ -159,8 +161,7 @@ class RegulatoryCaseScraper:
         Returns:
             List of penalty records
         """
-        url = f"{settings.CSRC_URL}/pub/newsite/sycyjgshjscxgshj/" \
-              f"cfjdindex_{page}.shtml"
+        url = f"{settings.CSRC_URL}/pub/newsite/sycyjgshjscxgshj/cfjdindex_{page}.shtml"
         cases = []
 
         try:
@@ -233,7 +234,8 @@ class RegulatoryCaseScraper:
             return cases
 
         return [
-            case for case in cases
+            case
+            for case in cases
             if industry in case.get("title", "") or industry in case.get("content", "")
         ]
 
@@ -251,10 +253,7 @@ class RegulatoryCaseScraper:
 
         for case in cases:
             content = f"{case.get('title', '')} {case.get('content', '')}"
-            matched_keywords = [
-                kw for kw in keywords
-                if kw in content
-            ]
+            matched_keywords = [kw for kw in keywords if kw in content]
             if matched_keywords:
                 case["matched_keywords"] = matched_keywords
                 matched.append(case)

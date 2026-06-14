@@ -141,7 +141,7 @@ class ContractAnalyzer:
                     hits.append(label)
                     break
         if five_step:
-            tp = (five_step.get("step4_transaction_price") or {})
+            tp = five_step.get("step4_transaction_price") or {}
             if (tp.get("variable_consideration") or {}).get("has"):
                 hits.append("可变对价（CAS 14 §16-19）")
             if (tp.get("significant_financing_component") or {}).get("has"):

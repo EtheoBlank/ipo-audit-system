@@ -301,6 +301,9 @@ ipo-audit-system/
 │   ├── test_comprehensive_parser.py / test_comprehensive_frontend.py / test_e2e_comprehensive.py
 │   ├── test_field_mapper.py / test_fill_engine.py / test_qa_engine.py / test_rule_engine.py
 │   ├── test_firm_template_service.py / test_web_search_engine.py
+│   ├── test_pack_a2_b2.py                 # Pack A.2/B.2: 多租户隔离/乐观锁/审计归档/AI 推断/Word 富格式
+│   ├── test_auth.py / test_notification.py / test_account_audit.py / test_report_templates.py
+│   ├── test_audit_cycles.py / test_related_parties.py / test_ipo_specials.py
 │   └── ...
 │
 ├── docs/                               # ───── 文档 ─────
@@ -342,7 +345,18 @@ ipo-audit-system/
 | `/api/team-management` | 项目组 | `POST /members` · `POST /work-plan/generate` · `POST /meetings/{id}/score` · `GET /progress` · `GET /recommendations` |
 | `/api/sentiment` | 舆情 | `GET /notifications/unread` · `POST /scan/trigger` · `POST /briefings/generate` · `POST /quarterly/generate` |
 | `/api/comprehensive` | 综合底稿 | `POST /templates/upload` · `POST /generate-all` |
-| `/health` | 系统 | 健康检查 |
+| **Pack A** | | |
+| `/api/auth` | 认证 / 用户 / 权限 / 审计 / 5 级签字 | `POST /login` · `GET /me` · `POST /users` · `GET /audit-logs` · `POST /approvals` · `POST /approvals/{id}/decide` |
+| `/api/notifications` | 通用通知中心 | `GET /unread` · `GET /list` · `POST /mark-read` |
+| `/api/account-audit` | 长期资产发生额审定 | `POST /projects/{id}/initialize` · `PUT /movements/{id}` · `GET /projects/{id}/overview` · `GET /projects/{id}/export` |
+| `/api/report-templates` | 报告模板自定义化 | `POST /` (upload) · `GET /{id}/analyze` · `POST /render` |
+| **Pack B** | | |
+| `/api/related-parties` | 关联方专项 | `POST /projects/{id}/detector/run` · `POST /projects/{id}/transactions/check-fairness` · `POST /projects/{id}/peer-competition/assess` · `POST /projects/{id}/disclosure/check` |
+| **Pack C** | | |
+| `/api/audit-cycles` | 10 个审计循环 | `POST /expenses/entertainment-deduction-limit` · `POST /fixed-assets/depreciation-calc` · `POST /intangible/rd-capitalization-check` · `POST /long-term-investment/goodwill-npv` · `POST /leases/present-value` · `POST /income-tax/reconcile` · `POST /accounting-estimates/ecl-compute` · `POST /subsequent-events/going-concern` |
+| **Pack D** | | |
+| `/api/ipo-specials` | IPO 专属 | `POST /walkthrough/mermaid-flowchart` · `POST /revenue-cutoff/judge` · `POST /prospectus/{id}/metrics` · `POST /overlap/projects/{id}/detect` · `POST /peer-companies/benchmark` · `POST /submission/projects/{id}/init-checklist` |
+| `/health` | 系统 | 健康检查 (含 ``auth_enabled`` 字段) |
 
 完整 API 文档自动生成: 启动后访问 <http://localhost:8000/docs>
 
@@ -523,15 +537,51 @@ uv run pre-commit run --all-files
 - [x] **Phase 13**: 函证管理(财政部模板 + 回函 OCR + 差异统计)
 - [x] **Phase 14**: 舆情跟踪(简报 + 季报 + 全局红点)
 - [x] **Phase 15**: 综合底稿(事务所模板化全量生成)
+- [x] **Phase 16 (Pack D)**: 内控穿行测试 (6 大循环 RCM + 抽样 + Mermaid 流程图)
+- [x] **Phase 17 (Pack D)**: 跨期调整 / 合同资产 / 合同负债自动化 (截止性测试)
+- [x] **Phase 18 (Pack A)**: 多用户 / 权限 / 审计轨迹 — 5 级签字流
+      (审计员→经理→项目合伙人→质控合伙人→签字合伙人) + JWT + RBAC + AuditLog
+- [x] **Pack A 用户特别要求**: 长期资产发生额审定 — 固定资产/在建工程/
+      无形资产/长投/商誉/使用权资产等长期资产科目, 本期借/贷方发生额逐笔
+      出审定数 + 审计调整, 底稿自动恒等式校验
+- [x] **Phase 20 (Pack A)**: 报告模板自定义化 — 事务所上传 Word/Excel 模板,
+      ``${placeholder}`` 占位符渲染, 支持品牌定制
+- [x] **Pack A**: 通用通知中心 + 后台事件机制
+- [x] **Pack B**: 关联方专项 (主数据 / 识别引擎 / 资金占用 / 同业竞争 / 披露 diff)
+- [x] **Pack C**: 10 个审计循环 (应付 / 费用 / 薪酬 / 固定资产 / 无形资产 / 长投+商誉 /
+      租赁 CAS 21 / 所得税 / 会计估计 ECL / 后续期间+持续经营)
+- [x] **Pack D**: IPO 专属 — 招股书勾稽 / 三年一期对比 / 客户供应商重叠 /
+      可比公司基准 / 反馈意见管理 / 申报材料完整性
 - [x] **DevOps**: GitHub Actions 矩阵 CI + pre-commit + ruff
+- [x] **Phase 19**: 容器化(Docker 一键起栈 + [HF Space 部署](https://huggingface.co/spaces/EtheoZheng/EtheoBlank))
 
 ### 🔭 路线图
 
-- [ ] **Phase 16**: 内控穿行测试模板化
-- [ ] **Phase 17**: 跨期调整 / 合同资产 / 合同负债自动化
-- [ ] **Phase 18**: 多用户 / 权限 / 审计轨迹(audit trail)
-- [x] **Phase 19**: 容器化(Docker 一键起栈 + [HF Space 部署](https://huggingface.co/spaces/EtheoZheng/EtheoBlank))
-- [ ] **Phase 20**: 报告模板自定义化(事务所品牌)
+**Pack A.2 / B.2 (本轮全部 6 项完工 + 41 个新增单测)**:
+- [x] **老业务 API 全量加鉴权** — projects / sales_ledger / workbooks / contracts / inventory /
+      confirmations / reports / regulatory_cases / regulations / knowledge_base /
+      comprehensive / team_management / sentiment **共 13 个老路由 170+ 端点**
+      全部接入 ``get_current_user`` / ``get_current_user_optional`` (写强制登录, 读匿名可读 + AUTH_ENABLED=false 兼容)
+- [x] **跨事务所多租户硬隔离** — ``Project.firm_id`` + ``scope_projects_to_firm`` /
+      ``ensure_project_in_firm`` 帮助器, admin 跨租户运维; ``app/services/auth/tenant.py``;
+      已挂载到 projects / workbooks / reports 关键写端点, 其他模块按需用同模式扩展
+- [x] **ApprovalEngine 加版本号乐观锁** — ``ApprovalWorkflow.version`` 字段 +
+      ``ApprovalEngine.decide(expected_version=...)`` + ``ApprovalConflict`` 异常 +
+      HTTP 409 Conflict (并发审批防双写)
+- [x] **Pack B AI 增强** — DeepSeek 关联方推断 (``RelatedPartyAIInferer``):
+      把客户/供应商/已知股东扔给 DeepSeek, JSON Mode 输出"潜在关联方候选 + confidence + 证据类型",
+      仍走人工 confirm 流程, 失败自动降级到规则识别
+- [x] **报告模板 Word 富格式渲染优化** — XML 段落级 run-aware 替换 (``_render_docx_xml_blob``):
+      把跨 ``<w:r>`` 拆散的 ``${placeholder}`` 拼回去, 整段替换写第一个 run + 清空其余, 保留字体/字号/加粗/颜色
+- [x] **审计轨迹分区 + 索引优化** — 4 个复合索引
+      (firm/project/user/action × created_at) + ``rotate_audit_logs`` 归档工具
+      (按 N 月切, dry-run 默认, 影子表 ``audit_logs_archive``) + ``audit_log_stats`` 监控
+
+### 🔮 下一阶段候选
+
+- [ ] PostgreSQL 真分区 (DECLARATIVE PARTITION BY RANGE created_at) — 当前应用层归档
+- [ ] 关联方 AI 推断支持供应商主表扫描 (Pack C 应付循环落库后)
+- [ ] 审批工作流抽离为独立子系统 (跨业务模块共用)
 
 ---
 

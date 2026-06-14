@@ -25,18 +25,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.api._helpers import get_project_or_404
 from app.core.database import get_db
-from app.models.db_models import Project, SalesDocument, SalesRecord
+from app.models.db_models import SalesDocument, SalesRecord
+from app.models.db.auth import User
 from app.models.sales_ledger import (
     AnalysisRequest,
     AnalysisResponse,
     SalesDocumentResponse,
-    SalesRecordCreate,
     SalesRecordResponse,
     SalesRecordUpdate,
     SynthesisRequest,
     SynthesisResponse,
 )
+from app.services.auth import get_current_user, get_current_user_optional
 from app.services.sales_ledger import (
     DeepSeekClient,
     DocumentParser,
@@ -60,14 +62,6 @@ def _deepseek_client() -> DeepSeekClient:
         base_url=settings.DEEPSEEK_API_BASE,
         model=settings.DEEPSEEK_MODEL,
     )
-
-
-async def _get_project_or_404(db: AsyncSession, project_id: int) -> Project:
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
-    return project
 
 
 def _record_to_response(r: SalesRecord) -> SalesRecordResponse:
@@ -126,13 +120,14 @@ async def upload_sales_document(
     file: UploadFile = File(...),
     note: Optional[str] = Query(None, description="可选备注"),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload a Word/PDF/Excel source document and store its parsed text.
 
     The parsed text is kept in the `raw_text` column so the synthesizer can
     re-run on it without re-parsing the file.
     """
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
 
     try:
         doc_type, raw_text = await DocumentParser.parse(file, settings.UPLOAD_DIR)
@@ -159,8 +154,9 @@ async def upload_sales_document(
 async def list_sales_documents(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     result = await db.execute(
         select(SalesDocument)
         .where(SalesDocument.project_id == project_id)
@@ -173,6 +169,7 @@ async def list_sales_documents(
 async def delete_sales_document(
     doc_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     result = await db.execute(select(SalesDocument).where(SalesDocument.id == doc_id))
     doc = result.scalar_one_or_none()
@@ -194,11 +191,12 @@ async def synthesize_sales_records(
     project_id: int,
     req: SynthesisRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Run DeepSeek over the project's uploaded documents to build sales
     records. Existing records (matched by contract_no+product_code) will be
     updated; new ones inserted."""
-    project = await _get_project_or_404(db, project_id)
+    project = await get_project_or_404(db, project_id)
 
     q = select(SalesDocument).where(SalesDocument.project_id == project_id)
     if req.document_ids:
@@ -274,7 +272,9 @@ async def synthesize_sales_records(
                 setattr(existing, field, val)
             upserted.append(existing)
         else:
-            new = SalesRecord(project_id=project_id, contract_no=contract_no, product_code=product_code, **common)
+            new = SalesRecord(
+                project_id=project_id, contract_no=contract_no, product_code=product_code, **common
+            )
             new.confidence = 0.8
             db.add(new)
             upserted.append(new)
@@ -296,8 +296,9 @@ async def synthesize_sales_records(
 async def list_sales_records(
     project_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await _get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id)
     result = await db.execute(
         select(SalesRecord)
         .where(SalesRecord.project_id == project_id)
@@ -311,6 +312,7 @@ async def update_sales_record(
     record_id: int,
     payload: SalesRecordUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     result = await db.execute(select(SalesRecord).where(SalesRecord.id == record_id))
     record = result.scalar_one_or_none()
@@ -329,6 +331,7 @@ async def update_sales_record(
 async def delete_sales_record(
     record_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     result = await db.execute(select(SalesRecord).where(SalesRecord.id == record_id))
     record = result.scalar_one_or_none()
@@ -350,14 +353,15 @@ async def revenue_analysis(
     project_id: int,
     req: AnalysisRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    project = await _get_project_or_404(db, project_id)
+    project = await get_project_or_404(db, project_id)
 
     records = (
-        await db.execute(
-            select(SalesRecord).where(SalesRecord.project_id == project_id)
-        )
-    ).scalars().all()
+        (await db.execute(select(SalesRecord).where(SalesRecord.project_id == project_id)))
+        .scalars()
+        .all()
+    )
     if not records:
         raise HTTPException(
             status_code=400,
@@ -393,13 +397,14 @@ async def export_sales_ledger(
     project_id: int,
     run_analysis: bool = Query(True, description="是否在导出前重算分析"),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    project = await _get_project_or_404(db, project_id)
+    project = await get_project_or_404(db, project_id)
     records = (
-        await db.execute(
-            select(SalesRecord).where(SalesRecord.project_id == project_id)
-        )
-    ).scalars().all()
+        (await db.execute(select(SalesRecord).where(SalesRecord.project_id == project_id)))
+        .scalars()
+        .all()
+    )
 
     analysis: dict | None = None
     if run_analysis and records:

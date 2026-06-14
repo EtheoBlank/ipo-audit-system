@@ -1,4 +1,5 @@
 """Pydantic schemas for IPO Audit System."""
+
 from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, Field
@@ -7,6 +8,7 @@ from pydantic import BaseModel, Field
 # ============ 项目相关 ============
 class ProjectBase(BaseModel):
     """Base project schema."""
+
     name: str = Field(..., description="项目名称")
     company_name: str = Field(..., description="公司名称")
     industry: Optional[str] = Field(None, description="所属行业")
@@ -15,22 +17,34 @@ class ProjectBase(BaseModel):
 
 class ProjectCreate(ProjectBase):
     """Create project schema."""
-    pass
+
+    firm_id: Optional[int] = Field(
+        None,
+        description="所属事务所 ID (多租户硬隔离). 不传则自动取当前用户的 firm_id; "
+        "admin 可显式指定其他 firm.",
+    )
 
 
 class ProjectUpdate(BaseModel):
     """Update project schema."""
+
     name: Optional[str] = None
     company_name: Optional[str] = None
     industry: Optional[str] = None
     fiscal_year: Optional[int] = None
     status: Optional[str] = None
+    firm_id: Optional[int] = Field(
+        None,
+        description="所属事务所 ID. 一般不允许业务用户修改, admin 才有权改.",
+    )
 
 
 class ProjectResponse(ProjectBase):
     """Project response schema."""
+
     id: int
     status: str
+    firm_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 
@@ -40,6 +54,7 @@ class ProjectResponse(ProjectBase):
 # ============ 科目余额表相关 ============
 class AccountBalanceBase(BaseModel):
     """Base account balance schema."""
+
     account_code: str = Field(..., description="科目编码")
     account_name: str = Field(..., description="科目名称")
     balance_direction: str = Field(..., description="余额方向: 借/贷")
@@ -51,11 +66,13 @@ class AccountBalanceBase(BaseModel):
 
 class AccountBalanceCreate(AccountBalanceBase):
     """Create account balance schema."""
+
     project_id: int
 
 
 class AccountBalanceResponse(AccountBalanceBase):
     """Account balance response schema."""
+
     id: int
     project_id: int
     created_at: datetime
@@ -66,6 +83,7 @@ class AccountBalanceResponse(AccountBalanceBase):
 # ============ 序时账相关 ============
 class ChronologicalAccountBase(BaseModel):
     """Base chronological account schema."""
+
     voucher_date: str = Field(..., description="凭证日期")
     voucher_no: str = Field(..., description="凭证号")
     account_code: str = Field(..., description="科目编码")
@@ -78,11 +96,13 @@ class ChronologicalAccountBase(BaseModel):
 
 class ChronologicalAccountCreate(ChronologicalAccountBase):
     """Create chronological account schema."""
+
     project_id: int
 
 
 class ChronologicalAccountResponse(ChronologicalAccountBase):
     """Chronological account response schema."""
+
     id: int
     project_id: int
     created_at: datetime
@@ -93,6 +113,7 @@ class ChronologicalAccountResponse(ChronologicalAccountBase):
 # ============ 银行对账单相关 ============
 class BankStatementBase(BaseModel):
     """Base bank statement schema."""
+
     statement_date: str = Field(..., description="对账单日期")
     voucher_no: str = Field(..., description="凭证号")
     description: str = Field(..., description="描述")
@@ -104,11 +125,13 @@ class BankStatementBase(BaseModel):
 
 class BankStatementCreate(BankStatementBase):
     """Create bank statement schema."""
+
     project_id: int
 
 
 class BankStatementResponse(BankStatementBase):
     """Bank statement response schema."""
+
     id: int
     project_id: int
     created_at: datetime
@@ -119,13 +142,17 @@ class BankStatementResponse(BankStatementBase):
 # ============ 底稿生成相关 ============
 class WorkbookGenerateRequest(BaseModel):
     """Request schema for generating workbooks."""
+
     project_id: int
-    template_type: str = Field(..., description="模板类型: account_detail/income_statement/balance_sheet/cash_flow")
+    template_type: str = Field(
+        ..., description="模板类型: account_detail/income_statement/balance_sheet/cash_flow"
+    )
     include_charts: bool = Field(True, description="是否包含图表")
 
 
 class WorkbookGenerateResponse(BaseModel):
     """Response schema for workbook generation."""
+
     file_path: str
     file_name: str
     download_url: str
@@ -134,11 +161,13 @@ class WorkbookGenerateResponse(BaseModel):
 # ============ 试算平衡相关 ============
 class TrialBalanceRequest(BaseModel):
     """Trial balance request schema."""
+
     project_id: int
 
 
 class TrialBalanceResponse(BaseModel):
     """Trial balance response schema."""
+
     is_balanced: bool
     total_debit: float
     total_credit: float
@@ -149,6 +178,7 @@ class TrialBalanceResponse(BaseModel):
 # ============ 监管案例相关 ============
 class RegulatoryCaseBase(BaseModel):
     """Base regulatory case schema."""
+
     case_no: str = Field(..., description="案例编号")
     case_type: str = Field(..., description="案例类型: 问询函/处罚决定")
     source: str = Field(..., description="来源: 证监会/交易所")
@@ -161,11 +191,13 @@ class RegulatoryCaseBase(BaseModel):
 
 class RegulatoryCaseCreate(RegulatoryCaseBase):
     """Create regulatory case schema."""
+
     pass
 
 
 class RegulatoryCaseResponse(RegulatoryCaseBase):
     """Regulatory case response schema."""
+
     id: int
     created_at: datetime
 
@@ -175,12 +207,14 @@ class RegulatoryCaseResponse(RegulatoryCaseBase):
 # ============ AI 分析相关 ============
 class RiskAnalysisRequest(BaseModel):
     """Risk analysis request schema."""
+
     project_id: int
     include_regulatory_cases: bool = Field(True, description="是否关联监管案例")
 
 
 class RiskAnalysisResponse(BaseModel):
     """Risk analysis response schema."""
+
     project_id: int
     risk_level: str = Field(..., description="风险等级: 高/中/低")
     risk_points: list[dict]
@@ -191,6 +225,7 @@ class RiskAnalysisResponse(BaseModel):
 # ============ 通用响应 ============
 class ApiResponse(BaseModel):
     """Standard API response."""
+
     success: bool = True
     message: str = "操作成功"
     data: Optional[dict] = None
@@ -198,6 +233,7 @@ class ApiResponse(BaseModel):
 
 class PaginatedResponse(BaseModel):
     """Paginated response schema."""
+
     items: list
     total: int
     page: int

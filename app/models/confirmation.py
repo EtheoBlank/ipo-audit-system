@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 from app.models.db_models import (
     ITEM_STATUS_LABELS,
     PARTY_TYPE_LABELS,
-    RESPONSE_STATUS_LABELS,
 )
 
 
@@ -352,6 +351,7 @@ class ConfirmationItemResponse(BaseModel):
     def from_orm_item(cls, obj: Any) -> "ConfirmationItemResponse":
         """Helper that decorates status/party_type with human labels."""
         import json as _json
+
         try:
             subjects = _json.loads(obj.subject_matters or "[]")
             if not isinstance(subjects, list):
@@ -395,7 +395,7 @@ class SubjectSelection(BaseModel):
     book_balance: float = 0.0
     book_balance_date: Optional[str] = None
     subject_matters: list[str] = Field(default_factory=list)
-    importance: str = "B"               # A=必发 / B=抽样 / C=补充
+    importance: str = "B"  # A=必发 / B=抽样 / C=补充
     selection_reason: Optional[str] = None
     contact_person: Optional[str] = None
     contact_info: Optional[str] = None
@@ -406,9 +406,9 @@ class GenerateStatsRequest(BaseModel):
     case_id: int
     period_end: Optional[date] = None
     # 选样规则
-    bank_threshold: float = 0              # 银行: 0 必发（银行机构数）
-    customer_threshold: float = 100000     # 客户: 10 万
-    supplier_threshold: float = 100000     # 供应商: 10 万
+    bank_threshold: float = 0  # 银行: 0 必发（银行机构数）
+    customer_threshold: float = 100000  # 客户: 10 万
+    supplier_threshold: float = 100000  # 供应商: 10 万
     other_threshold: float = 50000
     # 抽样补充
     additional_sample_ratio: float = 0.10  # 阈值以下随机抽样比例
@@ -449,8 +449,8 @@ class SendLetterRequest(BaseModel):
     recipient_address: Optional[str] = None
     courier_no: Optional[str] = None
     expected_reply_date: Optional[date] = None
-    template_id: str = "standard"          # bank_official / customer_std / supplier_std / other_std
-    file_format: str = "docx"              # docx / pdf
+    template_id: str = "standard"  # bank_official / customer_std / supplier_std / other_std
+    file_format: str = "docx"  # docx / pdf
     notes: Optional[str] = None
 
 
@@ -487,10 +487,11 @@ class ConfirmationLetterResponse(BaseModel):
 
 class ConfirmationResponseInput(BaseModel):
     """手工录入的回函信息。"""
+
     letter_id: int
     received_date: Optional[date] = None
     response_method: str = "纸质原件"
-    response_status: str = "match"        # match / partial / mismatch / reject / unclear
+    response_status: str = "match"  # match / partial / mismatch / reject / unclear
     amount_confirmed: float = 0.0
     difference_reason: Optional[str] = None
     response_summary: Optional[str] = None
@@ -539,6 +540,7 @@ class ConfirmationResponseDetail(BaseModel):
 
 class ConfirmationSummaryResponse(BaseModel):
     """一份统计表的函证汇总。"""
+
     case_id: int
     case_name: str
     period_end: str
