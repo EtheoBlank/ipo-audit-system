@@ -85,14 +85,19 @@ async def start_scheduler() -> None:
         logger.warning("Scheduler: bootstrap 信源失败: %s", exc)
 
 
-async def stop_scheduler() -> None:
-    """停止调度器 (幂等)."""
+async def stop_scheduler(wait: bool = True) -> None:
+    """停止调度器 (幂等).
+
+    Args:
+        wait: True=等所有 in-flight job 跑完再返回 (推荐, 避免 engine.dispose() 打断
+            还在执行的 daily_scan_job 造成 DB session 异常). False=立即关闭, 测试场景用.
+    """
     global _scheduler
     if _scheduler is None:
         return
     if _scheduler.running:
-        _scheduler.shutdown(wait=False)
-        logger.info("Scheduler 停止")
+        _scheduler.shutdown(wait=wait)
+        logger.info("Scheduler 停止 (wait=%s)", wait)
     _scheduler = None
 
 

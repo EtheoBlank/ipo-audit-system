@@ -554,9 +554,13 @@ class RegulationScraperService:
             adapter = _ADAPTERS[code](self.http)
             tasks.append(self._safe_fetch(adapter, max_pages))
 
-        results = await asyncio.gather(*tasks, return_exceptions=False)
+        # return_exceptions=True: 单个信源失败不应拖垮整次抓取 (一个 adapter 抛错不应取消其余)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         all_items: List[RegulationItem] = []
-        for batch in results:
+        for code, batch in zip(codes, results):
+            if isinstance(batch, Exception):
+                logger.warning("法规源 %s 抓取失败 (跳过): %s", code, batch)
+                continue
             all_items.extend(batch)
 
         # 按 content_hash 去重

@@ -44,8 +44,7 @@ from app.models.db.auth import (
     ROLE_PARTNER,
     ROLE_QC_PARTNER,
     ROLE_SIGNING_PARTNER,
-    Firm,  # 强制把 Firm 拉进 SQLAlchemy mapper registry,
-    User,  # 避开 test_confirmation_p0.py 清 sys.modules 的副作用 (模块字母序在 test_auth 之前)
+    User,
 )
 
 

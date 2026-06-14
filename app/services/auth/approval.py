@@ -180,6 +180,7 @@ class ApprovalEngine:
         comment: Optional[str] = None,
         delegate_to_user_id: Optional[int] = None,
         expected_version: Optional[int] = None,
+        allow_self_approval: bool = False,
     ) -> ApprovalWorkflow:
         """处理一步审批.
 
@@ -220,6 +221,13 @@ class ApprovalEngine:
             raise InvalidApprovalAction(
                 f"该步骤指定 user_id={current_step.approver_user_id} 处理, 你无权"
             )
+        # 防自审批: 发起人不能审批自己的请求 (除非明确 allow_self_approval)
+        if (
+            wf.initiator_user_id is not None
+            and wf.initiator_user_id == actor.id
+            and not allow_self_approval
+        ):
+            raise InvalidApprovalAction("不能审批自己发起的请求")
 
         now = _utcnow_naive()
         current_step.action = action

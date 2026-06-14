@@ -252,8 +252,8 @@ class AuditRisk(Base):
     resolved_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
     # 关联关系
-    project: Mapped["Project"] = relationship(back_populates=None)
-    related_case: Mapped["RegulatoryCase"] = relationship(back_populates=None)
+    project: Mapped["Project"] = relationship()
+    related_case: Mapped["RegulatoryCase"] = relationship()
 
 
 class SalesDocument(Base):

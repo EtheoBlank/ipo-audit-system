@@ -31,6 +31,7 @@ from app.models.db.auth import (
     AuditLog,
     ROLE_ADMIN,
     ROLE_ASSISTANT,
+    ROLE_SIGNING_PARTNER,
     User,
 )
 from app.models.db_models import Project
@@ -396,6 +397,44 @@ class TestApprovalOptimisticLock:
         )
         assert wf2.status == APPROVAL_STATUS_WITHDRAWN
         assert wf2.version == 1
+
+    @pytest.mark.asyncio
+    async def test_self_approval_blocked_by_default(self, session: AsyncSession):
+        """发起人不能审批自己发起的请求 (除非显式 allow_self_approval=True)."""
+        from app.services.auth.approval import ApprovalEngine, InvalidApprovalAction
+
+        u = _user(1)
+        wf = await ApprovalEngine.create_workflow(
+            session, initiator=u, resource_type="x", resource_id=1, title="t"
+        )
+        with pytest.raises(InvalidApprovalAction):
+            await ApprovalEngine.decide(
+                session,
+                workflow_id=wf.id,
+                actor=u,
+                action="approve",
+                expected_version=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_self_approval_allowed_with_flag(self, session: AsyncSession):
+        """显式 allow_self_approval=True 时可放行 (极少场景: 5 级签字一个人顶 5 关)."""
+        from app.services.auth.approval import ApprovalEngine
+
+        u = _user(1, role=ROLE_SIGNING_PARTNER)
+        wf = await ApprovalEngine.create_workflow(
+            session, initiator=u, resource_type="x", resource_id=1, title="t"
+        )
+        # 显式放行后不抛异常
+        wf2 = await ApprovalEngine.decide(
+            session,
+            workflow_id=wf.id,
+            actor=u,
+            action="approve",
+            expected_version=0,
+            allow_self_approval=True,
+        )
+        assert wf2.status in {"in_progress", "approved"}
 
 
 # ============================================================

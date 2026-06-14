@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -75,11 +76,14 @@ class KnowledgeBaseService:
             await db.commit()
 
         try:
-            segs = load_document(Path(book.file_path))
-            text_chunks = chunk_segments(
+            # load_document / chunk_segments 是同步 CPU+I/O (pdfplumber + re.split),
+            # 大文件会阻塞事件循环 → 用 to_thread 推到线程池
+            segs = await asyncio.to_thread(load_document, Path(book.file_path))
+            text_chunks = await asyncio.to_thread(
+                chunk_segments,
                 segs,
-                chunk_size=settings.KB_CHUNK_SIZE,
-                overlap=settings.KB_CHUNK_OVERLAP,
+                settings.KB_CHUNK_SIZE,
+                settings.KB_CHUNK_OVERLAP,
             )
             if not text_chunks:
                 raise ValueError("文档解析后无可用文本")
