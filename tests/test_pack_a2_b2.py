@@ -289,6 +289,77 @@ class TestTenantIsolation:
         u = _user(1, role=ROLE_ASSISTANT, firm_id=7)
         assert project_default_firm_id(u) == 7
 
+    @pytest.mark.asyncio
+    async def test_team_member_idor_blocked(self, session: AsyncSession, monkeypatch):
+        """TeamMember 不带 firm_id, 通过 ProjectAssignment→Project.firm_id 间接隔离.
+
+        场景: firm=1 有 member M1 (在 firm=1 的项目里), firm=2 用户不能访问 M1.
+        """
+        from fastapi import HTTPException
+
+        from app.core.config import settings
+        from app.models.db_models import ProjectAssignment, TeamMember
+        from app.services.auth.tenant import ensure_team_member_in_firm
+
+        monkeypatch.setattr(settings, "AUTH_ENABLED", True)
+
+        session.add_all([
+            _project(1, firm_id=1),
+            _project(2, firm_id=2),
+            TeamMember(id=10, full_name="甲", status="active"),
+            TeamMember(id=20, full_name="乙", status="active"),
+        ])
+        # M10 分配到 firm=1 的项目 P1; M20 分配到 firm=2 的项目 P2
+        session.add_all([
+            ProjectAssignment(id=100, project_id=1, member_id=10, role_in_project="auditor"),
+            ProjectAssignment(id=200, project_id=2, member_id=20, role_in_project="auditor"),
+        ])
+        await session.commit()
+
+        user_firm1 = _user(1, role=ROLE_ASSISTANT, firm_id=1)
+        user_firm2 = _user(2, role=ROLE_ASSISTANT, firm_id=2)
+
+        # 同所成员可访问
+        m = await ensure_team_member_in_firm(session, 10, user_firm1)
+        assert m.id == 10
+        # 跨所成员被 403
+        with pytest.raises(HTTPException) as exc_info:
+            await ensure_team_member_in_firm(session, 20, user_firm1)
+        assert exc_info.value.status_code == 403
+        # 跨所反向同样
+        with pytest.raises(HTTPException) as exc_info:
+            await ensure_team_member_in_firm(session, 10, user_firm2)
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_team_member_visible_query_scoped(self, session: AsyncSession, monkeypatch):
+        """ensure_team_member_visible_query 自动按 firm 过滤成员列表."""
+        from app.core.config import settings
+        from app.models.db_models import ProjectAssignment, TeamMember
+        from app.services.auth.tenant import ensure_team_member_visible_query
+
+        monkeypatch.setattr(settings, "AUTH_ENABLED", True)
+
+        session.add_all([
+            _project(1, firm_id=1),
+            _project(2, firm_id=2),
+            TeamMember(id=10, full_name="甲", status="active"),
+            TeamMember(id=20, full_name="乙", status="active"),
+            TeamMember(id=30, full_name="丙", status="active"),
+        ])
+        session.add_all([
+            ProjectAssignment(id=100, project_id=1, member_id=10, role_in_project="auditor"),
+            ProjectAssignment(id=200, project_id=2, member_id=20, role_in_project="auditor"),
+            # M30 没有任何 assignment — 应被隐藏 (避免"游离"成员泄露)
+        ])
+        await session.commit()
+
+        user_firm1 = _user(1, role=ROLE_ASSISTANT, firm_id=1)
+        q = await ensure_team_member_visible_query(user_firm1)
+        rows = (await session.execute(q)).scalars().all()
+        ids = sorted(r.id for r in rows)
+        assert ids == [10]  # 只看到 firm=1 的成员
+
 
 # ============================================================
 #  3) ApprovalEngine 乐观锁
