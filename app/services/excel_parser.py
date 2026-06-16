@@ -1,5 +1,7 @@
 """Excel file parsing service for IPO Audit System."""
 
+from pathlib import Path
+
 import pandas as pd
 from fastapi import UploadFile
 from app.core.config import settings
@@ -14,7 +16,12 @@ class ExcelParser:
 
         Expected columns: 科目编码, 科目名称, 期初余额, 借方发生额, 贷方发生额, 期末余额, 余额方向
         """
-        temp_path = settings.UPLOAD_DIR / f"temp_{file.filename}"
+        # P0 安全修复: sanitize 文件名, 防路径穿越 (upload.filename 用户可控, 含 ../ 可越界)
+        safe_name = Path(file.filename or "upload.xlsx").name
+        temp_path = settings.UPLOAD_DIR / f"temp_{safe_name}"
+        # 防御性校验: 解析后必须在 UPLOAD_DIR 内
+        if not temp_path.resolve().is_relative_to(settings.UPLOAD_DIR.resolve()):
+            raise ValueError(f"非法的文件名: {file.filename}")
 
         # Save uploaded file
         content = await file.read()

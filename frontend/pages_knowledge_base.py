@@ -9,10 +9,10 @@
 from __future__ import annotations
 
 
-import requests
 import streamlit as st
 
-API_BASE_URL = "http://localhost:8000"
+# P0 安全修复: 使用共享 api_request (带 Authorization header + 401 处理)
+from frontend._http import api_request as _api
 
 KB_CATEGORIES = [
     "审计实务",
@@ -23,18 +23,6 @@ KB_CATEGORIES = [
     "行业研究",
     "其他",
 ]
-
-
-def _api(method: str, path: str, **kw):
-    try:
-        r = requests.request(method, f"{API_BASE_URL}{path}", timeout=120, **kw)
-        r.raise_for_status()
-        if r.status_code == 204 or not r.content:
-            return {}
-        return r.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"调用 {path} 失败: {e}")
-        return None
 
 
 def show_knowledge_base():

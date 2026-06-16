@@ -422,7 +422,7 @@ class LeaseAmortizer:
         try:
             start_dt = datetime.strptime(contract.commencement_date, "%Y-%m-%d")
         except Exception:
-            start_dt = datetime.utcnow()
+            start_dt = datetime.now(timezone.utc).replace(tzinfo=None)
 
         for i in range(1, n + 1):
             interest = round(liability_balance * monthly_rate, 2)

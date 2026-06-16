@@ -124,11 +124,12 @@ class CountPhotoProcessor:
 
     # ---- OCR ------------------------------------------------------------
 
-    def ocr(self, file_path: str, filename: str) -> tuple[str, str]:
+    def ocr(self, file_path: str, filename: str, allowed_base: Optional[Path] = None) -> tuple[str, str]:
         from pathlib import Path
 
         try:
-            engine, text = ContractOCR.run(Path(file_path), filename)
+            # P0 安全: 把 allowed_base 传给 ContractOCR 让它校验路径在 upload_dir 内
+            engine, text = ContractOCR.run(Path(file_path), filename, allowed_base=allowed_base)
             return engine, text
         except OCRError as exc:
             raise OCRError(f"盘点照片 OCR 失败: {exc}") from exc

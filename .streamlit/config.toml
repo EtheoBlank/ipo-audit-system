@@ -19,6 +19,7 @@ enableCORS = false
 enableXsrfProtection = false
 runOnSave = false
 fileWatcherType = "none"   # 容器内不需要热重载, 关掉省 CPU
+maxUploadSize = 50          # 单文件最大 50MB (P0 安全: 防上传大文件 OOM)
 
 [browser]
 gatherUsageStats = false

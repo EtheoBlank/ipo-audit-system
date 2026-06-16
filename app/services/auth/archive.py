@@ -21,7 +21,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import func, select, text
+from sqlalchemy import bindparam, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db.auth import AuditLog
@@ -166,19 +166,22 @@ async def rotate_audit_logs(
         if not ids:
             break
 
-        # 复制到归档表 — 用 IN 子句, 但分块避免 PG/SQLite 长 IN 问题
+        # 复制到归档表 — 用参数化绑定, 防 SQL 注入
         chunk_size = 500
         for i in range(0, len(ids), chunk_size):
             chunk = ids[i:i + chunk_size]
-            id_csv = ",".join(str(i) for i in chunk)
+            # P0 安全修复: 使用 SQLAlchemy 参数化绑定 (expanding=True) 替代 f-string
+            # 拼 SQL。即使 chunk 元素是 int (类型保证), 仍按规范走参数化, 避免模式扩散
             insert_sql = text(
                 f"INSERT INTO {_ARCHIVE_TABLE} ({cols}) "
-                f"SELECT {cols} FROM audit_logs WHERE id IN ({id_csv})"
-            )
-            await db.execute(insert_sql)
+                f"SELECT {cols} FROM audit_logs WHERE id IN :ids"
+            ).bindparams(bindparam("ids", expanding=True))
+            await db.execute(insert_sql, {"ids": chunk})
             # raw DELETE (绕过 ORM event)
-            del_sql = text(f"DELETE FROM audit_logs WHERE id IN ({id_csv})")
-            del_res = await db.execute(del_sql)
+            del_sql = text(
+                "DELETE FROM audit_logs WHERE id IN :ids"
+            ).bindparams(bindparam("ids", expanding=True))
+            del_res = await db.execute(del_sql, {"ids": chunk})
         await db.commit()
 
         archived_total += len(ids)

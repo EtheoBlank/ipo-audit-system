@@ -8,11 +8,11 @@
 
 from __future__ import annotations
 
-import requests
 import pandas as pd
 import streamlit as st
 
-API_BASE_URL = "http://localhost:8000"
+# P0 安全修复: 使用共享 api_request (带 Authorization header + 401 处理)
+from frontend._http import api_request as _api
 
 SOURCE_CODES = ["CSRC", "MOF", "STA", "SAFE", "PBOC"]
 SOURCE_LABELS = {
@@ -24,16 +24,6 @@ SOURCE_LABELS = {
     "LOCAL": "地方财税",
     "OTHER": "其他",
 }
-
-
-def _api(method: str, path: str, **kw):
-    try:
-        r = requests.request(method, f"{API_BASE_URL}{path}", timeout=60, **kw)
-        r.raise_for_status()
-        return r.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"调用 {path} 失败: {e}")
-        return None
 
 
 def show_regulations():

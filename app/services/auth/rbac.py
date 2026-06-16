@@ -38,10 +38,13 @@ async def has_permission(
 ) -> bool:
     """检查用户是否拥有指定权限 (走 Role → RolePermission → Permission).
 
-    简化策略:
+    策略:
       - ``admin`` 角色拥有所有权限 (短路返回 True)
-      - 如果数据库中没有定义对应 ``Permission``, 默认放行 (避免阻塞流程)
-        — 这种策略让系统在 RBAC 未完全配置时仍可用, 严格模式可后续扩展
+      - 如果数据库中没有定义对应 ``Permission``, **fail-closed**: 返回 False.
+        这是审计系统的硬要求: 任何新加的 permission code 必须先在 Permission 表
+        注册并绑定到 Role, 否则一律拒绝, 防止"忘记注册→所有人都能调"的安全洞。
+        启动时 bootstrap_auth() 会批量注册 _DEFAULT_PERMISSIONS, 一般情况下
+        业务方在 _DEFAULT_PERMISSIONS 列表里追加即可。
     """
     if user is None or not user.is_active or user.is_locked:
         return False
@@ -52,8 +55,8 @@ async def has_permission(
     stmt = select(Permission).where(Permission.code == permission_code)
     perm = (await db.execute(stmt)).scalar_one_or_none()
     if perm is None:
-        # 没定义 → 默认放行 (避免阻塞业务). 严格场景可改为返回 False.
-        return True
+        # 没定义 → fail-closed (P0 安全修复: 防止"未注册权限被默认放行"漏洞).
+        return False
 
     # 查 Role
     role_stmt = select(Role).where(Role.code == user.role)

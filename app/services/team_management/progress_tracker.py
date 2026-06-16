@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -227,7 +227,7 @@ class ProgressTracker:
 
         c = Counter(b.severity for b in blockers)
         # raised_at 字段在项目中统一为 naive UTC (utc_now()), 这里用 naive now 保持一致
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         ages: list[float] = []
         for b in blockers:
             raised = b.raised_at

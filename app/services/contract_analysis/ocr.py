@@ -37,8 +37,19 @@ class ContractOCR:
         return Path(filename).suffix.lower() == ".pdf"
 
     @classmethod
-    def run(cls, file_path: Path, filename: str) -> Tuple[str, str]:
-        """Return (engine_name, text). Raises OCRError on failure."""
+    def run(cls, file_path: Path, filename: str, allowed_base: Path | None = None) -> Tuple[str, str]:
+        """Return (engine_name, text). Raises OCRError on failure.
+
+        P0 安全修复: 若传入 allowed_base, 校验 file_path 在 allowed_base 内,
+        防攻击者通过 file_path='/etc/passwd' 之类读取任意文件 (虽 OCR 不会泄露内容,
+        但读取行为本身违反最小权限)。
+        """
+        file_path = Path(file_path)
+        if allowed_base is not None:
+            allowed_resolved = Path(allowed_base).resolve()
+            target_resolved = file_path.resolve()
+            if not target_resolved.is_relative_to(allowed_resolved):
+                raise OCRError(f"file_path 不在允许目录内: {file_path}")
         # Fast path: PDFs often have a text layer
         if cls.is_pdf(filename):
             try:

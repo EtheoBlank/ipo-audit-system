@@ -95,10 +95,11 @@ def _stdlib_decode(token: str) -> Dict[str, Any]:
             raise JWTError("exp 字段格式错") from exc
         if exp_dt <= _utcnow():
             raise JWTError("token 已过期")
-    # 校验 iss — 防止别的部署/环境的 token 拿来重放 (即使 JWT_SECRET 不一致, 越权场景排除)
+    # 校验 iss — 必须存在且匹配, 防止别的部署/环境的 token 拿来重放
+    # 即使 JWT_SECRET 不一致, 越权场景排除) (P0 安全: 防 token 重放)
     iss = payload.get("iss")
-    if iss is not None and iss != "ipo-audit-system":
-        raise JWTError(f"issuer 不匹配: {iss!r}")
+    if iss != "ipo-audit-system":
+        raise JWTError(f"issuer 不匹配或缺失: {iss!r}")
     return payload
 
 
@@ -170,13 +171,20 @@ def decode_token(token: str) -> Dict[str, Any]:
     """解码并校验 token. 失败抛 ``JWTError``."""
     if not token:
         raise JWTError("token 为空")
+    # P0 安全: 强制算法白名单, 防止运维把 JWT_ALGORITHM 误设为 'none' 后
+    # 攻击者用 alg=none + 空签名伪造 token 通过校验。
+    _SAFE_ALGS = {"HS256", "HS384", "HS512", "RS256", "RS384", "RS512"}
+    alg = settings.JWT_ALGORITHM
+    if alg not in _SAFE_ALGS:
+        raise JWTError(f"非法的 JWT 算法配置: {alg!r}")
     if _jose_jwt is not None:
         try:
             return _jose_jwt.decode(
                 token,
                 settings.JWT_SECRET,
-                algorithms=[settings.JWT_ALGORITHM],
-                options={"require": ["exp", "iat", "sub"]},
+                algorithms=[alg],
+                options={"require": ["exp", "iat", "sub", "iss"]},
+                issuer="ipo-audit-system",
             )
         except _JoseError as exc:
             raise JWTError(str(exc)) from exc

@@ -16,32 +16,10 @@ from datetime import date, timedelta
 from typing import Any, Optional
 
 import pandas as pd
-import requests
 import streamlit as st
 
-API_BASE_URL = "http://localhost:8000"
-
-
-def api_request(method: str, endpoint: str, **kwargs) -> Optional[Any]:
-    try:
-        url = f"{API_BASE_URL}{endpoint}"
-        resp = requests.request(method, url, timeout=60, **kwargs)
-        if resp.status_code >= 400:
-            try:
-                detail = resp.json().get("detail", resp.text)
-            except Exception:
-                detail = resp.text
-            st.error(f"API {resp.status_code}: {detail}")
-            return None
-        if resp.headers.get("content-type", "").startswith("application/json"):
-            return resp.json()
-        return resp.content
-    except requests.exceptions.ConnectionError:
-        st.error("无法连接到后端服务")
-        return None
-    except Exception as e:  # noqa: BLE001
-        st.error(f"请求失败: {e}")
-        return None
+# P0 安全修复: 使用共享 api_request (带 Authorization header + 401 处理)
+from frontend._http import api_request
 
 
 @st.cache_data(ttl=60)

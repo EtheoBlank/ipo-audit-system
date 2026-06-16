@@ -6,32 +6,12 @@ import json
 from datetime import date
 
 import pandas as pd
-import requests
 import streamlit as st
 
 from frontend._components.project_picker import pick_project_dict
 from frontend._components.download import download_excel
-
-API_BASE_URL = "http://localhost:8000"
-
-
-def _api(method: str, endpoint: str, **kwargs):
-    try:
-        url = f"{API_BASE_URL}{endpoint}"
-        r = requests.request(method, url, timeout=120, **kwargs)
-        if r.status_code >= 400:
-            try:
-                msg = r.json().get("detail", r.text)
-            except Exception:
-                msg = r.text
-            st.error(f"API {r.status_code}: {msg}")
-            return None
-        if r.headers.get("content-type", "").startswith("application/json"):
-            return r.json()
-        return r.content
-    except requests.exceptions.ConnectionError:
-        st.error("无法连接到后端服务，请确保 FastAPI 已启动")
-        return None
+# P0 安全修复: 使用共享 api_request, 自动带 Authorization header + 401 处理
+from frontend._http import api_request as _api
 
 
 def _pick_project():

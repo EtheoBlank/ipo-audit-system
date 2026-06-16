@@ -43,8 +43,13 @@ class DocumentParser:
 
         save_dir.mkdir(parents=True, exist_ok=True)
         # Persist to disk so the various parsers can re-open the file.
-        temp_path = save_dir / f"sales_src_{upload.filename}"
+        # P0 安全修复: 文件名 sanitize, 防路径穿越 (upload.filename 用户可控, 含 ../../ 可越界)
+        safe_name = Path(upload.filename or "upload").name  # 截到 basename
+        temp_path = save_dir / f"sales_src_{safe_name}"
         content = await upload.read()
+        # 写入前再次校验路径在 save_dir 之内 (防御性)
+        if not temp_path.resolve().is_relative_to(save_dir.resolve()):
+            raise DocumentParserError(f"非法的文件名: {upload.filename}")
         temp_path.write_bytes(content)
 
         try:
