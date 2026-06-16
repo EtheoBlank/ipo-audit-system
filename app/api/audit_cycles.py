@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api._helpers import get_project_or_404
 from app.core.database import get_db
 from app.models.db.audit_cycles import (
     AssetImpairmentTest,
@@ -53,6 +52,7 @@ from app.services.audit_cycles import (
     SubsequentEventClassifier,
 )
 from app.services.auth import get_current_user, record_audit_log, require_role
+from app.services.auth.tenant import ensure_project_in_firm
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/audit-cycles", tags=["审计循环 (Pack C)"])
@@ -196,6 +196,13 @@ async def build_lease_schedule(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
+    # IDOR fix (P0): 先加载租赁合同校验 firm, 不存在/越权直接 403/404
+    contract = (
+        await db.execute(select(LeaseContract).where(LeaseContract.id == contract_id))
+    ).scalar_one_or_none()
+    if contract is None:
+        raise HTTPException(404, "租赁合同不存在")
+    await ensure_project_in_firm(db, contract.project_id, current_user)
     try:
         records = await LeaseAmortizer.build_schedule(db, contract_id=contract_id)
     except ValueError as exc:
@@ -294,7 +301,7 @@ async def scan_expense_anomalies(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     res = await ExpensesAnomalyDetector.scan(db, project_id=project_id, period_end=period_end)
     return res
 
@@ -306,7 +313,7 @@ async def payroll_reconcile(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     rec = await PayrollReconciler.reconcile(db, project_id=project_id, period_yyyymm=period_yyyymm)
     return {
         "id": rec.id,
@@ -330,6 +337,8 @@ async def fixed_asset_recalc(
     ).scalar_one_or_none()
     if asset is None:
         raise HTTPException(404, f"资产 {asset_id} 不存在")
+    # IDOR fix (P0): 校验资产所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, asset.project_id, current_user)
     try:
         rec = await DepreciationCalculator.recalc_asset(
             db,
@@ -360,6 +369,8 @@ async def cip_transfer_check(
     ).scalar_one_or_none()
     if cip is None:
         raise HTTPException(404, "CIP 不存在")
+    # IDOR fix (P0): 校验 CIP 所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, cip.project_id, current_user)
     ready, reason = CIPTransferChecker.is_ready_for_transfer(cip)
     return {"ready_for_transfer": ready, "reason": reason}
 
@@ -380,7 +391,7 @@ def _make_list_endpoint(model_cls, prefix: str, name: str):
         current_user: User = Depends(get_current_user),
         db: AsyncSession = Depends(get_db),
     ):
-        await get_project_or_404(db, project_id)
+        await ensure_project_in_firm(db, project_id, current_user)
         stmt = select(model_cls).where(model_cls.project_id == project_id).offset(skip).limit(limit)
         rows = list((await db.execute(stmt)).scalars().all())
         # 简化序列化 — 走 SQLAlchemy 默认 __dict__

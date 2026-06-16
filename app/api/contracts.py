@@ -20,7 +20,6 @@ from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadF
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api._helpers import get_project_or_404
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.contracts import (
@@ -31,6 +30,7 @@ from app.models.contracts import (
 from app.models.db_models import ContractDocument
 from app.models.db.auth import User
 from app.services.auth import get_current_user, get_current_user_optional
+from app.services.auth.tenant import ensure_project_in_firm
 from app.services.contract_analysis import ContractAnalyzer, ContractOCR, OCRError
 from app.services.sales_ledger import DeepSeekClient
 
@@ -86,7 +86,7 @@ async def upload_contract(
     current_user: User = Depends(get_current_user),
 ):
     """Upload a contract image / scanned PDF. OCR is run server-side."""
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
 
     save_dir: Path = settings.UPLOAD_DIR
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -135,7 +135,7 @@ async def upload_contract_text(
     current_user: User = Depends(get_current_user),
 ):
     """Save user-pasted contract text directly (no OCR)."""
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="合同文本不能为空")
 
@@ -165,7 +165,7 @@ async def list_contracts(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = (
         (
             await db.execute(
@@ -191,6 +191,8 @@ async def get_contract(
     ).scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="合同不存在")
+    # IDOR fix (P0): 校验合同所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, c.project_id, current_user)
     return _to_response(c)
 
 
@@ -205,6 +207,8 @@ async def delete_contract(
     ).scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="合同不存在")
+    # IDOR fix (P0): 校验合同所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, c.project_id, current_user)
     await db.delete(c)
     await db.commit()
     return {"message": "已删除"}
@@ -229,6 +233,8 @@ async def analyze_contract(
     ).scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="合同不存在")
+    # IDOR fix (P0): 校验合同所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, c.project_id, current_user)
     if not c.ocr_text:
         raise HTTPException(status_code=400, detail="该合同没有可用的文本，请重新上传")
 

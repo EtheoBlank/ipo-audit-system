@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api._helpers import get_project_or_404
 from app.core.database import get_db
 from app.models.db.auth import ROLE_ASSISTANT, User
 from app.models.db.ipo_specials import (
@@ -24,6 +23,7 @@ from app.models.db.ipo_specials import (
     SubmissionChecklistItem,
 )
 from app.services.auth import get_current_user, record_audit_log, require_role
+from app.services.auth.tenant import ensure_project_in_firm
 from app.services.ipo_specials import (
     DEFAULT_SUBMISSION_CHECKLIST,
     FeedbackSLAMonitor,
@@ -116,7 +116,7 @@ async def upload_prospectus(
     db: AsyncSession = Depends(get_db),
 ):
     """记录招股书 (实际文件可走 report_templates / file upload, 这里只登记 metadata)."""
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     from datetime import date
 
     # 先把旧版本置为非 current
@@ -195,6 +195,8 @@ async def add_metric(
     ).scalar_one_or_none()
     if p is None:
         raise HTTPException(404, "招股书不存在")
+    # IDOR fix (P0): 校验招股书所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, p.project_id, current_user)
     m = ProspectusKeyMetric(prospectus_id=prospectus_id, **payload.model_dump())
     m = await ProspectusReconciler.reconcile_metric(db, prospectus_id=prospectus_id, metric=m)
     db.add(m)
@@ -231,7 +233,7 @@ async def add_period_metric(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     yoy = 0.0
     if payload.value_period_2 != 0:
         yoy = (payload.value_period_3 - payload.value_period_2) / abs(payload.value_period_2) * 100
@@ -289,7 +291,7 @@ async def detect_overlap(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     overlaps = await OverlapDetector.find_overlaps(
         db,
         project_id=project_id,
@@ -355,7 +357,7 @@ async def add_peer(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     p = PeerCompany(project_id=project_id, **payload.model_dump())
     db.add(p)
     await db.commit()
@@ -412,7 +414,7 @@ async def add_letter(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     fl = FeedbackLetter(project_id=project_id, **payload.model_dump())
     db.add(fl)
     await db.commit()
@@ -455,6 +457,15 @@ async def add_question(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
+    # IDOR fix (P0): 校验问询函所属 project 在 user 事务所内 — 否则 403
+    letter = (
+        await db.execute(
+            select(FeedbackLetter).where(FeedbackLetter.id == payload.letter_id)
+        )
+    ).scalar_one_or_none()
+    if letter is None:
+        raise HTTPException(404, "反馈意见不存在")
+    await ensure_project_in_firm(db, letter.project_id, current_user)
     q = FeedbackQuestion(**payload.model_dump())
     db.add(q)
     await db.commit()
@@ -475,7 +486,7 @@ async def init_checklist(
     db: AsyncSession = Depends(get_db),
 ):
     """用内置模板初始化项目的申报材料清单."""
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     # 清旧
     existing = list(
         (
@@ -556,6 +567,8 @@ async def update_checklist_item(
     ).scalar_one_or_none()
     if item is None:
         raise HTTPException(404, "清单项不存在")
+    # IDOR fix (P0): 校验清单项所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, item.project_id, current_user)
     for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(item, k, v)
     if payload.is_uploaded:
