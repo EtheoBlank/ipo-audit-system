@@ -157,6 +157,11 @@ class CountPhotoProcessor:
         if not ocr_text or not ocr_text.strip():
             return PhotoParseResult(ocr_engine="", ocr_text="", parsed_rows=[])
 
+        # P0 正确性: known_codes 是 None 表示调用方没提供 — 这是异常场景, 应要求提供
+        # 否则 AI 完全自由, 可能返回完全编造的数据
+        if known_codes is None:
+            logger.warning("parse_text called without known_codes; AI results may be unreliable")
+
         result = PhotoParseResult(ocr_engine="", ocr_text=ocr_text, parsed_rows=[])
         if not (self.client and self.client.is_configured):
             # 退化：用启发式解析（找物料编码、数字列）

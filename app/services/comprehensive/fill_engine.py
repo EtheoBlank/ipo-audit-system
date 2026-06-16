@@ -173,20 +173,25 @@ def _eval_node(node: ast.AST, namespace: dict[str, Any]) -> Any:
         left = _eval_node(node.left, namespace)
         right = _eval_node(node.right, namespace)
         if isinstance(node.op, ast.Add):
-            return left + right
-        if isinstance(node.op, ast.Sub):
-            return left - right
-        if isinstance(node.op, ast.Mult):
-            return left * right
-        if isinstance(node.op, ast.Div):
-            return left / right
-        if isinstance(node.op, ast.FloorDiv):
-            return left // right
-        if isinstance(node.op, ast.Mod):
-            return left % right
-        if isinstance(node.op, ast.Pow):
-            return left**right
-        raise _SafeEvalError(f"不支持的二元运算: {type(node.op).__name__}")
+            result = left + right
+        elif isinstance(node.op, ast.Sub):
+            result = left - right
+        elif isinstance(node.op, ast.Mult):
+            result = left * right
+        elif isinstance(node.op, ast.Div):
+            result = left / right
+        elif isinstance(node.op, ast.FloorDiv):
+            result = left // right
+        elif isinstance(node.op, ast.Mod):
+            result = left % right
+        elif isinstance(node.op, ast.Pow):
+            result = left**right
+        else:
+            raise _SafeEvalError(f"不支持的二元运算: {type(node.op).__name__}")
+        # P0 资源: 限制数值结果大小, 防内存爆 (pow(2, 1<<10000) 之类)
+        if isinstance(result, (int, float)) and abs(result) > 1e15:
+            raise ValueError(f"表达式结果过大: {result}")
+        return result
     if isinstance(node, ast.Compare):
         # 仅支持单层比较 (a < b)
         left = _eval_node(node.left, namespace)

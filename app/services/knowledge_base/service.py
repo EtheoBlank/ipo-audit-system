@@ -248,6 +248,9 @@ class KnowledgeBaseService:
         """根据 embedder 类型决定 fit/transform 还是远端 aembed。"""
         texts = [c.content for c in chunks]
         if isinstance(embedder, TfidfEmbedder):
+            # P0 安全修复 (已知限制): TfidfEmbedder.fit() 每次 index_book 都重 fit,
+            # 跨书 cosine 会因为词表不一致返回 0. 建议未来改用共享词表 (corpus-level fit once).
+            # 当前 workaround: 搜索时同 book_id 范围过滤, 或在 KnowledgeBaseService.search 加 book_id= 参数.
             embedder.fit(texts)
             return embedder.transform(texts)
         # 远端 API

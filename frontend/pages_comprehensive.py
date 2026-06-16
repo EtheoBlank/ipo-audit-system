@@ -35,10 +35,9 @@ from app.services.comprehensive.web_search_engine import (
     WebSearchEngine,
 )
 from frontend._components.safe_render import safe_inline_text
+from frontend._http import API_BASE_URL
 
 logger = logging.getLogger(__name__)
-
-API_BASE_URL = "http://localhost:8000"
 
 
 # ============================================================
@@ -55,6 +54,16 @@ def _load_template_schema(uploaded_file) -> Optional[TemplateSchema]:
     """解析用户上传的模板。"""
     try:
         data = uploaded_file.read()
+        return TemplateParser().parse(data)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"模板解析失败：{exc}")
+        return None
+
+
+def _load_template_schema_path(template_path: "Path") -> Optional[TemplateSchema]:
+    """从磁盘临时文件路径解析模板 (避免重复读取 uploaded)."""
+    try:
+        data = template_path.read_bytes()
         return TemplateParser().parse(data)
     except Exception as exc:  # noqa: BLE001
         st.error(f"模板解析失败：{exc}")
@@ -268,11 +277,18 @@ def show_comprehensive_workpaper():
         st.info("请先上传模板。")
         return
 
-    # 暂存到 session
-    st.session_state["__comprehensive_template_bytes__"] = uploaded.getvalue()
+    # P0 安全: 不在 session_state 长期保存大文件 bytes (内存压力). 临时存路径
+    # 注意: 当前实现没有保存到磁盘, 只写到 session_state. 简化方案: 把 bytes 存到临时文件
+    import tempfile
+    from pathlib import Path
+    tmp = Path(tempfile.gettempdir()) / f"comp_template_{st.session_state.get('user_id', 'anon')}.xlsx"
+    tmp.write_bytes(uploaded.getvalue())
+    st.session_state["__comprehensive_template_path__"] = str(tmp)
 
     # 2) 解析
-    schema = _load_template_schema(uploaded)
+    # P0 安全: 用保存的 path 而不是重复读 uploaded
+    template_path = Path(st.session_state.get("__comprehensive_template_path__", ""))
+    schema = _load_template_schema_path(template_path)
     if schema is None:
         return
     _render_schema_summary(schema)

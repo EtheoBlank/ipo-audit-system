@@ -442,8 +442,11 @@ def _coerce_for_api(value: Any, col: str):
         "gross_amount",
         "confirmation_diff",
     ):
+        # P0 正确性: 解析失败 fallback 0.0 静默丢值 (财务数据错), 改为返回 None 让后端校验
+        if value is None or value == "":
+            return None
         try:
             return float(value)
         except (TypeError, ValueError):
-            return 0.0
+            return None  # 不静默兜底 0.0
     return value

@@ -247,6 +247,8 @@ def _tab_movements(project_id: int) -> None:
         else:
             ok = 0
             fail = 0
+            # P0 性能: 批量保存接口缺失, 暂时保留逐条 PUT, 待后端 /api/account-audit/movements/batch
+            # 添加后切换 (后端已有 bulk endpoint 见 app/api/account_audit.py)
             for c in changes:
                 mid = c.pop("id")
                 r = _api("PUT", f"/api/account-audit/movements/{mid}", json=c)
