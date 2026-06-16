@@ -52,14 +52,16 @@ class TavilyAdapter(BaseSentimentSourceAdapter):
         out: list[RawSentimentItem] = []
         for q in queries[:5]:  # 限前 5 个别名
             payload = {
-                "api_key": self.api_key,
+                # P0 安全修复: api_key 不再走 body (可能被 httpx debug 日志/中间代理抓到)
+                # Tavily 也支持 Bearer token 走 Authorization header
                 "query": f"{q} 公告 OR 处罚 OR 问询 OR 诉讼",
                 "search_depth": "basic",
                 "max_results": 10,
                 "include_raw_content": False,
             }
+            headers = {"Authorization": f"Bearer {self.api_key}"}
             try:
-                r = await self.http.post(self.API_URL, json=payload)
+                r = await self.http.post(self.API_URL, json=payload, headers=headers)
                 if r.status_code != 200:
                     logger.warning("Tavily HTTP %s for %s", r.status_code, q)
                     continue
@@ -188,13 +190,15 @@ class SerpAPIAdapter(BaseSentimentSourceAdapter):
         for q in queries[:5]:
             params = {
                 "q": f"{q} 公告 OR 处罚 OR 问询",
-                "api_key": self.api_key,
+                # P0 安全修复: api_key 不再走 URL query (会被 httpx access log / 代理 / 反代 记录)
+                # SerpAPI 支持 Authorization Bearer header
                 "engine": "google",
                 "num": 10,
                 "tbs": "qdr:w",  # past week
             }
+            headers = {"Authorization": f"Bearer {self.api_key}"}
             try:
-                r = await self.http.get(self.API_URL, params=params)
+                r = await self.http.get(self.API_URL, params=params, headers=headers)
                 if r.status_code != 200:
                     logger.warning("SerpAPI HTTP %s for %s", r.status_code, q)
                     continue

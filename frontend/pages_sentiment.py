@@ -318,7 +318,9 @@ def _render_briefing_detail(br: dict, project_id: int) -> None:
                 with st.expander(f"[事件#{e['id']}] {_severity_badge(e['severity'])} {e['title']}"):
                     st.caption(f"来源: {e.get('publisher', '—')} · {e.get('publish_date', '—')}")
                     if e.get("url"):
-                        st.markdown(f"[原文链接]({e['url']})")
+                        # P0 安全: 校验 URL 协议, 防 javascript: 注入
+                        from frontend._components.safe_render import safe_link
+                        st.markdown(safe_link("原文链接", e["url"]))
                     st.text_area(
                         "内容",
                         e.get("content_text", ""),

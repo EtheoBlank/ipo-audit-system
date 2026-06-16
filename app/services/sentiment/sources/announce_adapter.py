@@ -25,7 +25,8 @@ class CninfoAnnounceAdapter(BaseSentimentSourceAdapter):
     source_code = "cninfo_announce"
     display_name = "巨潮公告"
 
-    SEARCH_URL = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
+    # P0 安全修复: HTTPS — 防 MITM 篡改公告内容 (会污染舆情简报 LLM 输入)
+    SEARCH_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
 
     def __init__(self, http: SentimentHttpClient, api_key: Optional[str] = None) -> None:
         super().__init__(http, api_key)

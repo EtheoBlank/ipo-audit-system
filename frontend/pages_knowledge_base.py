@@ -13,6 +13,7 @@ import streamlit as st
 
 # P0 安全修复: 使用共享 api_request (带 Authorization header + 401 处理)
 from frontend._http import api_request as _api
+from frontend._components.safe_render import safe_link
 
 KB_CATEGORIES = [
     "审计实务",
@@ -260,7 +261,9 @@ def show_knowledge_base():
                     if not r.get("ai_enabled"):
                         st.info("AI 未启用 — 当前返回的是基于检索结果的结构化骨架。")
                     st.markdown("### 生成的审计说明")
-                    st.markdown(r.get("note", ""))
+                    # P0 安全: LLM 输出经 safe_inline_text 转义后再 markdown
+                    from frontend._components.safe_render import safe_inline_text
+                    st.markdown(safe_inline_text(r.get("note", ""), max_len=8000))
 
                     with st.expander("引用 — 知识库"):
                         for k in r.get("references_kb", []):

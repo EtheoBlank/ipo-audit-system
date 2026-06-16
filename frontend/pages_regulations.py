@@ -174,12 +174,16 @@ def _render_regulation(item: dict, key_prefix: str = ""):
     with st.expander(f"📄 {title[:120]}"):
         st.caption(meta)
         if item.get("summary"):
-            st.markdown(f"**摘要**：{item['summary'][:300]}")
+            # P0 安全: 抓取内容转义后再渲染, 防 javascript: 链接注入
+            from frontend._components.safe_render import safe_inline_text
+            st.markdown(f"**摘要**：{safe_inline_text(item.get('summary', ''), max_len=300)}")
         if item.get("full_text"):
             st.markdown("**正文摘录**")
             st.write(item["full_text"][:1500])
         if item.get("source_url"):
-            st.markdown(f"[在官方网站打开 ↗]({item['source_url']})")
+            # P0 安全: 校验 URL 协议, 防 javascript: 注入
+            from frontend._components.safe_render import safe_link
+            st.markdown(safe_link("在官方网站打开 ↗", item["source_url"]))
         with st.form(
             f"fav_form_{key_prefix or item.get('id')}_{item.get('id')}", clear_on_submit=True
         ):
