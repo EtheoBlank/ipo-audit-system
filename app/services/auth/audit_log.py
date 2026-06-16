@@ -24,13 +24,41 @@ def _truncate(value: Optional[str], max_chars: int) -> Optional[str]:
     return value[:max_chars] + f"... [truncated, original {len(value)} chars]"
 
 
+# P0 安全: 这些字段必须自动脱敏 (即使调用方忘了 exclude= 也要保底)
+# 包含密码 / token / 凭据 / 私钥 等, 万一业务路由忘了脱敏就被记进 audit_logs
+# 后续 admin 查 audit_log 会拿到这些明文 (P0: 审计系统的审计日志反而泄露密码)
+_SENSITIVE_KEYS = frozenset({
+    "password", "passwd", "pwd",
+    "token", "access_token", "refresh_token", "authorization",
+    "secret", "api_key", "apikey",
+    "private_key", "client_secret",
+    "session", "session_id", "cookie",
+    "credit_card", "cvv", "ssn", "id_number",
+    "new_password", "old_password", "current_password",
+})
+
+
+def _redact_sensitive(value: Any) -> Any:
+    """递归遍历 dict/list, 把敏感 key 的 value 替换为 '***REDACTED***'."""
+    if isinstance(value, dict):
+        return {
+            k: ("***REDACTED***" if k.lower() in _SENSITIVE_KEYS else _redact_sensitive(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive(v) for v in value]
+    return value
+
+
 def _serialize(payload: Any) -> Optional[str]:
     if payload is None:
         return None
     if isinstance(payload, str):
         return payload
     try:
-        return json.dumps(payload, ensure_ascii=False, default=str)
+        # 先脱敏再序列化 (即使调用方忘了 exclude=, 我们的兜底也保护)
+        redacted = _redact_sensitive(payload)
+        return json.dumps(redacted, ensure_ascii=False, default=str)
     except Exception:  # noqa: BLE001
         return str(payload)
 

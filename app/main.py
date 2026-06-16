@@ -248,8 +248,11 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        # P0 安全修复: 收紧白名单 — 最小权限原则, 避免 allow_methods=['*'] + allow_headers=['*']
+        # 组合下 allow_origins 列表里任何 origin 都能用任意 method + 任意 header + 带 cookie
+        # 调用任意 API。改成显式白名单。
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
     )
 
     # Include routers
