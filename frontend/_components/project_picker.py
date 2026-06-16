@@ -15,7 +15,7 @@ import streamlit as st
 from frontend._http import api_request
 
 
-@st.cache_data(ttl=60)
+# P0: 取消缓存, 每次都拉新 (firm_id 已写入 token claims, 后端 scope 隔离)
 def _get_projects() -> List[Dict[str, Any]]:
     """拉取项目列表 — 走共享 api_request, 自动带 auth 头 + 统一错误处理."""
     return api_request("GET", "/api/projects/") or []

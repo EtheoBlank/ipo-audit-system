@@ -44,7 +44,7 @@ st.markdown(
 )
 
 
-@st.cache_data(ttl=30)
+# P0: 取消缓存, 每次都拉新 (跨用户 / 跨 firm 不能复用缓存)
 def get_sentiment_unread_count() -> int:
     """全局红点: 30 秒缓存, 调一次 /notifications/unread."""
     try:
@@ -60,7 +60,7 @@ def get_sentiment_unread_count() -> int:
     return 0
 
 
-@st.cache_data(ttl=30)
+# P0: 取消缓存, 每次都拉新 (跨用户 / 跨 firm 不能复用缓存)
 def get_global_unread_count() -> dict:
     """Pack A: 通用通知中心未读数, 30s 缓存."""
     try:
@@ -121,7 +121,7 @@ def get_auth_status() -> dict:
     return {}
 
 
-@st.cache_data(ttl=60)
+# P0: 取消缓存, 每次都拉新 (firm_id 已写入 token claims)
 def get_projects():
     return api_request("GET", "/api/projects/") or []
 

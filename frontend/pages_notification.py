@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from frontend._http import api_request
+from frontend._components.safe_render import safe_link
 
 
 def _api(method: str, endpoint: str, **kwargs):
@@ -129,7 +130,7 @@ def show_notifications() -> None:
             if it.get("body"):
                 st.write(it["body"])
             if it.get("link"):
-                st.markdown(f"🔗 [打开]({it['link']})")
+                st.markdown(safe_link("🔗 打开", it.get('link')))
             if it.get("payload"):
                 with st.expander("详细载荷", expanded=False):
                     st.code(it["payload"])

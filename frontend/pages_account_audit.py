@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re as _re_aa
 from datetime import date
 from typing import Any, Dict
 
@@ -70,8 +71,9 @@ def _tab_initialize(project_id: int) -> None:
     cols[2].markdown("&nbsp;")
 
     if st.button("🚀 立即初始化", type="primary"):
-        if not period_end or len(period_end) < 8:
-            st.error("请输入期末日期 (YYYY-MM-DD)")
+        # P0: 严格日期校验 (YYYY-MM-DD 格式)
+        if not period_end or not _re_aa.match(r'^\d{4}-\d{2}-\d{2}$', period_end):
+            st.error("请输入 YYYY-MM-DD 格式的日期")
             return
         r = _api(
             "POST",

@@ -33,7 +33,7 @@ except Exception as exc:  # noqa: BLE001
 
 
 _FALLBACK_PREFIX = "pbkdf2_sha256$"
-_FALLBACK_ITER = 200_000
+_FALLBACK_ITER = 600_000  # OWASP 2023 推荐 ≥ 600_000
 
 
 def _fallback_hash(password: str) -> str:

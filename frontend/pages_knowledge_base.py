@@ -155,9 +155,17 @@ def show_knowledge_base():
                         _api("POST", f"/api/knowledge-base/books/{b['id']}/reindex")
                         st.success("已加入队列")
                 with c2:
-                    if st.button("🗑️ 删除", key=f"del_{b['id']}"):
-                        _api("DELETE", f"/api/knowledge-base/books/{b['id']}")
-                        st.rerun()
+                    # P0: 二次确认防误删
+                    confirm_del_key = f"confirm_del_book_{b['id']}"
+                    if st.session_state.get(confirm_del_key):
+                        if st.button("确认删除", key=f"del_{b['id']}_confirm", type="primary"):
+                            _api("DELETE", f"/api/knowledge-base/books/{b['id']}")
+                            st.session_state.pop(confirm_del_key, None)
+                            st.rerun()
+                    else:
+                        if st.button("🗑️ 删除", key=f"del_{b['id']}"):
+                            st.session_state[confirm_del_key] = True
+                            st.warning("⚠️ 再点一次确认删除")
 
     # —————————————————————————————
     # 直接检索

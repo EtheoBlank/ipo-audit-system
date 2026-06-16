@@ -224,10 +224,11 @@ def show_contracts() -> None:
                     st.error("分析失败")
                 else:
                     st.success("✅ 分析完成")
-                    st.session_state["sl_contract_result"] = r
+                    # P0: 用 contract_id 作 key 前缀防跨合同污染
+                    st.session_state[f"contract_result_{chosen['id']}"] = r
                     st.rerun()
 
-            result = st.session_state.get("sl_contract_result")
+            result = st.session_state.get(f"contract_result_{chosen['id']}")
             if result and result.get("contract_id") == chosen["id"]:
                 flags = result.get("risk_flags") or []
                 if flags:

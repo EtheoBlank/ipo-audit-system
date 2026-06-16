@@ -154,13 +154,15 @@ def show_sales_ledger() -> None:
                 )
             else:
                 st.success(f"✅ 已合成 {result['synthesized_count']} 条记录")
-                st.session_state["sl_records"] = result["records"]
+                # P0: 用 project_id 作 key 前缀防跨项目污染
+                st.session_state[f"sl_records_{project_id}"] = result["records"]
                 st.rerun()
 
         st.divider()
         st.subheader("当前销售记录（数据库中）")
         records = api_request("GET", f"/api/sales-ledger/projects/{project_id}/sales-records") or []
-        st.session_state["sl_records"] = records
+        # P0: 用 project_id 作 key 前缀防跨项目污染
+        st.session_state[f"sl_records_{project_id}"] = records
         if records:
             df = _format_df_for_editor(records)
             st.dataframe(df, use_container_width=True, hide_index=True)
@@ -172,7 +174,7 @@ def show_sales_ledger() -> None:
     with tab_review:
         st.subheader("核对 / 修改销售记录")
         records = (
-            st.session_state.get("sl_records")
+            st.session_state.get(f"sl_records_{project_id}")
             or api_request("GET", f"/api/sales-ledger/projects/{project_id}/sales-records")
             or []
         )

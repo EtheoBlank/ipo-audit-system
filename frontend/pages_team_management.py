@@ -10,6 +10,7 @@ import streamlit as st
 
 from frontend._http import api_request
 from frontend._components.project_picker import pick_project_dict
+from frontend._components.safe_render import safe_inline_text
 
 
 def _projects_selectbox(label: str = "选择项目") -> Optional[dict]:
@@ -655,7 +656,7 @@ def _tab_recommendations() -> None:
             else:
                 st.caption(f"由 {r.get('confirmed_by')} 于 {r.get('confirmed_at')} 确认")
                 if r.get("manager_notes"):
-                    st.markdown(f"**负责人备注**: {r['manager_notes']}")
+                    st.markdown(f"**负责人备注**: {safe_inline_text(r.get('manager_notes', ''), max_len=500)}")
 
 
 # ============================================================

@@ -132,6 +132,11 @@ async def refresh_access_token(
     if user is None or not user.is_active or user.is_locked:
         raise AuthenticationError("用户不可用")
 
+    # P0: 检查 token 是否已撤销 — 用户改密码 / 主动 logout 后, 旧 refresh token 应失效
+    # 这里用 last_login_at 简化对比 (改密码时刷新 last_login_at, 见 change_password)
+    if user.last_login_at and payload.get("iat", 0) < int(user.last_login_at.timestamp()) - 60:
+        raise AuthenticationError("refresh token 已过期, 请重新登录")
+
     access = create_access_token(
         user_id=user.id,
         username=user.username,
@@ -159,6 +164,8 @@ async def change_password(
         raise AuthenticationError("新密码不能与旧密码相同")
     user.password_hash = hash_password(new_password)
     user.password_changed_at = _utcnow_naive()
+    user.failed_login_count = 0  # P0: 重置失败计数, 避免改完密码仍被锁
+    user.is_locked = False  # 同时解锁 (admin 改密码场景)
     await db.commit()
 
 

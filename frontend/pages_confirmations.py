@@ -20,6 +20,7 @@ import streamlit as st
 
 # P0 安全修复: 使用共享 api_request (带 Authorization header + 401 处理)
 from frontend._http import api_request
+from frontend._components.safe_render import safe_inline_text
 
 
 @st.cache_data(ttl=60)
@@ -531,7 +532,7 @@ def show_confirmations():
                             st.markdown(f"**回函方式**: {resp.get('response_method')}")
                             st.markdown(f"**差异原因**: {resp.get('difference_reason') or '-'}")
                             st.markdown(f"**回函摘要**: {resp.get('response_summary') or '-'}")
-                            st.markdown(f"**审计师备注**: {resp.get('auditor_note') or '-'}")
+                            st.markdown(f"**审计师备注**: {safe_inline_text(resp.get('auditor_note', ''), max_len=500) or '-'}")
                             if resp.get("photos"):
                                 st.markdown(f"**已上传 {len(resp['photos'])} 张回函照片**")
 

@@ -22,6 +22,7 @@ import pandas as pd
 from frontend._http import api_request
 from frontend._components.project_picker import pick_project
 from frontend._components.download import download_word
+from frontend._components.safe_render import safe_inline_text, safe_url
 
 
 # ============================================================
@@ -77,7 +78,7 @@ def _render_unread_badge() -> int:
                 col1, col2 = st.columns([5, 1])
                 col1.write(f"**{n['title']}**")
                 if n.get("body"):
-                    col1.caption(n["body"])
+                    col1.caption(safe_inline_text(n.get("body", ""), max_len=500))
                 col1.caption(f"类型: {n['notification_type']} · {n['created_at']}")
                 if col2.button("标已读", key=f"read_{n['id']}"):
                     api_request("POST", f"/api/sentiment/notifications/{n['id']}/read")
@@ -177,6 +178,9 @@ def _tab_events(project_id: int) -> None:
     df = pd.DataFrame(events)[
         ["id", "publish_date", "severity", "title", "publisher", "review_status", "url"]
     ]
+    # P0: 校验 url 协议
+    safe_urls = [(safe_url(u), t) for u, t in zip(df.get('url', []), df.get('title', []))]
+    df['url'] = [u for u, _ in safe_urls]
     df["严重度"] = df["severity"].map(
         {"critical": "🔴 重大", "warn": "🟠 警示", "notice": "🟡 关注", "info": "⚪ 一般"}
     )
@@ -198,7 +202,7 @@ def _tab_events(project_id: int) -> None:
         st.caption(
             f"{ev.get('publisher', '—')} · {ev.get('publish_date', '—')} · {ev.get('url', '—')}"
         )
-        st.text_area("原文", ev.get("content_text", ""), height=200, disabled=True)
+        st.code(ev.get("content_text", ""), language=None)
         if ev.get("review_status") != "ignored":
             if st.button("标记忽略"):
                 api_request("POST", f"/api/sentiment/events/{event_id}/ignore")
@@ -279,10 +283,11 @@ def _tab_briefings(project_id: int) -> None:
         for b in briefings[:30]:
             label = f"{b['briefing_date']} · {b['event_count']} 条"
             if st.button(label, key=f"b_{b['id']}"):
-                st.session_state["selected_briefing_id"] = b["id"]
+                # P0: 加 project_id 前缀防跨项目污染
+                st.session_state[f"selected_briefing_id_{project_id}"] = b["id"]
 
     with c2:
-        bid = st.session_state.get("selected_briefing_id")
+        bid = st.session_state.get(f"selected_briefing_id_{project_id}")
         if not bid:
             bid = briefings[0]["id"]
         br = api_request("GET", f"/api/sentiment/briefings/{bid}")
@@ -482,10 +487,11 @@ def _tab_quarterly(project_id: int) -> None:
         for r in reports[:30]:
             label = f"{r['fiscal_year']} {r['period_type']} · {r['status']}"
             if st.button(label, key=f"r_{r['id']}"):
-                st.session_state["selected_report_id"] = r["id"]
+                # P0: 加 project_id 前缀防跨项目污染
+                st.session_state[f"selected_report_id_{project_id}"] = r["id"]
 
     with c2:
-        rid = st.session_state.get("selected_report_id")
+        rid = st.session_state.get(f"selected_report_id_{project_id}")
         if not rid:
             rid = reports[0]["id"]
         rep = api_request("GET", f"/api/sentiment/reports/{rid}")

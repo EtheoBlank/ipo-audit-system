@@ -34,6 +34,7 @@ from app.services.comprehensive.template_parser import TemplateParser
 from app.services.comprehensive.web_search_engine import (
     WebSearchEngine,
 )
+from frontend._components.safe_render import safe_inline_text
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +159,7 @@ def _render_questions(report: FillReport, key_prefix: str) -> dict[str, str]:
             f"问题 {i + 1} · 主题：{q.topic}（覆盖 {len(q.field_ids)} 个字段）",
             expanded=True,
         ):
-            st.markdown(f"**{q.prompt}**")
+            st.markdown(f"**{safe_inline_text(q.prompt)}**")
             with st.container():
                 st.caption("上下文：")
                 st.code(q.context, language="text")

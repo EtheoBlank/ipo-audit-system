@@ -71,6 +71,7 @@ class TfidfEmbedder:
 
     # — fit/transform —
 
+    # P0 安全修复: 跨书共享词表, 防止 cosine=0
     def fit(self, corpus: Sequence[str]) -> None:
         df: Counter[str] = Counter()
         n_doc = len(corpus) or 1

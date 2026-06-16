@@ -77,10 +77,11 @@ class AIAnalysisService:
             }
 
         # Prepare data summary
+        # P0 正确性: 收入应在贷方发生额, 不是借方; 科目前缀限定为 5001/5051 等主营+其他业务收入
         total_revenue = sum(
-            ab.get("debit_amount", 0)
+            ab.get("credit_amount", 0) or 0
             for ab in account_balances
-            if "5" in ab.get("account_code", "")[:1]
+            if str(ab.get("account_code", "")).startswith(("5001", "5002", "5051", "5301"))
         )
 
         prompt = f"""

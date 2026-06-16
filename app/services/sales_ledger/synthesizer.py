@@ -219,6 +219,7 @@ def _parse_date(value: Any) -> Optional[datetime]:
 
 
 def _parse_float(value: Any) -> float:
+    # P0 正确性修复: 先尝试直接 float 解析, 失败再用兜底
     if value is None or value == "":
         return 0.0
     if isinstance(value, (int, float)):
@@ -226,11 +227,7 @@ def _parse_float(value: Any) -> float:
     s = str(value).strip().replace(",", "").replace("￥", "").replace("¥", "").replace("元", "")
     if not s:
         return 0.0
-    # keep only digits, sign, and one dot
-    cleaned = re.sub(r"[^\d.\-]", "", s)
-    if not cleaned or cleaned in {".", "-", "-."}:
-        return 0.0
     try:
-        return float(cleaned)
-    except ValueError:
+        return float(s)
+    except (ValueError, TypeError):
         return 0.0

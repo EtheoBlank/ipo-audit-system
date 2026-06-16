@@ -543,11 +543,19 @@ def _tab_code_mapping(project_id: int):
                 st.success(f"✅ 已保存 {len(saved)} 条映射")
                 st.rerun()
 
-    if st.button("🗑 清空全部映射", key="cm_clear_btn"):
-        r = _api("DELETE", f"/api/inventory/projects/{project_id}/code-mappings")
-        if r:
-            st.success(f"已删除 {r.get('deleted', 0)} 条")
-            st.rerun()
+    # P0: 二次确认防误删 (清空全部映射是不可逆操作)
+    confirm_key = f"confirm_clear_mappings_{project_id}"
+    if st.session_state.get(confirm_key):
+        if st.button("确认删除全部映射", key="cm_clear_btn_confirm", type="primary"):
+            r = _api("DELETE", f"/api/inventory/projects/{project_id}/code-mappings")
+            st.session_state.pop(confirm_key, None)
+            if r:
+                st.success(f"已删除 {r.get('deleted', 0)} 条")
+                st.rerun()
+    else:
+        if st.button("🗑 清空全部映射", key="cm_clear_btn"):
+            st.session_state[confirm_key] = True
+            st.warning("⚠️ 再点一次确认删除")
 
 
 # ---- 8. 一键导出 -----------------------------------------------------

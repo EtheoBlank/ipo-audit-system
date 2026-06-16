@@ -169,8 +169,11 @@ class RiskIdentifier:
     def identify_revenue_recognition_risk(account_balances: List[Dict]) -> List[Dict]:
         """识别收入确认风险."""
         risks = []
+        # P0 正确性: 只把主营业务收入 (5001) / 其他业务收入 (5051) 算收入, 排除 5401/5501 等费用类
+        _revenue_prefixes = ("5001", "5002", "5051", "5301")
         revenue_accounts = [
-            ab for ab in account_balances if "5" in str(ab.get("account_code", ""))[:1]
+            ab for ab in account_balances
+            if any(str(ab.get("account_code", "")).startswith(p) for p in _revenue_prefixes)
         ]
 
         for ab in revenue_accounts:

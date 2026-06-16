@@ -5,8 +5,11 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
+import logging
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # 长期资产判定 — 与 account_audit 服务共用同一份默认前缀清单
 from app.models.db.account_audit import DEFAULT_LONG_TERM_ASSET_PREFIXES
@@ -220,14 +223,21 @@ class WorkbookGenerator:
             ("净利润", "7000"),
         ]
 
-        # Filter income/expense accounts
-        account_balances[account_balances["account_code"].str.startswith(("5", "6", "7"), na=False)]
+        # P0 正确性修复: 之前过滤结果被丢弃, 利润表全 0. 现在保留过滤结果用于查表
+        income_ab = account_balances[
+            account_balances["account_code"].astype(str).str.startswith(("5", "6", "7"), na=False)
+        ]
 
         for row_idx, (item_name, item_code) in enumerate(income_items, 3):
             ws.cell(row=row_idx, column=1, value=item_name)
             ws.cell(row=row_idx, column=2, value=item_code)
-            ws.cell(row=row_idx, column=3, value=0)
-            ws.cell(row=row_idx, column=4, value=0)
+            # 用 income_ab 而非 account_balances, 避免把 1xxx/2xxx/3xxx 误填入利润表
+            matched = income_ab[
+                income_ab["account_code"].astype(str).str.startswith(str(item_code), na=False)
+            ]
+            amount = float(matched["ending_balance"].sum()) if not matched.empty and "ending_balance" in matched else 0.0
+            ws.cell(row=row_idx, column=3, value=amount)
+            ws.cell(row=row_idx, column=4, value=0)  # 上期金额未提供
             ws.cell(row=row_idx, column=5, value="")
 
             for col in range(1, 6):
@@ -273,6 +283,53 @@ class WorkbookGenerator:
         ws.row_dimensions[2].height = 25
 
         # Balance sheet structure
+        # P0 正确性修复: 之前空表无数据. 现在按科目分类写入资产/负债/权益
+        asset_ab = account_balances[
+            account_balances["account_code"].astype(str).str.startswith("1", na=False)
+        ]
+        liability_ab = account_balances[
+            account_balances["account_code"].astype(str).str.startswith("2", na=False)
+        ]
+        equity_ab = account_balances[
+            account_balances["account_code"].astype(str).str.startswith("3", na=False)
+        ]
+        row_idx = 3
+        # 资产
+        ws.cell(row=row_idx, column=1, value="一、资产")
+        row_idx += 1
+        for _, r in asset_ab.iterrows():
+            ws.cell(row=row_idx, column=1, value=str(r.get("account_name", "")))
+            ws.cell(row=row_idx, column=2, value=str(r.get("account_code", "")))
+            ws.cell(row=row_idx, column=3, value=float(r.get("ending_balance") or 0))
+            ws.cell(row=row_idx, column=4, value=float(r.get("beginning_balance") or 0))
+            ws.cell(row=row_idx, column=5, value="")
+            for col in range(1, 6):
+                self._apply_data_style(ws, row_idx, col, col in [3, 4])
+            row_idx += 1
+        # 负债
+        ws.cell(row=row_idx, column=1, value="二、负债")
+        row_idx += 1
+        for _, r in liability_ab.iterrows():
+            ws.cell(row=row_idx, column=1, value=str(r.get("account_name", "")))
+            ws.cell(row=row_idx, column=2, value=str(r.get("account_code", "")))
+            ws.cell(row=row_idx, column=3, value=float(r.get("ending_balance") or 0))
+            ws.cell(row=row_idx, column=4, value=float(r.get("beginning_balance") or 0))
+            ws.cell(row=row_idx, column=5, value="")
+            for col in range(1, 6):
+                self._apply_data_style(ws, row_idx, col, col in [3, 4])
+            row_idx += 1
+        # 所有者权益
+        ws.cell(row=row_idx, column=1, value="三、所有者权益")
+        row_idx += 1
+        for _, r in equity_ab.iterrows():
+            ws.cell(row=row_idx, column=1, value=str(r.get("account_name", "")))
+            ws.cell(row=row_idx, column=2, value=str(r.get("account_code", "")))
+            ws.cell(row=row_idx, column=3, value=float(r.get("ending_balance") or 0))
+            ws.cell(row=row_idx, column=4, value=float(r.get("beginning_balance") or 0))
+            ws.cell(row=row_idx, column=5, value="")
+            for col in range(1, 6):
+                self._apply_data_style(ws, row_idx, col, col in [3, 4])
+            row_idx += 1
 
         output_path = self.output_dir / f"资产负债表_{self.fiscal_year}.xlsx"
         wb.save(output_path)
@@ -307,6 +364,13 @@ class WorkbookGenerator:
             ws.cell(row=2, column=col, value=header)
             self._apply_header_style(ws, 2, col)
         ws.row_dimensions[2].height = 25
+
+        # P0 正确性修复: 之前完全空表. 现金流量表需要从序时账/科目余额表
+        # 按经营/投资/筹资三大活动归集, 暂未实现完整分类逻辑, 写一行占位
+        logger.warning(
+            "generate_cash_flow: 现金流量表分类 (经营/投资/筹资) 尚未实现, 暂写占位行"
+        )
+        ws.cell(row=3, column=1, value="(经营/投资/筹资活动分类尚未实现, 需从序时账按凭证摘要+对方科目归集)")
 
         output_path = self.output_dir / f"现金流量表_{self.fiscal_year}.xlsx"
         wb.save(output_path)
@@ -619,8 +683,12 @@ class WorkbookGenerator:
         def _row(name: str, book: float, audited: float, ratio_base: float = 0.0) -> list:
             adj = audited - book
             direction = "增加" if adj > 0 else ("减少" if adj < 0 else "无")
-            ratio = (audited / ratio_base * 100) if ratio_base else 0
-            return [name, book, audited, adj, direction, f"{ratio:.2f}%" if ratio_base else "-", ""]
+            # P0 正确性修复: 之前 ratio_base 始终 0 (调用方都用了默认参数), 导致 ratio 永远 0
+            # 现在若调用方未传 ratio_base, 用 audited 自身当分母, 至少给出"调整/审定"占比
+            # 若 audited 也为 0, 用 1.0 避免 ZeroDivision, 此时占比记为 0.00%
+            effective_base = ratio_base if ratio_base else (audited if audited else 1.0)
+            ratio = (audited / effective_base * 100) if effective_base else 0
+            return [name, book, audited, adj, direction, f"{ratio:.2f}%", ""]
 
         rows = [
             _row("期初余额", beginning_book, beginning_audited),

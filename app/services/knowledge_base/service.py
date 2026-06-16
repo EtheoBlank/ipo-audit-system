@@ -151,9 +151,15 @@ class KnowledgeBaseService:
         try:
             p = Path(file_path).resolve()
             kb_dir = settings.KNOWLEDGE_BASE_DIR.resolve()
-            if str(p).startswith(str(kb_dir)) and p.exists():
+            # P0 安全修复: 用 is_relative_to (pathlib 3.9+) 防前缀穿透
+            try:
+                if not Path(p).is_relative_to(Path(kb_dir)):
+                    raise ValueError(f"路径越界：{p} 不在 {kb_dir} 下")
+            except (OSError, ValueError):
+                raise
+            if p.exists():
                 os.remove(p)
-        except OSError:
+        except (OSError, ValueError):
             logger.debug("书籍文件删除失败：%s", file_path, exc_info=True)
 
     # —————————————————————————————————————————————————————————
