@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
 
 import requests
 import streamlit as st

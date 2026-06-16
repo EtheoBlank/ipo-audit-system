@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from app.utils.datetime_helpers import utc_now
 from typing import Optional
 

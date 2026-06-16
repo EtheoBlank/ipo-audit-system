@@ -20,7 +20,6 @@ from app.models.db_models import (
     DailyReport,
     ManagementRecommendation,
     Meeting,
-    Project,
     ProjectAssignment,
     TeamMember,
     WorkPlan,
@@ -59,6 +58,7 @@ from app.models.team_management import (
     TeamMemberResponse,
     TeamMemberUpdate,
     WorkPlanItemResponse,
+    WorkPlanItemUpdate,
     WorkPlanResponse,
     WorkPlanUpdate,
 )

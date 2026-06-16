@@ -47,7 +47,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.api._helpers import get_project_or_404
+from app.api._helpers import deepseek_client, get_project_or_404
 from app.core.database import get_db
 from app.models.db_models import (
     InventoryCodeMapping,
@@ -105,11 +105,8 @@ router = APIRouter(prefix="/api/inventory", tags=["收发存盘点&减值"])
 
 
 def _deepseek_client() -> DeepSeekClient:
-    return DeepSeekClient(
-        api_key=settings.DEEPSEEK_API_KEY,
-        base_url=settings.DEEPSEEK_API_BASE,
-        model=settings.DEEPSEEK_MODEL,
-    )
+    # 兼容旧名; 实际实现统一到 app.api._helpers.deepseek_client
+    return deepseek_client()
 
 
 def _default_period_end(proj: Project) -> date:

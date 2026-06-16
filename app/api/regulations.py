@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,8 +53,7 @@ class RegulationOut(BaseModel):
     source_url: Optional[str] = None
     fetched_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ScrapeRequest(BaseModel):
@@ -88,8 +87,7 @@ class FavoriteOut(BaseModel):
     created_at: datetime
     regulation: RegulationOut
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ----------------------------------------------------------------------

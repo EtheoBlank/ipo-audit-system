@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import pandas as pd
 import requests
@@ -12,7 +11,6 @@ import streamlit as st
 from frontend._http import (
     API_BASE_URL,
     api_request,
-    auth_headers,
     validate_password_strength,
 )
 

@@ -7,7 +7,7 @@ from typing import Any, Dict
 import pandas as pd
 import streamlit as st
 
-from frontend._http import API_BASE_URL, api_request
+from frontend._http import api_request
 
 
 def _api(method: str, endpoint: str, **kwargs):
@@ -134,7 +134,7 @@ def show_notifications() -> None:
                 with st.expander("详细载荷", expanded=False):
                     st.code(it["payload"])
             if not it.get("is_read"):
-                if st.button(f"标记已读", key=f"mr_{it['id']}"):
+                if st.button("标记已读", key=f"mr_{it['id']}"):
                     r = _api("POST", "/api/notifications/mark-read", json={"ids": [it["id"]]})
                     if r:
                         st.rerun()

@@ -16,22 +16,22 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import and_, desc, func, or_, select  # noqa: F401
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db.related_parties import (
     DISCLOSURE_GAP_CRITICAL,
-    DISCLOSURE_GAP_OK,
+    DISCLOSURE_GAP_OK,  # noqa: F401
     DISCLOSURE_GAP_REVIEW,
     PeerCompetitionAssessment,
     ProspectusDisclosureGap,
-    RP_SOURCE_AI,
+    RP_SOURCE_AI,  # noqa: F401
     RP_SOURCE_CHRONO_SCAN,
     RP_SOURCE_CUSTOMER_OVERLAP,
     RP_TYPE_OTHER,
     RelatedParty,
-    RelatedPartyCapitalOccupation,
-    RelatedPartyRelation,
+    RelatedPartyCapitalOccupation,  # noqa: F401
+    RelatedPartyRelation,  # noqa: F401
     RelatedPartyTransaction,
 )
 from app.models.db_models import ChronologicalAccount, SalesRecord
@@ -43,8 +43,8 @@ from app.models.related_parties import (
     DisclosureGapResponse,
     FairnessCheckRequest,
     FairnessCheckResponse,
-    RelatedPartyCreate,
-    RelatedPartyResponse,
+    RelatedPartyCreate,  # noqa: F401
+    RelatedPartyResponse,  # noqa: F401
 )
 
 logger = logging.getLogger(__name__)

@@ -10,14 +10,12 @@ Workflow:
 
 from __future__ import annotations
 
-import json
 from typing import Any, Optional
 
 import pandas as pd
-import requests
 import streamlit as st
 
-from frontend.app import API_BASE_URL, api_request, get_projects
+from frontend.app import api_request, get_projects
 
 
 # ---------- helpers ------------------------------------------------------

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import pandas as pd
 import streamlit as st
 
-from frontend._http import API_BASE_URL, api_request
+from frontend._http import api_request
 
 
 _REPORT_TYPE_LABELS = {

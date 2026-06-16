@@ -264,14 +264,6 @@ class RiskIdentifier:
         ]
         total_inventory = sum(ab.get("ending_balance") or 0 for ab in inventory_accounts)
 
-        industry_thresholds = {
-            "制造业": 180,
-            "零售": 90,
-            "医药生物": 120,
-            "信息技术": 90,
-        }
-        threshold_days = industry_thresholds.get(industry, 120)
-
         if total_inventory > 0:
             # 简化计算，实际应用中需要结合销售成本
             risk_level = "中" if total_inventory > 5000000 else "低"

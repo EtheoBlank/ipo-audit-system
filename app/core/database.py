@@ -56,7 +56,7 @@ async def init_db() -> None:
     不会有任何表被建 (尤其新加表后忘记 import 会导致数据丢失).
     """
     # 显式 import 所有 ORM 模型 — SQLAlchemy 靠 import-time 注册
-    import app.models.db_models  # noqa: F401
+    # (app.models.db_models 已在模块顶部 import, 这里不再重复)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

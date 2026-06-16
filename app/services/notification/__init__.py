@@ -15,6 +15,7 @@ from app.models.db.notification import (
     NOTIF_SEVERITY_INFO,
     Notification,
 )
+from app.utils.datetime_helpers import utc_now
 
 logger = logging.getLogger(__name__)
 

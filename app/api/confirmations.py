@@ -49,7 +49,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api._helpers import get_or_404, get_project_or_404
+from app.api._helpers import deepseek_client, get_or_404, get_project_or_404
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.confirmation import (
@@ -114,11 +114,8 @@ router = APIRouter(prefix="/api/confirmations", tags=["函证管理"])
 
 
 def _deepseek_client() -> DeepSeekClient:
-    return DeepSeekClient(
-        api_key=settings.DEEPSEEK_API_KEY,
-        base_url=settings.DEEPSEEK_API_BASE,
-        model=settings.DEEPSEEK_MODEL,
-    )
+    # 兼容旧名 (本文件内可能仍引用); 实际实现已统一到 app.api._helpers.deepseek_client
+    return deepseek_client()
 
 
 async def _get_case_or_404(db: AsyncSession, case_id: int) -> ConfirmationCase:
@@ -383,7 +380,7 @@ async def generate_stats(
     current_user: User = Depends(get_current_user),
 ):
     """从账套自动生成函证对象清单。"""
-    case = await _get_case_or_404(db, case_id)
+    await _get_case_or_404(db, case_id)
 
     builder = ConfirmationStatsBuilder(db)
     try:
@@ -1135,9 +1132,9 @@ async def get_summary(
         d = by_type[it.party_type]
         d["items"] += 1
         d["amount"] += it.book_balance or 0
-    for l in letters:
-        if l.item:
-            by_type[l.item.party_type]["sent"] += 1
+    for letter in letters:
+        if letter.item:
+            by_type[letter.item.party_type]["sent"] += 1
     for r in responses:
         if r.letter and r.letter.item:
             by_type[r.letter.item.party_type]["responded"] += 1
@@ -1165,9 +1162,9 @@ async def get_summary(
     # 待办 / 未回函
     pending_items = []
     no_reply_items = []
-    by_item_id = {l.item_id: l for l in letters}
+    by_item_id = {lt.item_id: lt for lt in letters}
     for it in items:
-        l = by_item_id.get(it.id)
+        lt = by_item_id.get(it.id)
         if it.status in (ITEM_STATUS_SENT, ITEM_STATUS_NO_REPLY):
             entry = {
                 "id": it.id,
@@ -1175,11 +1172,11 @@ async def get_summary(
                 "party_type": it.party_type,
                 "party_type_label": PARTY_TYPE_LABELS.get(it.party_type, it.party_type),
                 "book_balance": it.book_balance,
-                "sent_date": l.sent_date.isoformat() if l and l.sent_date else None,
-                "expected_reply_date": l.expected_reply_date.isoformat()
-                if l and l.expected_reply_date
+                "sent_date": lt.sent_date.isoformat() if lt and lt.sent_date else None,
+                "expected_reply_date": lt.expected_reply_date.isoformat()
+                if lt and lt.expected_reply_date
                 else None,
-                "reminder_count": l.reminder_count if l else 0,
+                "reminder_count": lt.reminder_count if lt else 0,
             }
             if it.status == ITEM_STATUS_NO_REPLY:
                 no_reply_items.append(entry)

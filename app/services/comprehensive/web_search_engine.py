@@ -170,7 +170,7 @@ async def regulation_db_search(query: str, top_k: int) -> list[SearchHit]:
       - 数量限制 + 简单打分（title 命中权重高）
     """
     try:
-        from sqlalchemy import func, or_, select
+        from sqlalchemy import or_, select
         from app.core.database import AsyncSessionLocal
         from app.models.db_models import Regulation
     except ImportError:

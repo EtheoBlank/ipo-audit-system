@@ -25,7 +25,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.api._helpers import get_project_or_404
 from app.core.database import get_db
 from app.models.db_models import SalesDocument, SalesRecord
 from app.models.db.auth import User
@@ -39,6 +38,7 @@ from app.models.sales_ledger import (
     SynthesisResponse,
 )
 from app.services.auth import get_current_user, get_current_user_optional
+from app.services.auth.tenant import ensure_project_in_firm
 from app.services.sales_ledger import (
     DeepSeekClient,
     DocumentParser,
@@ -127,7 +127,7 @@ async def upload_sales_document(
     The parsed text is kept in the `raw_text` column so the synthesizer can
     re-run on it without re-parsing the file.
     """
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
 
     try:
         doc_type, raw_text = await DocumentParser.parse(file, settings.UPLOAD_DIR)
@@ -156,7 +156,7 @@ async def list_sales_documents(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     result = await db.execute(
         select(SalesDocument)
         .where(SalesDocument.project_id == project_id)
@@ -175,6 +175,8 @@ async def delete_sales_document(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="文档不存在")
+    # IDOR fix (P0): 校验文档所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, doc.project_id, current_user)
     await db.delete(doc)
     await db.commit()
     return {"message": "已删除"}
@@ -196,7 +198,7 @@ async def synthesize_sales_records(
     """Run DeepSeek over the project's uploaded documents to build sales
     records. Existing records (matched by contract_no+product_code) will be
     updated; new ones inserted."""
-    project = await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
 
     q = select(SalesDocument).where(SalesDocument.project_id == project_id)
     if req.document_ids:
@@ -298,7 +300,7 @@ async def list_sales_records(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     result = await db.execute(
         select(SalesRecord)
         .where(SalesRecord.project_id == project_id)
@@ -318,6 +320,8 @@ async def update_sales_record(
     record = result.scalar_one_or_none()
     if not record:
         raise HTTPException(status_code=404, detail="销售记录不存在")
+    # IDOR fix (P0): 校验记录所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, record.project_id, current_user)
     for field, val in payload.model_dump(exclude_unset=True).items():
         setattr(record, field, val)
     if payload.model_dump(exclude_unset=True):
@@ -337,6 +341,8 @@ async def delete_sales_record(
     record = result.scalar_one_or_none()
     if not record:
         raise HTTPException(status_code=404, detail="销售记录不存在")
+    # IDOR fix (P0): 校验记录所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, record.project_id, current_user)
     await db.delete(record)
     await db.commit()
     return {"message": "已删除"}
@@ -355,7 +361,7 @@ async def revenue_analysis(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    project = await get_project_or_404(db, project_id)
+    project = await ensure_project_in_firm(db, project_id, current_user)
 
     records = (
         (await db.execute(select(SalesRecord).where(SalesRecord.project_id == project_id)))
@@ -399,7 +405,7 @@ async def export_sales_ledger(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    project = await get_project_or_404(db, project_id)
+    project = await ensure_project_in_firm(db, project_id, current_user)
     records = (
         (await db.execute(select(SalesRecord).where(SalesRecord.project_id == project_id)))
         .scalars()
