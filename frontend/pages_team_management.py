@@ -2,25 +2,19 @@
 
 from __future__ import annotations
 
-import json
 from datetime import date, timedelta
 from typing import Any, Optional
 
 import pandas as pd
 import streamlit as st
 
-from frontend.app import API_BASE_URL, api_request, get_projects
+from frontend._http import api_request
+from frontend._components.project_picker import pick_project_dict
 
 
-# 复用其它页面的项目选择器
 def _projects_selectbox(label: str = "选择项目") -> Optional[dict]:
-    projects = get_projects() or []
-    if not projects:
-        st.warning("⚠️ 请先在『项目管理』中创建一个项目。")
-        return None
-    options = {f"#{p['id']} {p['name']} ({p.get('company_name', '')})": p for p in projects}
-    sel = st.selectbox(label, list(options.keys()))
-    return options.get(sel) if sel else None
+    """包装 pick_project_dict, 保留历史 API 兼容 (各 tab 仍调 _projects_selectbox)."""
+    return pick_project_dict(label=label, fmt="team_mgmt")
 
 
 # ============================================================

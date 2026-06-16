@@ -3,38 +3,16 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
 
 import pandas as pd
-import requests
 import streamlit as st
 
-from frontend._http import API_BASE_URL, api_request, auth_headers
+from frontend._http import api_request
+from frontend._components.project_picker import pick_project
 
 
 def _api(method: str, endpoint: str, **kwargs):
     return api_request(method, endpoint, timeout=60, **kwargs)
-
-
-@st.cache_data(ttl=60)
-def _get_projects():
-    try:
-        r = requests.get(f"{API_BASE_URL}/api/projects/", timeout=10, headers=auth_headers())
-        if r.status_code == 200:
-            return r.json() or []
-    except Exception:
-        pass
-    return []
-
-
-def _pick_project() -> Optional[int]:
-    projects = _get_projects()
-    if not projects:
-        st.warning("尚未创建项目")
-        return None
-    options = {f"{p['id']} - {p.get('name', '')}": p["id"] for p in projects}
-    label = st.selectbox("选择项目", list(options.keys()), key="ipo_pick_project")
-    return options[label]
 
 
 def _tab_walkthrough(project_id: int) -> None:
@@ -381,7 +359,11 @@ def show_ipo_specials() -> None:
     st.caption(
         "内控穿行 + 截止性 + 招股书勾稽 + 三年一期对比 + 客户供应商重叠 + 可比公司 + 反馈意见 + 申报清单"
     )
-    project_id = _pick_project()
+    project_id = pick_project(
+        key="ipo_pick_project",
+        fmt="name_only",
+        no_projects_warning="尚未创建项目",
+    )
     if not project_id:
         return
 

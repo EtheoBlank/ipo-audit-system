@@ -5,10 +5,12 @@
 样板代码, 现在收敛成一个 ``get_project_or_404`` (一行调用)。
 
 新模块复用规范:
-    from app.api._helpers import get_project_or_404, get_or_404
+    from app.api._helpers import get_project_or_404, get_or_404, deepseek_client
 
 ``get_or_404`` 是通用版, 可以查任意带 ``id`` 主键的 ORM 模型;
-``get_project_or_404`` 是它的 ``Project`` 特化便捷别名。
+``get_project_or_404`` 是它的 ``Project`` 特化便捷别名;
+``deepseek_client`` 是 LLM 客户端工厂 (从 settings 拉 key/base/model, 避免每个
+endpoint handler 自己再粘 4 行初始化代码).
 """
 
 from __future__ import annotations
@@ -18,7 +20,9 @@ from typing import Type, TypeVar
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.db_models import Project
+from app.services.sales_ledger.deepseek_client import DeepSeekClient
 
 T = TypeVar("T")
 
@@ -56,3 +60,18 @@ async def get_project_or_404(db: AsyncSession, project_id: int) -> Project:
     8 个老 API 文件曾各自维护同名 ``_get_project_or_404``, 现在统一走这里。
     """
     return await get_or_404(db, Project, project_id, label="项目")
+
+
+def deepseek_client() -> DeepSeekClient:
+    """LLM 客户端工厂 — 从 settings 拉 key/base/model, 返回 ``DeepSeekClient``。
+
+    替代各 API 文件里重复的 ``_deepseek_client`` (4 行) 私有 helper:
+    >>> client = deepseek_client()
+    >>> if not client.is_configured:
+    >>>     raise HTTPException(400, "未配置 LLM")
+    """
+    return DeepSeekClient(
+        api_key=settings.DEEPSEEK_API_KEY,
+        base_url=settings.DEEPSEEK_API_BASE,
+        model=settings.DEEPSEEK_MODEL,
+    )

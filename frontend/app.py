@@ -3,7 +3,6 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime
 
 from frontend._http import API_BASE_URL, api_request, auth_headers
 
@@ -528,7 +527,7 @@ def show_workbook_generation():
                 json={"project_id": project_id, "template_type": template_type},
             )
             if result:
-                st.success(f"✅ 底稿生成成功")
+                st.success("✅ 底稿生成成功")
                 st.markdown(f"📁 文件路径: `{result.get('file_path')}`")
                 st.markdown(
                     f"📥 下载链接: [{result.get('file_name')}]({result.get('download_url')})"

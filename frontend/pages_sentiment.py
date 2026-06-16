@@ -18,9 +18,10 @@ from __future__ import annotations
 import json
 import streamlit as st
 import pandas as pd
-import requests
 
-from frontend.app import API_BASE_URL, api_request, get_projects
+from frontend._http import api_request
+from frontend._components.project_picker import pick_project
+from frontend._components.download import download_word
 
 
 # ============================================================
@@ -52,15 +53,11 @@ def _severity_badge(sev: str) -> str:
 
 
 def _pick_project() -> int:
-    projects = get_projects()
-    if not projects:
-        st.warning("⚠️ 请先在『项目管理』中创建一个项目。")
+    """舆情页选项目 — 无项目时调 st.stop() 终止页面 (历史行为)."""
+    pid = pick_project(fmt="sentiment")
+    if pid is None:
         st.stop()
-    name_to_id = {
-        f"{p['name']} (#{p['id']} · {p.get('company_name', '')})": p["id"] for p in projects
-    }
-    label = st.selectbox("选择项目", list(name_to_id.keys()))
-    return name_to_id[label]
+    return pid
 
 
 def _render_unread_badge() -> int:
@@ -412,12 +409,7 @@ def _render_briefing_detail(br: dict, project_id: int) -> None:
                 expect_bytes=True,
             )
             if isinstance(content, bytes) and content:
-                st.download_button(
-                    "📥 下载 Word 文档",
-                    data=content,
-                    file_name=f"briefing_{br['id']}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                )
+                download_word(content, file_name=f"briefing_{br['id']}.docx")
         with c2:
             reviser = st.text_input("修订人", key=f"rvs_{br['id']}")
             if st.button("🔄 基于本版修订", key=f"revise_{br['id']}"):
@@ -546,7 +538,7 @@ def _render_report_detail(rep: dict, project_id: int) -> None:
                     st.rerun()
 
     # 触发生成
-    if st.button(f"⚡ 触发报告生成 (4 轮 LLM + 双数据源对账)", key=f"gen_{rep['id']}"):
+    if st.button("⚡ 触发报告生成 (4 轮 LLM + 双数据源对账)", key=f"gen_{rep['id']}"):
         with st.spinner("生成中..."):
             r = api_request("POST", f"/api/sentiment/reports/{rep['id']}/generate")
         if r and "id" in r:
@@ -608,12 +600,7 @@ def _render_report_detail(rep: dict, project_id: int) -> None:
             expect_bytes=True,
         )
         if isinstance(content, bytes) and content:
-            st.download_button(
-                "📥 下载 Word 文档",
-                data=content,
-                file_name=f"report_{rep['id']}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
+            download_word(content, file_name=f"report_{rep['id']}.docx")
 
 
 # ============================================================

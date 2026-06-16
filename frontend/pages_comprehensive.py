@@ -12,13 +12,11 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
 
 from app.services.comprehensive.builtin_rules import default_rule_book
 from app.services.comprehensive.fill_engine import ComprehensiveFillEngine
@@ -34,7 +32,6 @@ from app.services.comprehensive.schemas import (
 )
 from app.services.comprehensive.template_parser import TemplateParser
 from app.services.comprehensive.web_search_engine import (
-    SearchHit,
     WebSearchEngine,
 )
 

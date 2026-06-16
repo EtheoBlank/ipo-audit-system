@@ -2,38 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
-
 import pandas as pd
-import requests
 import streamlit as st
 
-from frontend._http import API_BASE_URL, api_request, auth_headers
+from frontend._http import api_request
+from frontend._components.project_picker import pick_project
 
 
 def _api(method: str, endpoint: str, **kwargs):
     return api_request(method, endpoint, timeout=60, **kwargs)
-
-
-@st.cache_data(ttl=60)
-def _get_projects():
-    try:
-        r = requests.get(f"{API_BASE_URL}/api/projects/", timeout=10, headers=auth_headers())
-        if r.status_code == 200:
-            return r.json() or []
-    except Exception:
-        pass
-    return []
-
-
-def _pick_project() -> Optional[int]:
-    projects = _get_projects()
-    if not projects:
-        st.warning("尚未创建项目, 请先在 '📁 项目管理' 创建")
-        return None
-    options = {f"{p['id']} - {p.get('name', '')}": p["id"] for p in projects}
-    label = st.selectbox("选择项目", list(options.keys()), key="ac_pick_project")
-    return options[label]
 
 
 def _tab_payables(project_id: int) -> None:
@@ -323,7 +300,7 @@ def show_audit_cycles() -> None:
     st.caption(
         "10 个循环 — 应付 / 费用 / 薪酬 / 固定资产 / 无形资产 / 长投 / 租赁 / 所得税 / 会计估计 / 后续期间"
     )
-    project_id = _pick_project()
+    project_id = pick_project(key="ac_pick_project", fmt="name_only")
     if not project_id:
         return
 

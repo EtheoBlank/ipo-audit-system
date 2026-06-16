@@ -4,43 +4,19 @@ from __future__ import annotations
 
 import io
 from datetime import date
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import pandas as pd
-import requests
 import streamlit as st
 
-from frontend._http import API_BASE_URL, api_request, auth_headers
+from frontend._http import api_request
+from frontend._components.project_picker import pick_project
+from frontend._components.data_grid import edit_df as _edit_df
 
 
 def _api(method: str, endpoint: str, *, expect_bytes: bool = False, **kwargs):
     """薄封装 — 复用共享 _http.api_request."""
     return api_request(method, endpoint, expect_bytes=expect_bytes, timeout=60, **kwargs)
-
-
-@st.cache_data(ttl=60)
-def _get_projects():
-    """注: cache key 不区分用户, 多用户多事务所部署需注意 — 见 Pack A 复查 C4.
-    本期通过 auth 后端跨所隔离 + Streamlit session 隔离规避, 暂不在前端 cache 加 user_id."""
-    try:
-        r = requests.get(f"{API_BASE_URL}/api/projects/", timeout=10, headers=auth_headers())
-        if r.status_code == 200:
-            return r.json() or []
-    except Exception:
-        pass
-    return []
-
-
-def _pick_project() -> Optional[int]:
-    projects = _get_projects()
-    if not projects:
-        st.warning("尚未创建项目, 请先在 '📁 项目管理' 创建")
-        return None
-    options = {
-        f"{p['id']} - {p.get('name', '')} / {p.get('company_name', '')}": p["id"] for p in projects
-    }
-    label = st.selectbox("选择项目", list(options.keys()), key="aa_pick_project")
-    return options[label]
 
 
 def _tab_scope(project_id: int) -> None:
@@ -220,8 +196,11 @@ def _tab_movements(project_id: int) -> None:
             for i in items
         ]
     )
-    edited = st.data_editor(
+    edited = _edit_df(
         edit_df,
+        key="aa_editor",
+        height=520,
+        width="stretch",
         column_config={
             "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
             "科目": st.column_config.TextColumn(disabled=True),
@@ -237,10 +216,6 @@ def _tab_movements(project_id: int) -> None:
                 options=["pending", "audited", "disputed", "skipped"],
             ),
         },
-        hide_index=True,
-        width="stretch",
-        height=520,
-        key="aa_editor",
     )
 
     # 检查改动 → 提交
@@ -371,7 +346,7 @@ def show_account_audit() -> None:
         "不只期初期末出审定数, 本期借/贷方发生额逐笔出审定数 + 审计调整, 底稿自动恒等式校验。"
     )
 
-    project_id = _pick_project()
+    project_id = pick_project(key="aa_pick_project")
     if not project_id:
         return
 

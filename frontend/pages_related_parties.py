@@ -2,40 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import pandas as pd
-import requests
 import streamlit as st
 
-from frontend._http import API_BASE_URL, api_request, auth_headers
+from frontend._http import api_request
+from frontend._components.project_picker import pick_project
 
 
 def _api(method: str, endpoint: str, *, expect_bytes: bool = False, **kwargs):
     return api_request(method, endpoint, expect_bytes=expect_bytes, timeout=60, **kwargs)
-
-
-@st.cache_data(ttl=60)
-def _get_projects():
-    try:
-        r = requests.get(f"{API_BASE_URL}/api/projects/", timeout=10, headers=auth_headers())
-        if r.status_code == 200:
-            return r.json() or []
-    except Exception:
-        pass
-    return []
-
-
-def _pick_project() -> Optional[int]:
-    projects = _get_projects()
-    if not projects:
-        st.warning("尚未创建项目, 请先在 '📁 项目管理' 创建")
-        return None
-    options = {
-        f"{p['id']} - {p.get('name', '')} / {p.get('company_name', '')}": p["id"] for p in projects
-    }
-    label = st.selectbox("选择项目", list(options.keys()), key="rp_pick_project")
-    return options[label]
 
 
 _PARTY_TYPE_LABELS = {
@@ -435,7 +412,7 @@ def _tab_report(project_id: int) -> None:
         "汇总关联方主数据 / 交易 / 资金占用 / 同业竞争 / 披露 diff / 整改建议, 一键导出 Word.\n"
         "MVP: 导出 Excel 多 sheet 版本 (Word 报告留 Pack B.2)."
     )
-    period_end = st.text_input("期末日期", value="2024-12-31", key="rp_rpt_pe")
+    st.text_input("期末日期", value="2024-12-31", key="rp_rpt_pe")
     if st.button("📊 生成报告 (TODO)", disabled=True):
         st.info("报告生成功能 Pack B.2 实现 — 当前可分别在各 tab 导出明细")
 
@@ -448,7 +425,7 @@ def show_related_parties() -> None:
     st.caption(
         "IPO 最大雷区 — 主数据 + 识别引擎 + 交易公允性 + 资金占用 + 同业竞争 + 招股书披露核查"
     )
-    project_id = _pick_project()
+    project_id = pick_project(key="rp_pick_project")
     if not project_id:
         return
 

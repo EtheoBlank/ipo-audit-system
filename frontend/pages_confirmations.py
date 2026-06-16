@@ -12,8 +12,7 @@ Tabs:
 
 from __future__ import annotations
 
-import json
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any, Optional
 
 import pandas as pd

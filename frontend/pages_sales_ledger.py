@@ -11,28 +11,24 @@ The page walks the auditor through:
 
 from __future__ import annotations
 
-import json
-from datetime import date, datetime
+from datetime import date
 from typing import Any, Optional
 
 import pandas as pd
-import requests
 import streamlit as st
 
-from frontend.app import API_BASE_URL, api_request, get_projects
+from frontend._http import api_request
+from frontend._components.project_picker import pick_project_dict
+from frontend._components.data_grid import edit_df as _edit_df
+from frontend._components.download import download_excel
 
 
 # ---------- helpers ------------------------------------------------------
 
 
 def _projects_selectbox(label: str = "选择项目") -> Optional[dict[str, Any]]:
-    projects = get_projects() or []
-    if not projects:
-        st.warning("⚠️ 请先在『项目管理』中创建一个项目。")
-        return None
-    options = {f"#{p['id']} {p['name']} ({p.get('company_name', '')})": p for p in projects}
-    label_chosen = st.selectbox(label, list(options.keys()))
-    return options.get(label_chosen)
+    """包装 pick_project_dict, 保留历史 API 兼容 (show_sales_ledger 仍调它)."""
+    return pick_project_dict(label=label, fmt="team_mgmt")
 
 
 def _format_df_for_editor(records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -217,11 +213,9 @@ def show_sales_ledger() -> None:
             for c in keep_cols:
                 if c not in df.columns:
                     df[c] = None
-            edited = st.data_editor(
+            edited = _edit_df(
                 df[keep_cols],
-                use_container_width=True,
-                hide_index=True,
-                num_rows="fixed",
+                key="sl_editor",
                 column_config={
                     "is_verified": st.column_config.CheckboxColumn("已核对"),
                     "ship_date": st.column_config.DateColumn("发货日期"),
@@ -232,7 +226,6 @@ def show_sales_ledger() -> None:
                         options=["未发函", "已发函", "已回函", "未回函", "作废"],
                     ),
                 },
-                key="sl_editor",
             )
 
             if st.button("💾 保存修改", type="primary"):
@@ -354,11 +347,9 @@ def show_sales_ledger() -> None:
                     st.session_state["sl_xlsx"] = content
                     st.success("✅ 已生成，可点击下方下载")
         if st.session_state.get("sl_xlsx"):
-            st.download_button(
-                "⬇️ 下载 Excel",
-                data=st.session_state["sl_xlsx"],
+            download_excel(
+                st.session_state["sl_xlsx"],
                 file_name=f"sales_ledger_project_{project_id}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
 

@@ -9,6 +9,9 @@ import pandas as pd
 import requests
 import streamlit as st
 
+from frontend._components.project_picker import pick_project_dict
+from frontend._components.download import download_excel
+
 API_BASE_URL = "http://localhost:8000"
 
 
@@ -31,19 +34,12 @@ def _api(method: str, endpoint: str, **kwargs):
         return None
 
 
-@st.cache_data(ttl=30)
-def _projects():
-    return _api("GET", "/api/projects/") or []
-
-
 def _pick_project():
-    projs = _projects()
-    if not projs:
-        st.warning("请先在『项目管理』创建项目")
-        return None
-    options = {f"{p['id']} - {p['name']} ({p.get('industry') or '未填行业'})": p for p in projs}
-    label = st.selectbox("选择项目", list(options.keys()), key="inv_project_select")
-    return options[label]
+    return pick_project_dict(
+        key="inv_project_select",
+        fmt="with_industry_fallback",
+        no_projects_warning="请先在『项目管理』创建项目",
+    )
 
 
 def show_inventory():
@@ -291,10 +287,14 @@ def _tab_count_sheet(project_id: int, default_pe: date):
         res = _api("POST", f"/api/inventory/projects/{project_id}/count-sheets/generate", json=body)
         if res:
             c1, c2, c3, c4 = st.columns(4)
-            with c1: st.metric("选中物料", f"{res['selected_items']} / {res['total_items']}")
-            with c2: st.metric("覆盖金额", f"¥ {res['covered_amount']:,.0f}")
-            with c3: st.metric("总金额", f"¥ {res['total_amount']:,.0f}")
-            with c4: st.metric("金额覆盖率", f"{res['coverage_ratio']:.2%}")
+            with c1:
+                st.metric("选中物料", f"{res['selected_items']} / {res['total_items']}")
+            with c2:
+                st.metric("覆盖金额", f"¥ {res['covered_amount']:,.0f}")
+            with c3:
+                st.metric("总金额", f"¥ {res['total_amount']:,.0f}")
+            with c4:
+                st.metric("金额覆盖率", f"{res['coverage_ratio']:.2%}")
             st.caption(res["strategy_desc"])
 
             ts = res.get("tier_summary") or {}
@@ -330,9 +330,12 @@ def _tab_photo(project_id: int):
                    files=files, params=params)
         if res:
             c1, c2, c3 = st.columns(3)
-            with c1: st.metric("OCR 引擎", res["ocr_engine"])
-            with c2: st.metric("识别行数", res["parsed_row_count"])
-            with c3: st.metric("成功回填", f"{res['matched_count']} (未匹配 {res['unmatched_count']})")
+            with c1:
+                st.metric("OCR 引擎", res["ocr_engine"])
+            with c2:
+                st.metric("识别行数", res["parsed_row_count"])
+            with c3:
+                st.metric("成功回填", f"{res['matched_count']} (未匹配 {res['unmatched_count']})")
             if res.get("counted_by"):
                 st.caption(f"识别到盘点人：{res['counted_by']}；盘点时间：{res.get('counted_at','')}")
             if res.get("unmatched_rows"):
@@ -362,8 +365,10 @@ def _tab_completion(project_id: int, default_pe: date):
         return
     o = res.get("overall") or {}
     c1, c2, c3 = st.columns(3)
-    with c1: st.metric("盘点率（数量）", f"{o.get('items_rate', 0):.2%}", f"{o.get('counted_items',0)}/{o.get('total_items',0)} 项")
-    with c2: st.metric("盘点率（金额）", f"{o.get('amount_rate', 0):.2%}",
+    with c1:
+        st.metric("盘点率（数量）", f"{o.get('items_rate', 0):.2%}", f"{o.get('counted_items',0)}/{o.get('total_items',0)} 项")
+    with c2:
+        st.metric("盘点率（金额）", f"{o.get('amount_rate', 0):.2%}",
                        f"¥{o.get('counted_amount',0):,.0f} / ¥{o.get('total_amount',0):,.0f}")
     with c3:
         ds = res.get("difference_summary") or {}
@@ -473,10 +478,14 @@ def _tab_impairment(project_id: int, default_pe: date):
         if res:
             s = res.get("summary") or {}
             c1, c2, c3, c4 = st.columns(4)
-            with c1: st.metric("期末账面", f"¥ {s.get('book_amount',0):,.0f}")
-            with c2: st.metric("期末应保留跌价", f"¥ {s.get('ending_impairment',0):,.0f}")
-            with c3: st.metric("本期新增计提", f"¥ {s.get('current_provision',0):,.0f}")
-            with c4: st.metric("本期跌价转回", f"¥ {s.get('current_reversal',0):,.0f}")
+            with c1:
+                st.metric("期末账面", f"¥ {s.get('book_amount',0):,.0f}")
+            with c2:
+                st.metric("期末应保留跌价", f"¥ {s.get('ending_impairment',0):,.0f}")
+            with c3:
+                st.metric("本期新增计提", f"¥ {s.get('current_provision',0):,.0f}")
+            with c4:
+                st.metric("本期跌价转回", f"¥ {s.get('current_reversal',0):,.0f}")
 
             rows = res.get("rows") or []
             if rows:
@@ -574,9 +583,7 @@ def _tab_export(project_id: int, default_pe: date):
             f"/api/inventory/projects/{project_id}/export?period_end={pe.isoformat()}",
         )
         if isinstance(content, bytes) and content:
-            st.download_button(
-                "⬇️ 下载 Excel",
-                data=content,
+            download_excel(
+                content,
                 file_name=f"inventory_project_{project_id}_{pe.isoformat()}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
