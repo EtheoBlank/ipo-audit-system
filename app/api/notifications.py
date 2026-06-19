@@ -88,9 +88,11 @@ async def mark_read(
     db: AsyncSession = Depends(get_db),
 ):
     user_id = _resolve_user_id(current_user)
-    # P0 第 2 轮修复 — synthetic admin (id=0, AUTH_ENABLED=false) 任何 mark-read 都拒绝.
+    # P0 修复: synthetic admin (id=0, AUTH_ENABLED=false) 任何 mark-read 都拒绝.
     # mark_all=True 会标记所有人, ids 列表模式也会跳过 user_id 过滤标记任意通知.
     # 真实场景 (AUTH_ENABLED=true) 才允许.
+    # P2 (2026-06-19): 删掉下面 if payload.mark_all and not user_id 死分支
+    # 上面 if not user_id 已经 cover, 这里永远 unreachable
     if not user_id:
         raise HTTPException(
             status_code=400,
@@ -98,12 +100,6 @@ async def mark_read(
                 "通知标记已读需要真实登录用户. AUTH_ENABLED=false 时 (synthetic admin) "
                 "无法判断目标用户, 已拒绝执行."
             ),
-        )
-    if payload.mark_all and not user_id:
-        # 双重保险 (上面已 cover)
-        raise HTTPException(
-            status_code=400,
-            detail="mark_all=True 仅允许真实登录用户使用",
         )
     updated = await NotificationService.mark_read(
         db,
