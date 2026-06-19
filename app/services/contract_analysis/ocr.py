@@ -27,6 +27,11 @@ class OCRError(RuntimeError):
 class ContractOCR:
     """Image / PDF → (engine_name, plain_text)."""
 
+    # P1 性能 (2026-06-19): OCR 引擎模块级单例, 避免每次调用都冷启动
+    # paddleocr / easyocr 初始化耗时 5-15s, 多文件并发上传瓶颈
+    _paddle_ocr_cache: dict = {}
+    _easyocr_reader_cache: dict = {}
+
     @staticmethod
     def is_image(filename: str) -> bool:
         ext = Path(filename).suffix.lower()
@@ -71,7 +76,12 @@ class ContractOCR:
         try:
             from paddleocr import PaddleOCR  # type: ignore
 
-            ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+            cache_key = ("paddleocr", "ch")
+            if cache_key not in cls._paddle_ocr_cache:
+                cls._paddle_ocr_cache[cache_key] = PaddleOCR(
+                    use_angle_cls=True, lang="ch", show_log=False
+                )
+            ocr = cls._paddle_ocr_cache[cache_key]
             result = ocr.ocr(str(file_path), cls=True)
             lines = []
             for page in result or []:
@@ -89,7 +99,12 @@ class ContractOCR:
         try:
             import easyocr  # type: ignore
 
-            reader = easyocr.Reader(["ch_sim", "en"], gpu=False, verbose=False)
+            cache_key = ("easyocr", "ch_sim+en")
+            if cache_key not in cls._easyocr_reader_cache:
+                cls._easyocr_reader_cache[cache_key] = easyocr.Reader(
+                    ["ch_sim", "en"], gpu=False, verbose=False
+                )
+            reader = cls._easyocr_reader_cache[cache_key]
             result = reader.readtext(str(file_path), detail=0, paragraph=True)
             if result:
                 return "easyocr", "\n".join(result)

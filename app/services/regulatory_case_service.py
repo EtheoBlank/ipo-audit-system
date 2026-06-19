@@ -1,11 +1,14 @@
 """监管案例库服务 - 第三阶段."""
 
 import httpx
+import logging
 from bs4 import BeautifulSoup
 from typing import List, Dict
 import hashlib
 import asyncio
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class RegulatoryCaseScraper:
@@ -57,7 +60,7 @@ class RegulatoryCaseScraper:
                         }
                     )
         except Exception as e:
-            print(f"CSRC scrape error: {e}")
+            logger.exception("CSRC scrape error")
         return cases
 
     async def scrape_sse_inquiry(self, page: int = 1) -> List[Dict]:
@@ -89,7 +92,7 @@ class RegulatoryCaseScraper:
                     }
                 )
         except Exception as e:
-            print(f"SSE scrape error: {e}")
+            logger.exception("SSE scrape error")
         return cases
 
     async def scrape_szse_inquiry(self, page: int = 1) -> List[Dict]:
@@ -121,7 +124,7 @@ class RegulatoryCaseScraper:
                     }
                 )
         except Exception as e:
-            print(f"SZSE scrape error: {e}")
+            logger.exception("SZSE scrape error")
         return cases
 
     async def scrape_csrc_penalty(self, page: int = 1) -> List[Dict]:
@@ -147,7 +150,7 @@ class RegulatoryCaseScraper:
                         }
                     )
         except Exception as e:
-            print(f"CSRC penalty scrape error: {e}")
+            logger.exception("CSRC penalty scrape error")
         return cases
 
     async def scrape_all(self, max_pages: int = 5) -> List[Dict]:

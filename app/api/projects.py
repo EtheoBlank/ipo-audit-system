@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional
+import asyncio
 import pandas as pd
 import uuid
 
@@ -35,6 +36,12 @@ from app.services.auth import (
     scope_projects_to_firm,
 )
 from app.services.excel_parser import ExcelParser
+
+
+def _write_bytes(path, data: bytes) -> None:
+    """同步写文件, 供 asyncio.to_thread 调用."""
+    with open(path, "wb") as f:
+        f.write(data)
 
 router = APIRouter(prefix="/api/projects", tags=["项目管理"])
 
@@ -177,11 +184,12 @@ async def upload_account_balances(
     # 用 UUID 防止同名并发上传相互覆盖
     temp_path = settings.UPLOAD_DIR / f"temp_{uuid.uuid4().hex}_{file.filename or 'upload'}"
     content = await file.read()
-    with open(temp_path, "wb") as f:
-        f.write(content)
+    # P0 性能 (2026-06-19): 同步 write/read_excel 在 async 端点内阻塞事件循环
+    # 改 asyncio.to_thread, 释放 worker 接收其他请求
+    await asyncio.to_thread(_write_bytes, temp_path, content)
 
     try:
-        raw_df = pd.read_excel(temp_path)
+        raw_df = await asyncio.to_thread(pd.read_excel, temp_path)
 
         # Auto-detect ERP type if not specified
         if erp_type_enum is None:
