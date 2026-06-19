@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -24,6 +25,32 @@ from app.services.knowledge_base import KnowledgeBaseService
 from app.services.knowledge_base.retriever import RetrievedChunk
 
 logger = logging.getLogger(__name__)
+
+# P0-15 (2026-06-19, round30): markdown 注入防护. KB 检索 / 法规摘录 / AI 返回
+# 直接拼进审计说明 markdown, 前端或 docx 渲染时 ![alt](javascript:...) 可执行 XSS.
+# 在 _compose_note 末尾脱敏, 不影响其他业务逻辑.
+_SANITIZE_RULES: list[tuple[str, str, int]] = [
+    # 1) 图片链接 javascript: / data:text/html
+    (r"!\[([^\]]*)\]\(\s*javascript:[^)]*\)", r"!\1()(已脱敏)", re.IGNORECASE),
+    (r"!\[([^\]]*)\]\(\s*data:text/html[^)]*\)", r"!\1()(已脱敏)", re.IGNORECASE),
+    # 2) 普通链接 javascript: / data:text/html
+    (r"\[([^\]]+)\]\(\s*javascript:[^)]*\)", r"\1(已脱敏)", re.IGNORECASE),
+    (r"\[([^\]]+)\]\(\s*data:text/html[^)]*\)", r"\1(已脱敏)", re.IGNORECASE),
+    # 3) <script>...</script> 整段
+    (r"<script[^>]*>.*?</script>", "(script 标签已脱敏)", re.IGNORECASE | re.DOTALL),
+    # 4) 内联 on*= 事件
+    (r'\bon\w+\s*=\s*"[^"]*"', "", re.IGNORECASE),
+    (r"\bon\w+\s*=\s*'[^']*'", "", re.IGNORECASE),
+]
+
+
+def _sanitize_markdown(md: Optional[str]) -> Optional[str]:
+    """P0-15: 审计说明 markdown 渲染前脱敏, 防 KB 注入 XSS."""
+    if not md:
+        return md
+    for pattern, repl, flags in _SANITIZE_RULES:
+        md = re.sub(pattern, repl, md, flags=flags)
+    return md
 
 
 @dataclass
@@ -302,7 +329,7 @@ class AuditNoteGenerator:
             lines.append("- 实施替代程序 / 函证；")
             lines.append("- 关注与同行业相似科目的处理差异。")
 
-        return "\n\n".join(lines)
+        return _sanitize_markdown("\n\n".join(lines))
 
 
 # 全局单例 — 与 KnowledgeBaseService 一致

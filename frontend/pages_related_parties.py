@@ -38,9 +38,10 @@ def _tab_main_data(project_id: int) -> None:
         "类型",
         ["全部"] + list(_PARTY_TYPE_LABELS.keys()),
         format_func=lambda k: "全部" if k == "全部" else _PARTY_TYPE_LABELS.get(k, k),
+        key="rp_main_party_type",
     )
-    confirmed = cols[1].selectbox("状态", ["全部", "已确认", "待确认"])
-    keyword = cols[2].text_input("名称关键词")
+    confirmed = cols[1].selectbox("状态", ["全部", "已确认", "待确认"], key="rp_main_confirmed")
+    keyword = cols[2].text_input("名称关键词", key="rp_main_keyword")
     cols[3].markdown("&nbsp;")
 
     params: Dict[str, Any] = {"limit": 500}
@@ -80,17 +81,18 @@ def _tab_main_data(project_id: int) -> None:
     with st.expander("➕ 新建关联方", expanded=False):
         with st.form("new_rp"):
             c1, c2 = st.columns(2)
-            name = c1.text_input("名称*")
+            name = c1.text_input("名称*", key="rp_new_name")
             party_type_new = c2.selectbox(
                 "类型*",
                 list(_PARTY_TYPE_LABELS.keys()),
                 format_func=lambda k: _PARTY_TYPE_LABELS.get(k, k),
+                key="rp_new_type",
             )
-            party_kind = c1.selectbox("性质", ["entity", "person"])
-            credit_code = c2.text_input("统一社会信用代码")
-            holding_pct = c1.number_input("持股 %", min_value=0.0, max_value=100.0, step=0.01)
-            disclosed = c2.checkbox("已在招股书披露")
-            relation_chain = st.text_area("关系链描述")
+            party_kind = c1.selectbox("性质", ["entity", "person"], key="rp_new_kind")
+            credit_code = c2.text_input("统一社会信用代码", key="rp_new_credit")
+            holding_pct = c1.number_input("持股 %", min_value=0.0, max_value=100.0, step=0.01, key="rp_new_holding")
+            disclosed = c2.checkbox("已在招股书披露", key="rp_new_disclosed")
+            relation_chain = st.text_area("关系链描述", key="rp_new_chain")
             ok = st.form_submit_button("提交", type="primary")
         if ok and name:
             payload = {
@@ -122,10 +124,10 @@ def _tab_relations(project_id: int) -> None:
     with st.expander("➕ 新增关系", expanded=False):
         with st.form("new_rel"):
             c1, c2, c3 = st.columns(3)
-            a = c1.number_input("party_a_id", min_value=1, step=1)
-            b = c2.number_input("party_b_id", min_value=1, step=1)
-            rt = c3.text_input("关系类型 (持股/配偶/父母/子女/任职 等)")
-            holding = st.number_input("持股 %", min_value=0.0, max_value=100.0, step=0.01)
+            a = c1.number_input("party_a_id", min_value=1, step=1, key="rp_rel_a")
+            b = c2.number_input("party_b_id", min_value=1, step=1, key="rp_rel_b")
+            rt = c3.text_input("关系类型 (持股/配偶/父母/子女/任职 等)", key="rp_rel_rt")
+            holding = st.number_input("持股 %", min_value=0.0, max_value=100.0, step=0.01, key="rp_rel_holding")
             ok = st.form_submit_button("提交", type="primary")
         if ok and a and b and rt:
             payload = {
@@ -147,12 +149,12 @@ def _tab_detector(project_id: int) -> None:
         "命中后产生候选, 需人工 confirm 才落库."
     )
     c1, c2, c3 = st.columns(3)
-    enable_chrono = c1.checkbox("启用序时账扫描", value=True)
-    enable_overlap = c2.checkbox("启用客户/供应商重叠", value=True)
+    enable_chrono = c1.checkbox("启用序时账扫描", value=True, key="rp_det_chrono")
+    enable_overlap = c2.checkbox("启用客户/供应商重叠", value=True, key="rp_det_overlap")
     c3.markdown("&nbsp;")
-    extra_keywords = st.text_input("额外关键词 (逗号分隔, 可选)")
+    extra_keywords = st.text_input("额外关键词 (逗号分隔, 可选)", key="rp_det_keywords")
 
-    if st.button("🚀 立即识别", type="primary"):
+    if st.button("🚀 立即识别", type="primary", key="rp_det_run"):
         payload = {
             "project_id": project_id,
             "enable_chrono_scan": enable_chrono,
@@ -219,7 +221,7 @@ def _tab_transactions(project_id: int) -> None:
     with st.expander("➕ 新增关联交易", expanded=False):
         with st.form("new_tx"):
             c1, c2, c3 = st.columns(3)
-            party_id = c1.number_input("party_id*", min_value=1, step=1)
+            party_id = c1.number_input("party_id*", min_value=1, step=1, key="rp_tx_pid")
             tx_type = c2.selectbox(
                 "类型*",
                 [
@@ -234,11 +236,12 @@ def _tab_transactions(project_id: int) -> None:
                     "asset_transfer",
                     "other",
                 ],
+                key="rp_tx_type",
             )
-            amount = c3.number_input("金额*", min_value=0.0, step=100.0)
-            period_end = c1.date_input("期末日期", value=date.today())
-            pricing = c2.text_input("定价依据 (市场公允/成本加成/协议)")
-            note = c3.text_input("备注")
+            amount = c3.number_input("金额*", min_value=0.0, step=100.0, key="rp_tx_amount")
+            period_end = c1.date_input("期末日期", value=date.today(), key="rp_tx_pe")
+            pricing = c2.text_input("定价依据 (市场公允/成本加成/协议)", key="rp_tx_pricing")
+            note = c3.text_input("备注", key="rp_tx_note")
             ok = st.form_submit_button("提交", type="primary")
         if ok and party_id and amount > 0:
             payload = {
@@ -259,7 +262,7 @@ def _tab_transactions(project_id: int) -> None:
     st.markdown("---")
     st.markdown("#### 公允性测试")
     period_end_for_check = st.date_input("期末日期 (留空 = 全部)", value=None, key="rp_fair_pe")
-    if st.button("🔍 跑公允性测试"):
+    if st.button("🔍 跑公允性测试", key="rp_tx_fair"):
         payload = {"period_end": period_end_for_check.isoformat() if period_end_for_check else None}
         with st.spinner("分析中..."):
             r = _api(
@@ -303,7 +306,7 @@ def _tab_capital_occupation(project_id: int) -> None:
             value=st.session_state.get(f"rp_co_end_{project_id}", ""),
             key=f"rp_co_end_{project_id}",
         )
-        if st.button("📊 计算"):
+        if st.button("📊 计算", key="rp_co_calc"):
             if party_id and period_start and period_end:
                 st.session_state[result_key] = _api(
                     "GET",
@@ -347,9 +350,10 @@ def _tab_peer_competition(project_id: int) -> None:
 
     with st.expander("🔍 评估同业竞争", expanded=False):
         with st.form("peer_assess"):
-            party_id = st.number_input("关联方 ID*", min_value=1, step=1)
+            party_id = st.number_input("关联方 ID*", min_value=1, step=1, key="rp_pc_pid")
             keywords_input = st.text_area(
                 "发行人主业关键词 (逗号分隔, 例如: 芯片设计, 集成电路, EDA)*",
+                key="rp_pc_kw",
             )
             ok = st.form_submit_button("评估", type="primary")
         if ok and party_id and keywords_input:
@@ -381,8 +385,9 @@ def _tab_disclosure(project_id: int) -> None:
         "招股书披露的关联方名单 (一行一个)",
         height=120,
         placeholder="X 集团有限公司\nXX 投资管理 (上海) 有限公司\n...",
+        key="rp_disc_names",
     )
-    if st.button("🔍 对比 diff", type="primary"):
+    if st.button("🔍 对比 diff", type="primary", key="rp_disc_diff"):
         names = [n.strip() for n in prospectus_names.splitlines() if n.strip()]
         payload = {"project_id": project_id, "prospectus_party_names": names}
         with st.spinner("对比中..."):
@@ -399,7 +404,7 @@ def _tab_disclosure(project_id: int) -> None:
 
     st.markdown("---")
     st.markdown("#### 当前 gap 列表")
-    gap_status = st.selectbox("状态筛选", ["全部", "critical", "review"])
+    gap_status = st.selectbox("状态筛选", ["全部", "critical", "review"], key="rp_disc_gap_status")
     params: Dict[str, Any] = {}
     if gap_status != "全部":
         params["gap_status"] = gap_status
@@ -436,7 +441,7 @@ def _tab_report(project_id: int) -> None:
         "MVP: 导出 Excel 多 sheet 版本 (Word 报告留 Pack B.2)."
     )
     st.text_input("期末日期", value="2024-12-31", key="rp_rpt_pe")
-    if st.button("📊 生成报告 (TODO)", disabled=True):
+    if st.button("📊 生成报告 (TODO)", disabled=True, key="rp_rpt_gen"):
         st.info("报告生成功能 Pack B.2 实现 — 当前可分别在各 tab 导出明细")
 
 

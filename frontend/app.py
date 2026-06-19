@@ -178,6 +178,7 @@ def main():
             "🎯 IPO 专属 (Pack D)",  # Pack D
             "🔐 系统管理",  # Pack A
         ],
+        key="sidebar_page_radio",
     )
 
     # P0 修复: 改用 st.query_params 驱动跳转, 避免与 sidebar radio 抢状态
@@ -359,19 +360,19 @@ def show_homepage():
     st.markdown("### ⚡ 快速操作")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        if st.button("➕ 新建项目", use_container_width=True, type="primary"):
+        if st.button("➕ 新建项目", use_container_width=True, type="primary", key="home_new_project"):
             st.query_params["nav"] = "projects"
             st.rerun()
     with col2:
-        if st.button("📤 导入数据", use_container_width=True):
+        if st.button("📤 导入数据", use_container_width=True, key="home_import_data"):
             st.query_params["nav"] = "import"
             st.rerun()
     with col3:
-        if st.button("📊 生成底稿", use_container_width=True):
+        if st.button("📊 生成底稿", use_container_width=True, key="home_gen_workbook"):
             st.query_params["nav"] = "workbook"
             st.rerun()
     with col4:
-        if st.button("📄 生成报告", use_container_width=True):
+        if st.button("📄 生成报告", use_container_width=True, key="home_gen_report"):
             st.query_params["nav"] = "report"
             st.rerun()
 
@@ -415,12 +416,13 @@ def show_projects():
     with tab2:
         section_card_start("创建新项目", "➕")
         with st.form("create_project_form"):
-            name = st.text_input("项目名称", placeholder="例如：XX公司IPO审计")
-            company_name = st.text_input("公司名称", placeholder="例如：华大基因")
+            name = st.text_input("项目名称", placeholder="例如：XX公司IPO审计", key="new_project_name")
+            company_name = st.text_input("公司名称", placeholder="例如：华大基因", key="new_project_company")
             industry = st.selectbox(
-                "所属行业", ["制造业", "信息技术", "医药生物", "金融服务", "房地产", "零售", "其他"]
+                "所属行业", ["制造业", "信息技术", "医药生物", "金融服务", "房地产", "零售", "其他"],
+                key="new_project_industry",
             )
-            fiscal_year = st.number_input("审计年度", min_value=2000, max_value=2030, value=2024)
+            fiscal_year = st.number_input("审计年度", min_value=2000, max_value=2030, value=2024, key="new_project_fy")
             submitted = st.form_submit_button("创建项目", type="primary", use_container_width=True)
 
             if submitted:
@@ -463,7 +465,7 @@ def show_data_import():
         uploaded_file = st.file_uploader(
             "选择科目余额表文件", type=["xlsx", "xls", "csv"], key="data_import_balance_upload"
         )
-        if uploaded_file and st.button("导入科目余额表", type="primary", use_container_width=True):
+        if uploaded_file and st.button("导入科目余额表", type="primary", use_container_width=True, key="imp_balance_run"):
             files = {"file": (uploaded_file.name, uploaded_file.read(), uploaded_file.type)}
             result = api_request(
                 "POST", f"/api/projects/{project_id}/account-balances", files=files
@@ -478,7 +480,7 @@ def show_data_import():
         uploaded_file = st.file_uploader(
             "选择序时账文件", type=["xlsx", "xls", "csv"], key="data_import_ledger_upload"
         )
-        if uploaded_file and st.button("导入序时账", type="primary", use_container_width=True):
+        if uploaded_file and st.button("导入序时账", type="primary", use_container_width=True, key="imp_ledger_run"):
             files = {"file": (uploaded_file.name, uploaded_file.read(), uploaded_file.type)}
             result = api_request(
                 "POST", f"/api/projects/{project_id}/chronological-accounts", files=files
@@ -493,7 +495,7 @@ def show_data_import():
         uploaded_file = st.file_uploader(
             "选择银行对账单文件", type=["xlsx", "xls", "csv"], key="data_import_bank_upload"
         )
-        if uploaded_file and st.button("导入银行对账单", type="primary", use_container_width=True):
+        if uploaded_file and st.button("导入银行对账单", type="primary", use_container_width=True, key="imp_bank_run"):
             files = {"file": (uploaded_file.name, uploaded_file.read(), uploaded_file.type)}
             result = api_request("POST", f"/api/projects/{project_id}/bank-statements", files=files)
             if result:
@@ -521,10 +523,10 @@ def show_workbook_generation():
         "💰 现金流量表": "cash_flow",
         "⚖️ 试算平衡表": "trial_balance",
     }
-    selected_template = st.selectbox("模板类型", list(template_options.keys()))
+    selected_template = st.selectbox("模板类型", list(template_options.keys()), key="workbook_tpl")
     template_type = template_options[selected_template]
 
-    if st.button("生成底稿", type="primary", use_container_width=True):
+    if st.button("生成底稿", type="primary", use_container_width=True, key="workbook_run"):
         with st.spinner("生成中..."):
             result = api_request(
                 "POST",
@@ -549,10 +551,10 @@ def show_trial_balance():
         return
 
     project_options = {f"{p['id']} - {p['name']}": p["id"] for p in projects}
-    selected = st.selectbox("选择项目", list(project_options.keys()))
+    selected = st.selectbox("选择项目", list(project_options.keys()), key="trial_balance_project")
     project_id = project_options[selected]
 
-    if st.button("检查试算平衡", type="primary", use_container_width=True):
+    if st.button("检查试算平衡", type="primary", use_container_width=True, key="trial_balance_run"):
         with st.spinner("检查中..."):
             result = api_request(
                 "POST", "/api/workbooks/trial-balance", json={"project_id": project_id}
@@ -606,7 +608,7 @@ def show_regulatory_cases():
     with tab1:
         section_card_start("抓取监管案例", "📥")
         st.info("从证监会、上交所、深交所自动抓取问询函和处罚案例")
-        if st.button("开始抓取", type="primary"):
+        if st.button("开始抓取", type="primary", key="reg_scrape_run"):
             with st.spinner("抓取中，请稍候..."):
                 result = api_request("POST", "/api/regulatory-cases/scrape")
                 if result:
@@ -628,8 +630,8 @@ def show_regulatory_cases():
 
     with tab3:
         section_card_start("关键词搜索", "🔎")
-        keywords = st.text_input("输入关键词（逗号分隔）")
-        if keywords and st.button("搜索"):
+        keywords = st.text_input("输入关键词（逗号分隔）", key="reg_search_kw")
+        if keywords and st.button("搜索", key="reg_search_run"):
             result = api_request(
                 "GET", f"/api/regulatory-cases/search/by-keywords?keywords={keywords}"
             )
@@ -647,13 +649,13 @@ def show_ai_analysis():
         return
 
     project_options = {f"{p['id']} - {p['name']}": p["id"] for p in projects}
-    selected = st.selectbox("选择项目", list(project_options.keys()))
+    selected = st.selectbox("选择项目", list(project_options.keys()), key="ai_project")
     project_id = project_options[selected]
 
     st.info("🤖 AI 分析功能需要配置 `MINIMAX_API_KEY` 后使用")
 
     section_card_start("仪表盘数据", "📊")
-    if st.button("获取仪表盘数据", type="primary"):
+    if st.button("获取仪表盘数据", type="primary", key="ai_dashboard_run"):
         result = api_request("GET", f"/api/reports/dashboard?project_id={project_id}")
         if result:
             col1, col2, col3 = st.columns(3)
@@ -690,10 +692,10 @@ def show_anomaly_detection():
         return
 
     project_options = {f"{p['id']} - {p['name']}": p["id"] for p in projects}
-    selected = st.selectbox("选择项目", list(project_options.keys()))
+    selected = st.selectbox("选择项目", list(project_options.keys()), key="anomaly_project")
     project_id = project_options[selected]
 
-    if st.button("开始异常检测", type="primary"):
+    if st.button("开始异常检测", type="primary", key="anomaly_run"):
         with st.spinner("检测中..."):
             result = api_request("GET", f"/api/reports/anomalies?project_id={project_id}")
             if result:
@@ -732,19 +734,19 @@ def show_comprehensive_report():
         return
 
     project_options = {f"{p['id']} - {p['name']}": p["id"] for p in projects}
-    selected = st.selectbox("选择项目", list(project_options.keys()))
+    selected = st.selectbox("选择项目", list(project_options.keys()), key="comprehensive_project")
     project_id = project_options[selected]
 
     section_card_start("生成报告", "📄")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("📄 生成 Word 报告", use_container_width=True, type="primary"):
+        if st.button("📄 生成 Word 报告", use_container_width=True, type="primary", key="comprehensive_word"):
             with st.spinner("生成中..."):
                 result = api_request("POST", f"/api/reports/generate/word?project_id={project_id}")
                 if result:
                     st.success("✅ Word 报告生成成功")
     with col2:
-        if st.button("📕 生成 PDF 报告", use_container_width=True):
+        if st.button("📕 生成 PDF 报告", use_container_width=True, key="comprehensive_pdf"):
             with st.spinner("生成中..."):
                 result = api_request("POST", f"/api/reports/generate/pdf?project_id={project_id}")
                 if result:
@@ -753,7 +755,7 @@ def show_comprehensive_report():
 
     feishu_divider()
     section_card_start("快速预览", "📊")
-    if st.button("预览仪表盘数据"):
+    if st.button("预览仪表盘数据", key="comprehensive_preview"):
         result = api_request("GET", f"/api/reports/dashboard?project_id={project_id}")
         if result:
             st.json(result)

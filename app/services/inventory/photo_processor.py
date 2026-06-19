@@ -144,6 +144,20 @@ def _name_matches(nm: str, row_name: str, *, length_ratio_min: float = 0.5,
 
 
 
+def _sheet_business_key(s: Any) -> tuple[str, str, str]:
+    """P0-9 (2026-06-19, round30): 用业务键 (material_code, warehouse, batch_no) 标识 sheet.
+
+    旧版 match_to_sheets 用 ``id(s)`` 作为 used set 的成员, CPython GC 在迭代中
+    可能回收并复用同一内存地址 (尤其临时对象), 导致新 sheet 被误标"已用"而跳过,
+    unmatched 误增, 盘点差异对不上. 业务键稳定, 跨 GC 安全.
+    """
+    return (
+        str(getattr(s, "material_code", "") or "").strip().lower(),
+        str(getattr(s, "warehouse", "") or ""),
+        str(getattr(s, "batch_no", "") or ""),
+    )
+
+
 def _chunk_text(text: str, max_len: int = 7500) -> list[str]:
     """Split a long OCR text into chunks ≤ max_len, preferring line boundaries."""
     if len(text) <= max_len:
@@ -363,7 +377,10 @@ class CountPhotoProcessor:
 
         matched: list[tuple[Any, ParsedCountRow]] = []
         unmatched: list[ParsedCountRow] = []
-        used: set[int] = set()
+        # P0-9 (2026-06-19, round30): 用 (material_code, warehouse, batch_no) 复合键标记已用 sheet.
+        # 旧版用 id(s) 在 CPython GC 回收/复用内存地址时会误判, 把新 sheet 标"已用"
+        # 导致跳过 → unmatched 误增 → 盘点差异对不上. 业务键稳定, 不受 GC 影响.
+        used: set[tuple[str, str, str]] = set()
         for row in parsed_rows:
             if row.counted_qty is None:
                 # 没填实盘数的行，跳过（不算匹配也不算未匹配）
@@ -381,14 +398,14 @@ class CountPhotoProcessor:
                 cand_b = [s for s in cand if str(getattr(s, "batch_no", "") or "") == row.batch_no]
                 if cand_b:
                     cand = cand_b
-            cand = [s for s in cand if id(s) not in used]
+            cand = [s for s in cand if _sheet_business_key(s) not in used]
 
             if not cand and row.material_name:
                 # P0-A (2026-06-19): 防止 '不锈钢' 误匹配 '不锈钢轴承' 等.
                 # 旧版纯子串匹配会让审计师拍照回填后, 实盘数量写到错误的 sheet,
                 # 报告差异对不上. 改用 "子串+长度比" 或 "Jaccard token 相似度" 二选一.
                 for s in sheet_list:
-                    if id(s) in used:
+                    if _sheet_business_key(s) in used:
                         continue
                     nm = str(getattr(s, "material_name", "") or "").strip()
                     if not nm:
@@ -399,7 +416,7 @@ class CountPhotoProcessor:
 
             if cand:
                 s = cand[0]
-                used.add(id(s))
+                used.add(_sheet_business_key(s))
                 matched.append((s, row))
             else:
                 unmatched.append(row)

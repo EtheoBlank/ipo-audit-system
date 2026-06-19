@@ -87,9 +87,9 @@ def show_sales_ledger() -> None:
             accept_multiple_files=True,
             key="sales_ledger_doc_upload",
         )
-        note = st.text_input("可选备注（例如：'2024年第一季度销售合同汇总'）", "")
+        note = st.text_input("可选备注（例如：'2024年第一季度销售合同汇总'）", "", key="sl_upload_note")
 
-        if st.button("📤 上传并解析", type="primary"):
+        if st.button("📤 上传并解析", type="primary", key="sl_upload_submit"):
             if not files:
                 st.warning("请先选择文件。")
             else:
@@ -140,9 +140,10 @@ def show_sales_ledger() -> None:
             "可选提示词（追加到 system prompt）",
             "",
             placeholder="例如：'只关心 2024 年的出口订单'",
+            key="sl_synth_hint",
         )
 
-        if st.button("🤖 开始合成", type="primary"):
+        if st.button("🤖 开始合成", type="primary", key="sl_synth_submit"):
             with st.spinner("DeepSeek 正在解析文档……"):
                 payload = {"project_id": project_id, "document_ids": [], "extra_hint": extra_hint}
                 result = api_request(
@@ -236,7 +237,7 @@ def show_sales_ledger() -> None:
                 },
             )
 
-            if st.button("💾 保存修改", type="primary"):
+            if st.button("💾 保存修改", type="primary", key="sl_review_save"):
                 changed = _diff_and_save(project_id, records, edited)
                 if changed:
                     st.success(f"✅ 已保存 {changed} 条修改")
@@ -249,14 +250,14 @@ def show_sales_ledger() -> None:
         st.subheader("收入循环分析")
         col1, col2 = st.columns(2)
         with col1:
-            period_end = st.date_input("期末日期（截止性测试用）", value=date.today())
+            period_end = st.date_input("期末日期（截止性测试用）", value=date.today(), key="sl_an_pe")
         with col2:
-            window = st.number_input("截止性测试窗口（天）", min_value=1, max_value=60, value=10)
-        price_vol = st.slider("单价波动报警阈值", 0.05, 0.80, 0.20, 0.05)
-        run_bench = st.checkbox("生成同行业 AI 参考值（需要 DeepSeek）", value=False)
-        use_industry = st.text_input("行业（用于行业参考）", value=industry)
+            window = st.number_input("截止性测试窗口（天）", min_value=1, max_value=60, value=10, key="sl_an_window")
+        price_vol = st.slider("单价波动报警阈值", 0.05, 0.80, 0.20, 0.05, key="sl_an_vol")
+        run_bench = st.checkbox("生成同行业 AI 参考值（需要 DeepSeek）", value=False, key="sl_an_bench")
+        use_industry = st.text_input("行业（用于行业参考）", value=industry, key="sl_an_industry")
 
-        if st.button("📊 开始分析", type="primary"):
+        if st.button("📊 开始分析", type="primary", key="sl_an_run"):
             payload = {
                 "project_id": project_id,
                 "period_end": period_end.isoformat(),
@@ -343,7 +344,7 @@ def show_sales_ledger() -> None:
     with tab_export:
         st.subheader("导出销售清单 + 收入分析")
         st.write("生成多 Sheet Excel 工作簿（销售清单、毛利率、异常、行业参考等）。")
-        if st.button("📥 生成 Excel", type="primary"):
+        if st.button("📥 生成 Excel", type="primary", key="sl_exp_gen"):
             with st.spinner("生成中……"):
                 # 走统一 api_request (带 auth 头, 统一错误)
                 content = api_request(

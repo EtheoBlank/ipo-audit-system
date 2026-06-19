@@ -28,7 +28,7 @@ def _tab_payables(project_id: int) -> None:
 
 def _tab_expenses(project_id: int) -> None:
     st.markdown("### 💸 费用循环")
-    if st.button("🔍 扫描异常费用"):
+    if st.button("🔍 扫描异常费用", key="ac_expenses_scan"):
         with st.spinner("扫描中..."):
             r = _api("POST", f"/api/audit-cycles/expenses/scan-anomalies/{project_id}")
         if r:
@@ -43,7 +43,7 @@ def _tab_expenses(project_id: int) -> None:
     entertainment = c2.number_input(
         "业务招待费", min_value=0.0, value=100_000.0, step=1000.0, key="expenses_entertainment"
     )
-    if st.button("📊 计算限额"):
+    if st.button("📊 计算限额", key="ac_expenses_calc"):
         r = _api(
             "POST",
             "/api/audit-cycles/expenses/entertainment-deduction-limit",
@@ -60,7 +60,7 @@ def _tab_expenses(project_id: int) -> None:
 def _tab_payroll(project_id: int) -> None:
     st.markdown("### 👷 薪酬循环")
     period = st.text_input("期间 YYYY-MM", value="2024-12", key="pay_period")
-    if st.button("🔍 跑四表勾稽"):
+    if st.button("🔍 跑四表勾稽", key="ac_payroll_reconcile"):
         r = _api(
             "POST",
             f"/api/audit-cycles/payroll/reconcile/{project_id}",
@@ -84,7 +84,7 @@ def _tab_fixed_assets(project_id: int) -> None:
     salvage = c2.number_input("残值率", value=0.05, min_value=0.0, max_value=0.5, step=0.01, key="fa_salvage")
     life = c3.number_input("使用年限 (月)", value=120, min_value=1, step=12, key="fa_life")
     method = st.selectbox("方法", ["straight_line", "double_declining"], key="fa_method")
-    if st.button("📊 计算"):
+    if st.button("📊 计算", key="ac_fa_calc"):
         r = _api(
             "POST",
             "/api/audit-cycles/fixed-assets/depreciation-calc",
@@ -106,13 +106,13 @@ def _tab_intangible(project_id: int) -> None:
     st.markdown("### 🧠 无形资产 + 研发资本化")
     st.markdown("#### CAS 6 五项条件 + 成本可计量 评估")
     cols = st.columns(2)
-    c1 = cols[0].checkbox("技术可行性")
-    c2 = cols[1].checkbox("完成意图")
-    c3 = cols[0].checkbox("出售或使用能力")
-    c4 = cols[1].checkbox("未来经济利益")
-    c5 = cols[0].checkbox("资源充足")
-    c6 = cols[1].checkbox("成本可计量")
-    if st.button("📊 评估"):
+    c1 = cols[0].checkbox("技术可行性", key="rd_c1_tech")
+    c2 = cols[1].checkbox("完成意图", key="rd_c2_intent")
+    c3 = cols[0].checkbox("出售或使用能力", key="rd_c3_ability")
+    c4 = cols[1].checkbox("未来经济利益", key="rd_c4_benefit")
+    c5 = cols[0].checkbox("资源充足", key="rd_c5_resources")
+    c6 = cols[1].checkbox("成本可计量", key="rd_c6_cost")
+    if st.button("📊 评估", key="ac_intangible_check"):
         r = _api(
             "POST",
             "/api/audit-cycles/intangible/rd-capitalization-check",
@@ -133,8 +133,8 @@ def _tab_intangible(project_id: int) -> None:
 
     st.markdown("#### 研发费用加计扣除")
     rd_exp = st.number_input("研发支出", value=1_000_000.0, step=10000.0, key="rd_exp")
-    is_mfg = st.checkbox("制造业 (100% 加计)", value=True)
-    if st.button("📊 算加计"):
+    is_mfg = st.checkbox("制造业 (100% 加计)", value=True, key="ac_rd_mfg")
+    if st.button("📊 算加计", key="ac_rd_calc"):
         r = _api(
             "POST",
             "/api/audit-cycles/intangible/rd-super-deduction",
@@ -153,9 +153,10 @@ def _tab_long_term_investment(project_id: int) -> None:
     cashflows_text = st.text_input(
         "未来年度现金流 (逗号分隔, 通常 5-8 年)",
         value="500000,550000,600000,650000,700000",
+        key="ac_gw_cashflows",
     )
     discount = st.number_input("折现率", value=0.10, min_value=0.01, max_value=0.30, step=0.01, key="rd_discount")
-    if st.button("📊 算 NPV"):
+    if st.button("📊 算 NPV", key="ac_gw_npv"):
         try:
             flows = [float(x.strip()) for x in cashflows_text.split(",") if x.strip()]
             r = _api(
@@ -172,7 +173,7 @@ def _tab_long_term_investment(project_id: int) -> None:
     c1, c2 = st.columns(2)
     bv = c1.number_input("含商誉账面价值", value=1_000_000.0, step=10000.0, key="gw_bv")
     rec = c2.number_input("可收回金额", value=800_000.0, step=10000.0, key="gw_rec")
-    if st.button("📊 算减值"):
+    if st.button("📊 算减值", key="ac_gw_impair"):
         r = _api(
             "POST",
             "/api/audit-cycles/long-term-investment/goodwill-impairment-amount",
@@ -192,7 +193,7 @@ def _tab_leases(project_id: int) -> None:
     payment = c1.number_input("月付租金", value=10000.0, step=1000.0, key="lease_payment")
     periods = c2.number_input("租期 (月)", value=36, min_value=1, max_value=360, step=1, key="lease_periods")
     rate = c3.number_input("年折现率", value=0.05, min_value=0.0, max_value=0.30, step=0.005, key="lease_rate")
-    if st.button("📊 算 PV"):
+    if st.button("📊 算 PV", key="ac_lease_pv"):
         r = _api(
             "POST",
             "/api/audit-cycles/leases/present-value",
@@ -210,7 +211,7 @@ def _tab_income_tax(project_id: int) -> None:
     temporary = c2.number_input("暂时性差异", value=200_000.0, step=10000.0, key="itax_temporary")
     losses = c2.number_input("弥补亏损用", value=0.0, step=10000.0, key="itax_losses")
     rate = st.number_input("名义税率", value=0.25, min_value=0.0, max_value=0.35, step=0.01, key="itax_rate")
-    if st.button("📊 重算"):
+    if st.button("📊 重算", key="ac_income_tax"):
         r = _api(
             "POST",
             "/api/audit-cycles/income-tax/reconcile",
@@ -235,7 +236,7 @@ def _tab_estimates(project_id: int) -> None:
     receivable = c1.number_input("应收账款", value=1_000_000.0, step=10000.0, key="ecl_receivable")
     aging = c2.number_input("账龄 (天)", value=60, min_value=0, step=10, key="ecl_aging")
     lgd = c3.number_input("LGD", value=0.45, min_value=0.0, max_value=1.0, step=0.05, key="ecl_lgd")
-    if st.button("📊 算 ECL"):
+    if st.button("📊 算 ECL", key="ac_ecl_calc"):
         r = _api(
             "POST",
             "/api/audit-cycles/accounting-estimates/ecl-compute",
@@ -255,7 +256,7 @@ def _tab_subsequent(project_id: int) -> None:
     desc = st.text_input("事项描述", value="应收账款无法收回, 金额 100 万", key="subseq_desc")
     event_date = st.text_input("事项日期", value="2025-02-15", key="subseq_event_date")
     bs_date = st.text_input("资产负债表日", value="2024-12-31", key="subseq_bs_date")
-    if st.button("📊 分类"):
+    if st.button("📊 分类", key="ac_subseq_classify"):
         r = _api(
             "POST",
             "/api/audit-cycles/subsequent-events/classify",
@@ -278,7 +279,7 @@ def _tab_subsequent(project_id: int) -> None:
     interest = c2.number_input("12 月利息支出", value=500_000.0, step=10000.0, key="gc_interest")
     debt = c1.number_input("12 月到期债务", value=2_000_000.0, step=100000.0, key="gc_debt")
     cash = c2.number_input("当前现金", value=1_000_000.0, step=100000.0, key="gc_cash")
-    if st.button("📊 评估"):
+    if st.button("📊 评估", key="ac_gc_assess"):
         r = _api(
             "POST",
             "/api/audit-cycles/subsequent-events/going-concern",

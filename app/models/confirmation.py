@@ -25,6 +25,28 @@ from app.models.db_models import (
 # 与 team_management.py 中的 _CONTROL_CHAR_RE 保持一致 — 0x7F (DEL) 也算非法.
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x09\x0b-\x1f\x7f]")
 
+# P0-11 (2026-06-19, round30): 锁定后白名单字段 (contact_person / contact_info /
+# selection_reason / importance / account_code / account_name / book_balance_date)
+# 直接进 docx 渲染, 必须拒收 XSS payload. 不引入 bleach (新增依赖, 风险), 用
+# regex 黑名单覆盖主流 XSS 向量: <script>/javascript:/data:text/html/on*=/
+# <iframe>/<object>/<embed>/<svg>/vbscript:/expression().
+_XSS_PATTERN = re.compile(
+    r"<script|javascript:|data:text/html|on\w+\s*=|"
+    r"<iframe|<object|<embed|</?\s*svg|"
+    r"vbscript:|expression\s*\(",
+    re.IGNORECASE,
+)
+
+
+def _no_xss_payload(v: Optional[str]) -> Optional[str]:
+    """P0-11: 锁定后字段拒绝 XSS payload. 已通过 _no_control_chars_str 的还可能含
+    ``<script>alert(1)</script>`` 这类合法字符但仍是攻击向量, 这里再过一遍."""
+    if v is None:
+        return v
+    if _XSS_PATTERN.search(v):
+        raise ValueError("字段含 XSS 模式 (<script>/javascript:/onerror 等), 已拒绝")
+    return v
+
 
 # ============================================================
 # 1. 函证科目清单（涉及的全部科目）
@@ -446,6 +468,14 @@ class ConfirmationItemUpdateRequest(BaseModel):
         if _CONTROL_CHAR_RE.search(v):
             raise ValueError("字段含非法控制字符 (除 \\n 外 0x00-0x1F / 0x7F 不可用)")
         return v
+
+    @field_validator("contact_person", "contact_info", "selection_reason")
+    @classmethod
+    def _no_xss(cls, v: Optional[str]) -> Optional[str]:
+        # P0-11 (2026-06-19, round30): 锁定后这些字段是 docx 渲染源, 防 XSS.
+        # 不重复校验 importance/account_code/account_name/book_balance_date —
+        # 它们结构受控 (enum/科目代码/日期), 无 XSS 向量.
+        return _no_xss_payload(v)
 
 
 class SubjectSelection(BaseModel):
