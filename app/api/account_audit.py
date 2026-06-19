@@ -415,7 +415,9 @@ async def bulk_audit_upload(
         if suffix == ".csv":
             df = pd.read_csv(io.BytesIO(content), encoding="utf-8-sig")
         else:
-            df = pd.read_excel(io.BytesIO(content))
+            # P0 安全 (2026-06-19): 上传 .xlsx 加 nrows 上限, 防恶意 zip 解压炸弹
+            # 50MB .xlsx 解压可达 100x, 解析后内存爆; 限制 5w 行保底
+            df = pd.read_excel(io.BytesIO(content), nrows=settings.MAX_EXCEL_ROWS)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Excel/CSV 解析失败: {exc}") from exc
 
@@ -577,9 +579,13 @@ async def export_movements(
                 writer, sheet_name="发生额审定", index=False
             )
     buf.seek(0)
+    # P0 安全 (2026-06-19): account_code / period_end 都从 query 传入, 文件名防注入
+    import re as _re_fn
+    _safe_code = _re_fn.sub(r"[^A-Za-z0-9_.\-]", "_", account_code) if account_code else ""
+    _safe_pe = _re_fn.sub(r"[^0-9\-]", "_", period_end)
     fname = (
         f"long_term_asset_audit_p{project_id}"
-        f"{('_' + account_code) if account_code else ''}_{period_end}.xlsx"
+        f"{('_' + _safe_code) if _safe_code else ''}_{_safe_pe}.xlsx"
     )
     return StreamingResponse(
         buf,

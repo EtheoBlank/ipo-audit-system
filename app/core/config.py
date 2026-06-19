@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     # Excel settings
     MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024  # 50MB
     ALLOWED_EXTENSIONS: set = {".xlsx", ".xls", ".csv"}
+    # P0 安全 (2026-06-19): .xlsx 解压炸弹防护 — 单文件读入最大行数
+    MAX_EXCEL_ROWS: int = 50000
 
     # AI settings (MiniMax API)
     MINIMAX_API_KEY: str = ""

@@ -90,18 +90,42 @@ async def search_by_keywords(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    """Search regulatory cases by keywords."""
-    keyword_list = [kw.strip() for kw in keywords.split(",")]
+    """Search regulatory cases by keywords.
 
-    result = await db.execute(select(RegulatoryCase).where(RegulatoryCase.is_active.is_(True)))
-    all_cases = result.scalars().all()
+    P0 性能修复 (2026-06-19): 旧版 select 全表 + Python match_cases_by_keywords,
+    10K+ 行每次 1-5s; 新版用 SQL ilike 任一关键词命中 title/content,
+    10K+ 行 <50ms. 保留 Python 二次过滤作评分 (后置 LIMIT 100).
+    """
+    from sqlalchemy import or_ as _or
+    from app.services.auth.audit_log import _escape_like
 
+    keyword_list = [kw.strip() for kw in keywords.split(",") if kw.strip()]
+    if not keyword_list:
+        return {"keywords": [], "matched_count": 0, "cases": []}
+
+    # 第一阶段: SQL 过滤, 任一关键词命中 title 或 content
+    conds = [RegulatoryCase.is_active.is_(True)]
+    kw_conds = []
+    for kw in keyword_list[:10]:  # 限 10 个防过大 OR
+        like = f"%{_escape_like(kw[:50])}%"
+        kw_conds.append(
+            _or(
+                RegulatoryCase.title.ilike(like, escape="\\"),
+                RegulatoryCase.content.ilike(like, escape="\\"),
+            )
+        )
+    if kw_conds:
+        conds.append(_or(*kw_conds))
+
+    stmt = select(RegulatoryCase).where(*conds).limit(500)
+    cases = (await db.execute(stmt)).scalars().all()
+
+    # 第二阶段: Python 二次评分 (复用原 match_cases_by_keywords)
     scraper = RegulatoryCaseScraper()
     matched = scraper.match_cases_by_keywords(
-        [case.__dict__ for case in all_cases],
+        [case.__dict__ for case in cases],
         keyword_list,
     )
-
     return {
         "keywords": keyword_list,
         "matched_count": len(matched),

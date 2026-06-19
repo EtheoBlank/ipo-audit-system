@@ -103,6 +103,8 @@ from app.services.confirmation import (
 )
 from app.models.db.auth import User
 from app.services.auth import get_current_user, get_current_user_optional
+from app.services.auth.dependencies import require_role
+from app.models.db.auth import ROLE_MANAGER
 from app.services.sales_ledger.deepseek_client import DeepSeekClient
 
 logger = logging.getLogger(__name__)
@@ -276,7 +278,7 @@ async def lock_case(
     case_id: int,
     req: LockCaseRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(ROLE_MANAGER)),
 ):
     """锁定案卷 — 一旦确定发函,锁定后统计表与发函日期不再变化。
 
@@ -332,7 +334,7 @@ async def lock_case(
 async def unlock_case(
     case_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(ROLE_MANAGER)),
 ):
     """解锁 — 仅当案卷下无任何已发函(letter_status='sent')且无回函时才允许。
 
