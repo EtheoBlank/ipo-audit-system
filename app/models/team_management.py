@@ -515,10 +515,14 @@ class ManagementRecommendationResponse(BaseModel):
 
 
 class ManagementRecommendationConfirm(BaseModel):
-    """项目负责人确认管理建议。"""
+    """项目负责人确认管理建议.
+
+    P1 (2026-06-19): 旧 confirmed_by 字段是自由文本, 服务端会从 token 取真实用户.
+    现在该字段降级为可选, 后端忽略其值; 保留 schema 字段防止破坏前端旧调用.
+    """
 
     manager_notes: Optional[str] = Field(None, description="负责人备注")
-    confirmed_by: str = Field(..., description="确认人姓名")
+    confirmed_by: Optional[str] = Field(None, description="已废弃, 服务端从 token 取真实用户")
 
 
 class ManagementRecommendationRequest(BaseModel):

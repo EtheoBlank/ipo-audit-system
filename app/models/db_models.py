@@ -2147,6 +2147,9 @@ class ManagementRecommendation(Base):
     ai_raw: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 原始 AI 输出
     # 负责人确认
     confirmed_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    confirmed_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )  # P1 (2026-06-19): 强审计追溯, 不依赖 free-form 文本
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     is_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     # 项目负责人对建议的备注

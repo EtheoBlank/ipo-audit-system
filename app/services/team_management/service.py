@@ -418,9 +418,13 @@ class TeamManagementService:
         self,
         db: AsyncSession,
         rec_id: int,
-        confirmed_by: str,
+        confirmed_by_user,
         manager_notes: Optional[str] = None,
     ) -> ManagementRecommendation:
+        """P1 修复 (2026-06-19): 旧 confirmed_by: str 自由文本, 任何人可伪造.
+
+        现传 User 对象, 服务端取 full_name 写入 + user_id 入 confirmed_by_user_id 留审计追溯.
+        """
         rec = (
             await db.execute(
                 select(ManagementRecommendation).where(ManagementRecommendation.id == rec_id)
@@ -429,7 +433,10 @@ class TeamManagementService:
         if not rec:
             raise ValueError(f"管理建议不存在: {rec_id}")
         rec.is_confirmed = True
-        rec.confirmed_by = confirmed_by
+        rec.confirmed_by = confirmed_by_user.full_name or confirmed_by_user.username
+        # P1 (2026-06-19): ORM 加 confirmed_by_user_id 列, 强审计追溯
+        if hasattr(rec, "confirmed_by_user_id"):
+            rec.confirmed_by_user_id = confirmed_by_user.id
         rec.confirmed_at = datetime.now(timezone.utc)
         if manager_notes is not None:
             rec.manager_notes = manager_notes

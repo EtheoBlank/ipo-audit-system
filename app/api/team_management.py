@@ -707,8 +707,9 @@ async def confirm_recommendation(
         raise HTTPException(status_code=404, detail="建议记录不存在")
     await ensure_project_in_firm(db, rec.project_id, current_user)
     try:
+        # P1 (2026-06-19): confirmed_by 改服务端从 token 取, 不再信任 client 文本
         return await team_management_service.confirm_recommendation(
-            db, rec_id, payload.confirmed_by, payload.manager_notes
+            db, rec_id, current_user, payload.manager_notes
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
