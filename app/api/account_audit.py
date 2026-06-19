@@ -260,6 +260,18 @@ async def update_movement(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
+    # P0 修复 (2026-06-18): ensure_project_in_firm 必须先于 service.audit_row,
+    # 否则 service 已 commit, 跨所用户已改写他人数据, ensure 抛 403 也晚了.
+    # 先 SELECT 拿 project_id 做 firm 校验, 再调 service.
+    from sqlalchemy import select
+    from app.models.db.account_audit import AccountMovementAudit
+    _r = (await db.execute(
+        select(AccountMovementAudit.project_id).where(AccountMovementAudit.id == movement_id)
+    )).scalar_one_or_none()
+    if _r is None:
+        raise HTTPException(status_code=404, detail=f"长期资产发生额 {movement_id} 不存在")
+    await ensure_project_in_firm(db, _r, current_user)
+
     try:
         row = await AccountAuditService.audit_row(
             db,
@@ -275,7 +287,6 @@ async def update_movement(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     # IDOR fix (P0): 校验 row 所属 project 在 user 事务所内 — 否则 403
-    await ensure_project_in_firm(db, row.project_id, current_user)
     await record_audit_log(
         db,
         user_id=current_user.id,
@@ -298,6 +309,16 @@ async def dispute_movement(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
+    # P0 修复: 同 update_movement, firm 校验必须先于 service
+    from sqlalchemy import select
+    from app.models.db.account_audit import AccountMovementAudit
+    _r = (await db.execute(
+        select(AccountMovementAudit.project_id).where(AccountMovementAudit.id == movement_id)
+    )).scalar_one_or_none()
+    if _r is None:
+        raise HTTPException(status_code=404, detail=f"长期资产发生额 {movement_id} 不存在")
+    await ensure_project_in_firm(db, _r, current_user)
+
     try:
         row = await AccountAuditService.dispute_row(
             db,
@@ -308,8 +329,6 @@ async def dispute_movement(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    # IDOR fix (P0): 校验 row 所属 project 在 user 事务所内 — 否则 403
-    await ensure_project_in_firm(db, row.project_id, current_user)
     await record_audit_log(
         db,
         user_id=current_user.id,

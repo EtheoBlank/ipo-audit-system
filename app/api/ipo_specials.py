@@ -157,6 +157,7 @@ async def list_prospectuses(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (await db.execute(select(Prospectus).where(Prospectus.project_id == project_id)))
         .scalars()
@@ -259,6 +260,7 @@ async def list_period_metrics(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (
             await db.execute(
@@ -322,6 +324,7 @@ async def list_overlaps(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (
             await db.execute(
@@ -371,6 +374,7 @@ async def list_peers(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (await db.execute(select(PeerCompany).where(PeerCompany.project_id == project_id)))
         .scalars()
@@ -428,6 +432,7 @@ async def list_letters(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (await db.execute(select(FeedbackLetter).where(FeedbackLetter.project_id == project_id)))
         .scalars()
@@ -535,6 +540,7 @@ async def get_checklist(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     conds = [SubmissionChecklistItem.project_id == project_id]
     if board_type:
         conds.append(SubmissionChecklistItem.board_type == board_type)

@@ -236,6 +236,7 @@ async def list_relations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (
             await db.execute(
@@ -320,6 +321,7 @@ async def list_transactions(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     conds = [RelatedPartyTransaction.project_id == project_id]
     if party_id:
         conds.append(RelatedPartyTransaction.party_id == party_id)
@@ -406,6 +408,7 @@ async def list_capital_occupations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     conds = [RelatedPartyCapitalOccupation.project_id == project_id]
     if party_id:
         conds.append(RelatedPartyCapitalOccupation.party_id == party_id)
@@ -485,6 +488,7 @@ async def list_peer_competition(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (
             await db.execute(
@@ -556,6 +560,7 @@ async def list_disclosure_gaps(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     conds = [ProspectusDisclosureGap.project_id == project_id]
     if gap_status:
         conds.append(ProspectusDisclosureGap.gap_status == gap_status)

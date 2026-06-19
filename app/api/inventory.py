@@ -134,7 +134,7 @@ async def upload_movements(
     current_user: User = Depends(get_current_user),
 ):
     """上传收发存 Excel/CSV。自动识别金蝶/用友/SAP/手工模板。"""
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = period_end or _default_period_end(proj)
     pe_str = pe.isoformat()
 
@@ -207,7 +207,7 @@ async def list_movements(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     q = select(InventoryMovement).where(InventoryMovement.project_id == project_id)
     if period_end:
         q = q.where(InventoryMovement.period_end == period_end.isoformat())
@@ -225,7 +225,7 @@ async def clear_movements(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     stmt = delete(InventoryMovement).where(InventoryMovement.project_id == project_id)
     if period_end:
         stmt = stmt.where(InventoryMovement.period_end == period_end.isoformat())
@@ -265,7 +265,7 @@ async def generate_count_sheet(
     current_user: User = Depends(get_current_user),
 ):
     """生成盘点用表（金额优先 + 阈值覆盖）。"""
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = req.period_end or _default_period_end(proj)
     movements = await _fetch_period_movements(db, project_id, pe)
     if not movements:
@@ -387,7 +387,7 @@ async def simulate_count_sheet(
     current_user: User = Depends(get_current_user),
 ):
     """对多档阈值做平行测算，方便用户在前端拉滑条选择。"""
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = req.period_end or _default_period_end(proj)
     movements = await _fetch_period_movements(db, project_id, pe)
     if not movements:
@@ -416,7 +416,7 @@ async def list_count_sheets(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     q = select(InventoryCountSheet).where(InventoryCountSheet.project_id == project_id)
     if plan_id is not None:
         q = q.where(InventoryCountSheet.plan_id == plan_id)
@@ -434,7 +434,7 @@ async def clear_count_sheets(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     stmt = delete(InventoryCountSheet).where(InventoryCountSheet.project_id == project_id)
     if plan_id is not None:
         stmt = stmt.where(InventoryCountSheet.plan_id == plan_id)
@@ -488,7 +488,7 @@ async def generate_count_plan(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = req.period_end or _default_period_end(proj)
     industry = (req.industry or proj.industry or "").strip()
 
@@ -588,7 +588,7 @@ async def get_count_plan(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = period_end or _default_period_end(proj)
     res = await db.execute(
         select(InventoryCountPlan).where(
@@ -618,7 +618,7 @@ async def upload_count_photo(
     current_user: User = Depends(get_current_user),
 ):
     """上传盘点照片，OCR 后 AI 解析实盘数量并回填到盘点用表。"""
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
 
     settings.ensure_dirs()
     target_dir = settings.UPLOAD_DIR / f"inventory_photos/project_{project_id}"
@@ -729,7 +729,7 @@ async def count_completion(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = period_end or _default_period_end(proj)
     q = select(InventoryCountSheet).where(InventoryCountSheet.project_id == project_id)
     if plan_id is not None:
@@ -762,7 +762,7 @@ async def compute_impairments(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = req.period_end or _default_period_end(proj)
 
     movements = await _fetch_period_movements(db, project_id, pe)
@@ -827,6 +827,9 @@ async def compute_impairments(
         prior_impairments=prior_map,
         prior_qty=prior_qty_map,
         manual_nrv=req.manual_nrv,
+        prior_period_end={
+            k: datetime.fromisoformat(v) for k, v in prior_period.items()
+        } if prior_period else None,
     )
 
     if req.persist:
@@ -858,7 +861,7 @@ async def list_impairments(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     q = select(InventoryImpairment).where(InventoryImpairment.project_id == project_id)
     if period_end:
         q = q.where(InventoryImpairment.period_end == period_end.isoformat())
@@ -909,7 +912,7 @@ async def upload_prior_impairments(
 
     每个 material_code → 已计提金额。
     """
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     pe_str = period_end.isoformat()
     # 清空相同期间
     await db.execute(
@@ -957,7 +960,7 @@ async def upload_code_mappings(
     翻译为本年的新编码后再去匹配本年期末数据。这样物料编码变更后，
     上年期末跌价不会"凭空消失"。
     """
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     if req.replace:
         await db.execute(
             delete(InventoryCodeMapping).where(InventoryCodeMapping.project_id == project_id)
@@ -993,7 +996,7 @@ async def list_code_mappings(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     res = await db.execute(
         select(InventoryCodeMapping)
         .where(InventoryCodeMapping.project_id == project_id)
@@ -1008,7 +1011,7 @@ async def clear_code_mappings(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     res = await db.execute(
         delete(InventoryCodeMapping).where(InventoryCodeMapping.project_id == project_id)
     )
@@ -1028,7 +1031,7 @@ async def export_inventory(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = period_end or _default_period_end(proj)
 
     movements = (

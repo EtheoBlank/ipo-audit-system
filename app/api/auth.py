@@ -755,7 +755,18 @@ async def list_approvals(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(ApprovalWorkflow)
+    from app.models.db_models import Project
+    from app.services.auth.tenant import _is_admin, _user_firm_id
+    from sqlalchemy import or_
+
+    stmt = select(ApprovalWorkflow).join(
+        Project, ApprovalWorkflow.project_id == Project.id, isouter=True
+    )
+    # 多租户: admin 看全部, 其他人只看自己事务所的项目 (含 firm_id=NULL 的旧数据)
+    if not _is_admin(current_user):
+        firm_id = _user_firm_id(current_user)
+        if firm_id is not None:
+            stmt = stmt.where(or_(Project.firm_id == firm_id, Project.firm_id.is_(None)))
     if status_filter:
         stmt = stmt.where(ApprovalWorkflow.status == status_filter)
     if project_id is not None:

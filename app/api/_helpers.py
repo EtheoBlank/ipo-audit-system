@@ -8,14 +8,14 @@
     from app.api._helpers import get_project_or_404, get_or_404, deepseek_client
 
 ``get_or_404`` 是通用版, 可以查任意带 ``id`` 主键的 ORM 模型;
-``get_project_or_404`` 是它的 ``Project`` 特化便捷别名;
+``get_project_or_404`` 是它的 ``Project`` 特化便捷别名 (P0 修复: 可选 current_user 触发多租户校验);
 ``deepseek_client`` 是 LLM 客户端工厂 (从 settings 拉 key/base/model, 避免每个
 endpoint handler 自己再粘 4 行初始化代码).
 """
 
 from __future__ import annotations
 
-from typing import Type, TypeVar
+from typing import Optional, Type, TypeVar
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,12 +54,29 @@ async def get_or_404(
     return obj
 
 
-async def get_project_or_404(db: AsyncSession, project_id: int) -> Project:
+async def get_project_or_404(
+    db: AsyncSession,
+    project_id: int,
+    *,
+    current_user: Optional["object"] = None,  # app.models.db.auth.User; 用 string 避免循环 import
+) -> Project:
     """按 ID 查 Project, 不存在则 404。
 
-    8 个老 API 文件曾各自维护同名 ``_get_project_or_404``, 现在统一走这里。
+    P0 修复 (2026-06-18 Bug 扫描): 之前 30+ 端点只调 get_project_or_404 不传 current_user,
+    导致 AUTH_ENABLED=true 时跨事务所可读写任意 project. 现接受可选 current_user,
+    一旦传入则委托给 ensure_project_in_firm 做多租户校验 (admin 豁免,
+    AUTH_ENABLED=false 时软隔离).
+
+    用法:
+        proj = await get_project_or_404(db, project_id)                          # 老式, 无校验
+        proj = await get_project_or_404(db, project_id, current_user=current_user)  # 新式, 多租户
     """
-    return await get_or_404(db, Project, project_id, label="项目")
+    proj = await get_or_404(db, Project, project_id, label="项目")
+    if current_user is not None:
+        # 委托给多租户 helper; AUTH_ENABLED=false / admin / firm_id 匹配时通过
+        from app.services.auth.tenant import ensure_project_in_firm
+        await ensure_project_in_firm(db, project_id, current_user)
+    return proj
 
 
 def deepseek_client() -> DeepSeekClient:

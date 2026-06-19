@@ -130,6 +130,31 @@ async def _get_letter_or_404(db: AsyncSession, letter_id: int) -> ConfirmationLe
     return await get_or_404(db, ConfirmationLetter, letter_id, label="发函记录")
 
 
+# P0 多租户辅助: 加载实体后校验 project → firm 归属
+async def _case_in_firm(db: AsyncSession, case_id: int, user) -> ConfirmationCase:
+    """加载案卷并校验项目归属当前事务所."""
+    case = await _get_case_or_404(db, case_id)
+    await get_project_or_404(db, case.project_id, current_user=user)
+    return case
+
+
+async def _item_in_firm(db: AsyncSession, item_id: int, user) -> tuple[ConfirmationItem, ConfirmationCase]:
+    """加载函证对象 + 案卷, 校验项目归属."""
+    item = await _get_item_or_404(db, item_id)
+    case = await _get_case_or_404(db, item.case_id)
+    await get_project_or_404(db, case.project_id, current_user=user)
+    return item, case
+
+
+async def _letter_in_firm(db: AsyncSession, letter_id: int, user) -> tuple[ConfirmationLetter, ConfirmationItem, ConfirmationCase]:
+    """加载发函记录 → 函证对象 → 案卷, 校验项目归属."""
+    letter = await _get_letter_or_404(db, letter_id)
+    item = await _get_item_or_404(db, letter.item_id)
+    case = await _get_case_or_404(db, item.case_id)
+    await get_project_or_404(db, case.project_id, current_user=user)
+    return letter, item, case
+
+
 def _letter_generator() -> ConfirmationLetterGenerator:
     return ConfirmationLetterGenerator(output_dir=settings.OUTPUT_DIR / "confirmations")
 
@@ -206,7 +231,7 @@ async def list_cases(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     res = await db.execute(
         select(ConfirmationCase)
         .where(ConfirmationCase.project_id == project_id)
@@ -221,7 +246,7 @@ async def create_case(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    await get_project_or_404(db, req.project_id)
+    await get_project_or_404(db, req.project_id, current_user=current_user)
     case = ConfirmationCase(
         project_id=req.project_id,
         case_name=req.case_name,
@@ -242,7 +267,7 @@ async def get_case(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    case = await _get_case_or_404(db, case_id)
+    case = await _case_in_firm(db, case_id, current_user)
     return case
 
 
@@ -261,7 +286,7 @@ async def lock_case(
       3) send_letter 时固化 subject_matters_snapshot / book_balance_snapshot,
          后续 update_item 不影响已发函追溯
     """
-    case = await _get_case_or_404(db, case_id)
+    case = await _case_in_firm(db, case_id, current_user)
     if case.is_locked:
         raise HTTPException(status_code=400, detail="案卷已锁定,不可重复锁定")
 
@@ -313,7 +338,7 @@ async def unlock_case(
 
     同时清理 item.sent_letter_id / response_id 残留引用(例如作废 letter 后的悬空指针)。
     """
-    case = await _get_case_or_404(db, case_id)
+    case = await _case_in_firm(db, case_id, current_user)
 
     # 严格检查: 任何已发函 (sent) 或回函 (response) 都不允许解锁
     active_letters = (
@@ -380,7 +405,7 @@ async def generate_stats(
     current_user: User = Depends(get_current_user),
 ):
     """从账套自动生成函证对象清单。"""
-    await _get_case_or_404(db, case_id)
+    await _case_in_firm(db, case_id, current_user)
 
     builder = ConfirmationStatsBuilder(db)
     try:
@@ -412,6 +437,7 @@ async def list_items(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    await _case_in_firm(db, case_id, current_user)
     res = await db.execute(
         select(ConfirmationItem)
         .where(ConfirmationItem.case_id == case_id)
@@ -449,12 +475,9 @@ async def update_item(
       - 未锁定: 上述 + subject_matters / amount / account 等可改
       - party_name / party_id / sent_letter_id / response_id / version / status 任何时候都不可改
     """
-    item = await _get_item_or_404(db, item_id)
-
-    res = await db.execute(select(ConfirmationCase).where(ConfirmationCase.id == item.case_id))
-    case = res.scalar_one_or_none()
+    item, case = await _item_in_firm(db, item_id, current_user)
     allowed = (
-        ITEM_LOCKED_ALLOWED_FIELDS if (case and case.is_locked) else ITEM_UNLOCKED_ALLOWED_FIELDS
+        ITEM_LOCKED_ALLOWED_FIELDS if case.is_locked else ITEM_UNLOCKED_ALLOWED_FIELDS
     )
 
     # 拒绝白名单外的字段
@@ -497,11 +520,7 @@ async def send_letter(
       4) try/except 兜底: 失败时回滚 item 状态 (避免脏数据)
       5) 乐观锁: item.version 自增
     """
-    item = await _get_item_or_404(db, item_id)
-    res = await db.execute(select(ConfirmationCase).where(ConfirmationCase.id == item.case_id))
-    case = res.scalar_one_or_none()
-    if not case:
-        raise HTTPException(status_code=404, detail="案卷不存在")
+    item, case = await _item_in_firm(db, item_id, current_user)
     if not case.is_locked:
         raise HTTPException(status_code=400, detail="案卷尚未锁定,无法发函。请先『确定发函』。")
     # 状态机: 收到回函后(partial/responded/rejected/mismatch)不能再发函, 必须先作废旧 letter
@@ -666,6 +685,7 @@ async def get_letter(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    _, _, case = await _letter_in_firm(db, letter_id, current_user)
     letter = await _get_letter_or_404(db, letter_id)
     return letter
 
@@ -676,6 +696,7 @@ async def download_letter(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    await _letter_in_firm(db, letter_id, current_user)
     letter = await _get_letter_or_404(db, letter_id)
     if not letter.file_path:
         raise HTTPException(status_code=404, detail="发函文件未生成")
@@ -726,6 +747,7 @@ async def void_letter(
       3) 清理已生成的 docx/pdf 文件
       4) 退回 item.status 到 confirmed (允许重新发函, seq 自增不会撞)
     """
+    await _letter_in_firm(db, letter_id, current_user)
     letter = await _get_letter_or_404(db, letter_id)
     if letter.letter_status == "voided":
         raise HTTPException(status_code=400, detail="发函已作废, 不可重复作废")
@@ -776,6 +798,7 @@ async def remind_letter(
     P0 修复: 必须 letter_status='sent' AND item.status 在 (SENT, NO_REPLY) 之一。
     收到回函(partial/responded/reject)后催办无意义。
     """
+    await _letter_in_firm(db, letter_id, current_user)
     letter = await _get_letter_or_404(db, letter_id)
     if letter.letter_status != "sent":
         raise HTTPException(status_code=400, detail="发函状态非 'sent', 不可催办")
@@ -815,6 +838,7 @@ async def submit_response(
       3) 增加 IntegrityError 兜底 (并发创建 response 时)
       4) mismatch 状态映射到 ITEM_STATUS_MISMATCH (新增), 不再 fallback 到 PARTIAL
     """
+    await _letter_in_firm(db, letter_id, current_user)
     letter = await _get_letter_or_404(db, letter_id)
     if letter.letter_status != "sent":
         raise HTTPException(status_code=400, detail="发函尚未发出,不能录入回函")
@@ -902,6 +926,7 @@ async def upload_response_photo(
       4) 顶层 try/except 兜底, 失败时 db.rollback()
       5) mismatch 状态显式映射到 ITEM_STATUS_MISMATCH
     """
+    await _letter_in_firm(db, letter_id, current_user)
     letter = await _get_letter_or_404(db, letter_id)
     if letter.letter_status != "sent":
         raise HTTPException(
@@ -1041,6 +1066,7 @@ async def get_response(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    await _letter_in_firm(db, letter_id, current_user)
     res = await db.execute(
         select(ConfirmationResponse).where(ConfirmationResponse.letter_id == letter_id)
     )
@@ -1098,7 +1124,7 @@ async def get_summary(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    case = await _get_case_or_404(db, case_id)
+    case = await _case_in_firm(db, case_id, current_user)
 
     res = await db.execute(select(ConfirmationItem).where(ConfirmationItem.case_id == case_id))
     items = list(res.scalars().all())
@@ -1213,7 +1239,7 @@ async def export_case(
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """导出函证工作簿 (多 Sheet Excel)。"""
-    case = await _get_case_or_404(db, case_id)
+    case = await _case_in_firm(db, case_id, current_user)
 
     res = await db.execute(select(ConfirmationItem).where(ConfirmationItem.case_id == case_id))
     items = list(res.scalars().all())
