@@ -880,7 +880,8 @@ async def submit_response(
     )
     resp.auditor_note = req.auditor_note
     resp.is_manually_confirmed = True
-    resp.confirmed_by = req.confirmed_by or "审计师"
+    # P1 修复 (2026-06-19): confirmed_by 默认改为当前 user.full_name, 避免审计追溯失真
+    resp.confirmed_by = req.confirmed_by or current_user.full_name or current_user.username
     resp.confirmed_at = datetime.now(timezone.utc)
     resp.version = (resp.version or 0) + 1
 

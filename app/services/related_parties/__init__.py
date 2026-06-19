@@ -554,17 +554,27 @@ class DisclosureChecker:
         prospectus_only: List[DisclosureGapResponse] = []
         matched = 0
 
+        # P0 性能修复 (2026-06-19): 原 N+1 — 每 party_id 单独 COUNT/SUM
+        # 新: 一次性 GROUP BY 拿所有 party_id 的 (count, sum) 字典
+        sys_party_ids = [rp.id for rp in sys_norm.values()]
+        tx_agg: dict[int, tuple[int, float]] = {}
+        if sys_party_ids:
+            agg_stmt = select(
+                RelatedPartyTransaction.party_id,
+                func.count(RelatedPartyTransaction.id),
+                func.coalesce(func.sum(RelatedPartyTransaction.amount), 0),
+            ).where(
+                RelatedPartyTransaction.party_id.in_(sys_party_ids)
+            ).group_by(RelatedPartyTransaction.party_id)
+            for pid, cnt, amt in (await db.execute(agg_stmt)).all():
+                tx_agg[int(pid)] = (int(cnt or 0), float(amt or 0))
+
         # 系统有 + 招股书没有 = critical
         for norm, rp in sys_norm.items():
             if norm in prospectus_norm:
                 matched += 1
                 continue
-            # 算这个关联方的交易数和金额
-            tx_stmt = select(
-                func.count(RelatedPartyTransaction.id),
-                func.coalesce(func.sum(RelatedPartyTransaction.amount), 0),
-            ).where(RelatedPartyTransaction.party_id == rp.id)
-            cnt, amt = (await db.execute(tx_stmt)).one()
+            cnt, amt = tx_agg.get(rp.id, (0, 0.0))
             gap = ProspectusDisclosureGap(
                 project_id=project_id,
                 party_id=rp.id,
@@ -572,8 +582,8 @@ class DisclosureChecker:
                 party_name=rp.name,
                 in_system=True,
                 in_prospectus=False,
-                transaction_count=int(cnt or 0),
-                total_amount=float(amt or 0),
+                transaction_count=cnt,
+                total_amount=amt,
                 suggested_action=(
                     "招股书未披露此关联方, 请补充至 '关联方及关联交易' 章节;"
                     "若交易金额重大需说明定价依据 + 必要性"
