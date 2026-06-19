@@ -58,6 +58,7 @@ from app.models.confirmation import (
     ConfirmationCaseCreateRequest,
     ConfirmationCaseResponse,
     ConfirmationItemResponse,
+    ConfirmationItemUpdateRequest,
     ConfirmationLetterResponse,
     ConfirmationResponseInput,
     ConfirmationSummaryResponse,
@@ -67,6 +68,7 @@ from app.models.confirmation import (
     SendLetterRequest,
     SubjectCatalogueResponse,
     SubjectInfo,
+    SubjectMatterItem,
 )
 from app.models.db_models import (
     ConfirmationCase,
@@ -466,7 +468,7 @@ ITEM_UNLOCKED_ALLOWED_FIELDS = ITEM_LOCKED_ALLOWED_FIELDS | {
 @router.put("/items/{item_id}")
 async def update_item(
     item_id: int,
-    payload: dict[str, Any],
+    payload: ConfirmationItemUpdateRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -476,22 +478,34 @@ async def update_item(
       - 锁定后: 仅 contact_person / contact_info / selection_reason 可改
       - 未锁定: 上述 + subject_matters / amount / account 等可改
       - party_name / party_id / sent_letter_id / response_id / version / status 任何时候都不可改
+
+    P0 (2026-06-19, round25 #15): payload 改为 ``ConfirmationItemUpdateRequest``,
+    ``subject_matters`` 必须是 ``list[SubjectMatterItem]``; Pydantic 422 在到达
+    业务逻辑前就拒绝掉, 避免脏数据落库被 docx 渲染.
     """
     item, case = await _item_in_firm(db, item_id, current_user)
     allowed = (
         ITEM_LOCKED_ALLOWED_FIELDS if case.is_locked else ITEM_UNLOCKED_ALLOWED_FIELDS
     )
 
-    # 拒绝白名单外的字段
-    rejected = [k for k in payload if k not in allowed]
+    # Pydantic 已经把 None 字段筛掉, 这里用 model_dump(exclude_none=True)
+    raw_payload = payload.model_dump(exclude_none=True)
+
+    # 拒绝白名单外的字段 (Pydantic schema 已经限制了字段名, 这里是双保险)
+    rejected = [k for k in raw_payload if k not in allowed]
     if rejected:
         raise HTTPException(
             status_code=400,
             detail=f"案卷{'已锁定' if (case and case.is_locked) else '未锁定'}时以下字段不可改: {rejected}",
         )
-    for k, v in payload.items():
+
+    for k, v in raw_payload.items():
         if k == "subject_matters":
-            item.subject_matters = json.dumps(v, ensure_ascii=False) if isinstance(v, list) else v
+            # Pydantic 已经校验每条 SubjectMatterItem 字段, 这里再次防御性归一
+            if not isinstance(v, list):
+                raise HTTPException(status_code=400, detail="subject_matters 必须是 list")
+            validated = [SubjectMatterItem(**item_dict).model_dump() for item_dict in v]
+            item.subject_matters = json.dumps(validated, ensure_ascii=False)
         else:
             setattr(item, k, v)
     item.version = (item.version or 0) + 1

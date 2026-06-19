@@ -2157,6 +2157,9 @@ class ManagementRecommendation(Base):
     is_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     # 项目负责人对建议的备注
     manager_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # P0 (2026-06-19, round25 #14): manager_notes 的 sha256 hex 前 8 位
+    # 与 confirmed_by_user_id 联合形成完整审计追溯, 验证后续 notes 内容是否被改.
+    notes_hash: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, index=True)
 
     project: Mapped["Project"] = relationship(back_populates="management_recommendations")
 

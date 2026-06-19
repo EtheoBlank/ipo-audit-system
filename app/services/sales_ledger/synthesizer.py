@@ -11,12 +11,83 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any, Iterable, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.services.sales_ledger.deepseek_client import DeepSeekClient, DeepSeekError
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+#  Pydantic schema for AI-synthesized sales rows (P0-13)
+# ============================================================
+#
+# 背景: 老实现把 DeepSeek 返回的 dict 直接塞进 SalesRecord (Float / Date 列),
+#       一旦 AI 返回 "abc" / 字符串日期 等异常值, 就在 db.add(new) 之后才
+#       触发 IntegrityError, 整批回滚, 审计师拿不到数据.
+# 修复: 在落入 DB 前用 Pydantic v2 schema (model_validate) 校验, 失败行
+#       收集到 errors 列表, API 层只对 valid_rows 落库 + 返 errors 给前端.
+class SynthesizedRow(BaseModel):
+    """DeepSeek 抽取出来的单行销售明细 — 进入 DB 前的强类型闸门.
+
+    字段名兼容 SYNTHESIS_SYSTEM prompt 输出, 同时容忍原 synthesizer 的别名.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    contract_no: Optional[str] = None
+    customer_name: Optional[str] = None
+    product_code: Optional[str] = None
+    product_name: Optional[str] = None
+    invoice_no: Optional[str] = None
+    currency: Optional[str] = "CNY"
+    tax_rate: Optional[float] = None
+    tax_amount: Optional[float] = None
+    gross_amount: Optional[float] = None
+    quantity: Optional[float] = None
+    unit_price: Optional[float] = None
+    revenue_amount: float = 0.0  # 必填 (后续 coerce 会兜底再算一次)
+    cost_amount: Optional[float] = None
+    shipping_fee: Optional[float] = None
+    customs_fee: Optional[float] = None
+    other_direct_fee: Optional[float] = None
+    return_amount: Optional[float] = None
+    discount_amount: Optional[float] = None
+    rebate_amount: Optional[float] = None
+    ship_date: Optional[date] = None
+    receipt_date: Optional[date] = None
+    revenue_confirm_date: Optional[date] = None
+    source_doc: Optional[str] = None
+    source: Optional[str] = None
+
+
+@dataclass
+class SynthesizeError:
+    """单行校验失败的明细 — 送给前端 '待复核' 列表."""
+
+    idx: int
+    row_summary: str
+    error: str
+
+
+@dataclass
+class SynthesizeResult:
+    """synthesize() 完整返回值 — API 层据此分流: valid 入 DB, errors 仅记录."""
+
+    records: list[dict[str, Any]] = field(default_factory=list)
+    errors: list[SynthesizeError] = field(default_factory=list)
+
+    @property
+    def valid_count(self) -> int:
+        return len(self.records)
+
+    @property
+    def error_count(self) -> int:
+        return len(self.errors)
 
 
 SYNTHESIS_SYSTEM = """你是 IPO 审计项目的资深审计师助理，擅长从销售合同/发票/发货单/报关单/对账单等
@@ -76,9 +147,16 @@ class SalesLedgerSynthesizer:
         documents: Iterable[Any],
         *,
         extra_user_hint: str = "",
-    ) -> list[dict[str, Any]]:
-        """Run synthesis across an iterable of (id, filename, raw_text)."""
+    ) -> SynthesizeResult:
+        """Run synthesis across an iterable of (id, filename, raw_text).
+
+        P0-13: 用 Pydantic ``SynthesizedRow`` schema 校验每一行 — 失败行收
+        集到 ``result.errors``, valid 行收 ``result.records``. 整批不再因
+        单行异常值 (如 revenue_amount="abc") 触发 IntegrityError.
+        """
         records: list[dict[str, Any]] = []
+        errors: list[SynthesizeError] = []
+        global_idx = 0  # 用于错误回传 (前端可定位 '第 N 行失败')
         for doc in documents:
             doc_id = getattr(doc, "id", None)
             filename = getattr(doc, "filename", "unknown")
@@ -113,9 +191,29 @@ class SalesLedgerSynthesizer:
             for rec in batch:
                 rec.setdefault("document_id", doc_id)
                 rec.setdefault("source", filename)
-            records.extend(batch)
+                # P0-13: 强类型闸门 — 用 Pydantic v2 model_validate 校验
+                try:
+                    SynthesizedRow.model_validate(rec)
+                except ValidationError as exc:
+                    logger.warning(
+                        "synthesized row %d 校验失败, 跳过 (file=%s): %s",
+                        global_idx, filename, exc,
+                    )
+                    errors.append(
+                        SynthesizeError(
+                            idx=global_idx,
+                            row_summary=str(rec)[:200],
+                            error=str(exc),
+                        )
+                    )
+                    global_idx += 1
+                    continue
+                records.append(rec)
+                global_idx += 1
 
-        return self._dedupe(records)
+        unique = self._dedupe(records)
+        # dedupe 后, 错误索引仍按 global_idx 保留 — 让前端知道哪一行被丢弃
+        return SynthesizeResult(records=unique, errors=errors)
 
     # --- helpers --------------------------------------------------------
 

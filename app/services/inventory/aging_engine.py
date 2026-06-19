@@ -247,11 +247,18 @@ class InventoryAgingEngine:
         total_outbound = sum(float(m.get("outbound_qty") or 0) for m in movements)
         remaining_out = total_outbound
         # 从头扣减
+        # P0-5 修复 (2026-06-19): 浮点精度防负 — 多次扣减后 qty 可能变为极小负值,
+        # 仍走 _aging_bucket 把负数归类到某天, 库龄错误. 用 max(0, qty-take) 兜底
+        # 保留 (dt, max(0, qty - take)) 而非 (dt, qty - take), 避免下游污染
+        zero = 0.0
         for i, (dt, qty) in enumerate(batches):
             if remaining_out <= 0:
                 break
             take = min(qty, remaining_out)
-            batches[i] = (dt, qty - take)
+            new_qty = qty - take
+            if new_qty < zero:
+                new_qty = zero
+            batches[i] = (dt, new_qty)
             remaining_out -= take
 
         # 剩下的就是期末
@@ -586,6 +593,23 @@ class InventoryAgingEngine:
             )
 
         # 汇总
+        # P0-5 修复 (2026-06-19): summary 金额一致性 — 旧版按
+        #   bucket.le_90 * r.book_unit_cost
+        # 算金额, 但 bucket.le_90 是已 scale 校准后的数量; 当 scale != 1 时,
+        #   total_weight > ending_qty_total, 金额就会和 row.ending_amount 对不上.
+        # 现改为按各 row 的 bucket 占比分摊 ending_amount:
+        #   aging_xxx_amount = ending_amount * (bucket.xxx / total_in_row_buckets)
+        # 这样各分段金额之和 = ending_amount (= book_amount), 与 row 一致.
+        # 注: scale 仅用于库龄加权平均的小幅容差 (5% 内), summary 金额以账面 ending_qty 为准.
+        def _row_bucket_amount(row, attr):
+            total = (
+                row.aging.le_90 + row.aging.age_91_180 + row.aging.age_181_365
+                + row.aging.age_366_730 + row.aging.gt_730
+            )
+            if total <= 0 or row.book_amount <= 0:
+                return 0.0
+            return row.book_amount * (getattr(row.aging, attr) / total)
+
         summary = {
             "items": len(rows),
             "book_amount": round(sum(r.book_amount for r in rows), 2),
@@ -594,11 +618,11 @@ class InventoryAgingEngine:
             "current_provision": round(sum(r.impairment_provision for r in rows), 2),
             "current_reversal": round(sum(r.impairment_reversal for r in rows), 2),
             "net_change": round(sum(r.net_impairment_change for r in rows), 2),
-            "aging_le_90": round(sum(r.aging.le_90 * r.book_unit_cost for r in rows), 2),
-            "aging_91_180": round(sum(r.aging.age_91_180 * r.book_unit_cost for r in rows), 2),
-            "aging_181_365": round(sum(r.aging.age_181_365 * r.book_unit_cost for r in rows), 2),
-            "aging_366_730": round(sum(r.aging.age_366_730 * r.book_unit_cost for r in rows), 2),
-            "aging_gt_730": round(sum(r.aging.gt_730 * r.book_unit_cost for r in rows), 2),
+            "aging_le_90": round(sum(_row_bucket_amount(r, "le_90") for r in rows), 2),
+            "aging_91_180": round(sum(_row_bucket_amount(r, "age_91_180") for r in rows), 2),
+            "aging_181_365": round(sum(_row_bucket_amount(r, "age_181_365") for r in rows), 2),
+            "aging_366_730": round(sum(_row_bucket_amount(r, "age_366_730") for r in rows), 2),
+            "aging_gt_730": round(sum(_row_bucket_amount(r, "gt_730") for r in rows), 2),
         }
 
         return ImpairmentResult(rows=rows, summary=summary)

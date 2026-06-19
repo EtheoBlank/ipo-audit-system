@@ -222,7 +222,8 @@ async def synthesize_sales_records(
         )
 
     synthesizer = SalesLedgerSynthesizer(client)
-    raw_records = await synthesizer.synthesize(docs, extra_user_hint=req.extra_hint)
+    synth_result = await synthesizer.synthesize(docs, extra_user_hint=req.extra_hint)
+    raw_records = synth_result.records  # P0-13: 校验通过的入库, 失败的留在 synth_result.errors
 
     # ---- upsert into DB keyed by (contract_no, product_code) ------------
     upserted: list[SalesRecord] = []
@@ -284,10 +285,31 @@ async def synthesize_sales_records(
     await db.commit()
     for r in upserted:
         await db.refresh(r)
+    # P0-13: 把 synth_result.errors 映射成 response 的 errors 字段, 前端可
+    # 渲染 '待复核' 列表; 部分失败不再 500, 仍返 200.
+    from app.models.sales_ledger import SynthesisErrorItem
+
+    error_items = [
+        SynthesisErrorItem(
+            idx=e.idx,
+            row_summary=e.row_summary,
+            error=e.error,
+        )
+        for e in synth_result.errors
+    ]
+    if error_items:
+        logger.warning(
+            "synthesize 部分失败: project_id=%s valid=%d error=%d",
+            project_id,
+            len(upserted),
+            len(error_items),
+        )
     return SynthesisResponse(
         project_id=project_id,
         synthesized_count=len(upserted),
         records=[_record_to_response(r) for r in upserted],
+        error_count=len(error_items),
+        errors=error_items,
     )
 
 

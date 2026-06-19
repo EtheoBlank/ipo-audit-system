@@ -6,6 +6,7 @@ progress_tracker 串起来，暴露给 API 层使用。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -424,6 +425,10 @@ class TeamManagementService:
         """P1 修复 (2026-06-19): 旧 confirmed_by: str 自由文本, 任何人可伪造.
 
         现传 User 对象, 服务端取 full_name 写入 + user_id 入 confirmed_by_user_id 留审计追溯.
+
+        P0 修复 (2026-06-19, round25 #14): 持久化真实用户身份 + 内容 hash,
+        形成"何时 / 何人 / 内容摘要"完整审计追溯, 后续监管调查可验证
+        manager_notes 是否被篡改.
         """
         rec = (
             await db.execute(
@@ -440,6 +445,10 @@ class TeamManagementService:
         rec.confirmed_at = datetime.now(timezone.utc)
         if manager_notes is not None:
             rec.manager_notes = manager_notes
+            # P0 (2026-06-19, round25 #14): 内容 hash, sha256 hex 前 8 位
+            # 不存完整 hash (16 hex 已足够避免碰撞, 且不暴露明文熵).
+            if hasattr(rec, "notes_hash"):
+                rec.notes_hash = hashlib.sha256(manager_notes.encode("utf-8")).hexdigest()[:16]
         await db.commit()
         await db.refresh(rec)
         return rec

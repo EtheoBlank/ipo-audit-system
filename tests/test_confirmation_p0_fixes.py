@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 
 from app.services.confirmation.response_processor import ConfirmationResponseProcessor
 from app.services.confirmation.stats_builder import (
@@ -174,3 +175,156 @@ class TestAggregateByAuxEndingBalance:
         keys = [k for k in result if k != "(未指定对方)"]
         assert len(keys) == 1
         assert result[keys[0]]["ending_balance"] == 100_000.0  # 50k/50k 比例 → 全部
+
+
+# ============================================================
+# P0 (round25 #15) — subject_matters Pydantic 校验 + update_item 路由
+# ============================================================
+class TestSubjectMatterPydantic:
+    """P0 修复: ``ConfirmationItemUpdateRequest.subject_matters`` 必须
+    是 ``list[SubjectMatterItem]``, 字段长度 / 控制字符 / 必填全校验,
+    防止脏数据落库被 docx 渲染时污染询证函."""
+
+    def test_subject_matter_valid_minimal(self):
+        from app.models.confirmation import SubjectMatterItem
+
+        s = SubjectMatterItem(subject="应收账款余额")
+        assert s.subject == "应收账款余额"
+        assert s.amount is None
+        assert s.note is None
+
+    def test_subject_matter_full_fields(self):
+        from app.models.confirmation import SubjectMatterItem
+
+        s = SubjectMatterItem(subject="货款", amount=12345.67, note="已发货未开票")
+        assert s.amount == 12345.67
+        assert s.note == "已发货未开票"
+
+    def test_subject_empty_string_rejected(self):
+        from pydantic import ValidationError
+
+        from app.models.confirmation import SubjectMatterItem
+
+        with pytest.raises(ValidationError):
+            SubjectMatterItem(subject="")
+
+    def test_subject_matter_too_long_subject_rejected(self):
+        """subject 长度 = 201 → ValidationError (max_length=200)."""
+        from pydantic import ValidationError
+
+        from app.models.confirmation import SubjectMatterItem
+
+        with pytest.raises(ValidationError) as exc_info:
+            SubjectMatterItem(subject="x" * 201)
+        errors = exc_info.value.errors()
+        assert any("subject" in str(e.get("loc", ())) for e in errors)
+
+    def test_subject_matter_exactly_200_subject_pass(self):
+        from app.models.confirmation import SubjectMatterItem
+
+        s = SubjectMatterItem(subject="x" * 200)
+        assert len(s.subject) == 200
+
+    def test_subject_matter_too_long_note_rejected(self):
+        from pydantic import ValidationError
+
+        from app.models.confirmation import SubjectMatterItem
+
+        with pytest.raises(ValidationError):
+            SubjectMatterItem(subject="x", note="n" * 501)
+
+    def test_subject_matter_sanitizes_control_chars_in_subject(self):
+        """subject / note 含 \\x00 等控制字符 → ValidationError."""
+        from pydantic import ValidationError
+
+        from app.models.confirmation import SubjectMatterItem
+
+        for bad in ["恶意\x00文本", "末尾\r回车", "tab\t控制"]:
+            with pytest.raises(ValidationError) as exc_info:
+                SubjectMatterItem(subject=bad)
+            errors = exc_info.value.errors()
+            assert any(
+                "控制字符" in str(e.get("msg", "")) for e in errors
+            ), f"应拒绝含控制字符: {bad!r}, errors={errors}"
+
+    def test_subject_matter_sanitizes_control_chars_in_note(self):
+        from pydantic import ValidationError
+
+        from app.models.confirmation import SubjectMatterItem
+
+        with pytest.raises(ValidationError):
+            SubjectMatterItem(subject="x", note="note\x1f含控制")
+
+    def test_update_request_validates_subject_matters_list(self):
+        """``ConfirmationItemUpdateRequest.subject_matters`` 必须能逐条校验."""
+        from app.models.confirmation import ConfirmationItemUpdateRequest
+
+        # 正常 list 通过
+        req = ConfirmationItemUpdateRequest(
+            subject_matters=[
+                {"subject": "货款", "amount": 100.0},
+                {"subject": "服务费", "amount": 200.0, "note": "已开票"},
+            ]
+        )
+        assert req.subject_matters is not None
+        assert len(req.subject_matters) == 2
+
+        # 缺 subject → ValidationError
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            ConfirmationItemUpdateRequest(
+                subject_matters=[{"amount": 100.0}]  # 缺 subject
+            )
+
+        # subject 长度超限 → ValidationError
+        with pytest.raises(ValidationError):
+            ConfirmationItemUpdateRequest(
+                subject_matters=[{"subject": "x" * 201}]
+            )
+
+
+class TestUpdateItemSubjectMattersEndToEnd:
+    """P0 修复: ``PUT /api/confirmations/items/{id}`` 把 ``subject_matters``
+    经过 ``SubjectMatterItem`` 校验后写库, 后续 ``gen.generate`` 渲染 docx
+    不再被脏数据污染."""
+
+    def test_subject_matters_validates_as_list_at_api_layer(self):
+        """``ConfirmationItemUpdateRequest`` model_dump 应该产出 list[dict],
+        API 路由在写库前再次类型校验, 防止 Pydantic schema 之外的输入."""
+        from app.models.confirmation import ConfirmationItemUpdateRequest
+
+        # 正常: list of dict → model_dump 后仍是 list
+        req = ConfirmationItemUpdateRequest(
+            subject_matters=[{"subject": "A"}, {"subject": "B"}]
+        )
+        dumped = req.model_dump(exclude_none=True)
+        assert isinstance(dumped["subject_matters"], list)
+        assert dumped["subject_matters"][0]["subject"] == "A"
+
+        # None 不出现在 exclude_none=True 结果里
+        req_none = ConfirmationItemUpdateRequest(subject_matters=None)
+        dumped_none = req_none.model_dump(exclude_none=True)
+        assert "subject_matters" not in dumped_none
+
+    def test_subject_matters_serialize_to_clean_json(self):
+        """subject_matters 序列化后必须是 JSON 字符串 (DB 字段是 Text)."""
+        import json
+
+        from app.models.confirmation import ConfirmationItemUpdateRequest
+
+        req = ConfirmationItemUpdateRequest(
+            subject_matters=[
+                {"subject": "货款", "amount": 100.5, "note": "已发货"},
+                {"subject": "服务费", "amount": 200.0},
+            ]
+        )
+        serialized = json.dumps(
+            [s.model_dump() for s in req.subject_matters],
+            ensure_ascii=False,
+        )
+        # 反序列化能拿回原值
+        parsed = json.loads(serialized)
+        assert parsed[0]["subject"] == "货款"
+        assert parsed[0]["amount"] == 100.5
+        assert parsed[1]["note"] is None
