@@ -8,6 +8,7 @@ from typing import Any, Dict
 import pandas as pd
 import streamlit as st
 
+from frontend._components import apply_feishu_theme, page_header
 from frontend._http import api_request
 
 
@@ -233,6 +234,9 @@ def _tab_manage() -> None:
 
 
 def show_report_templates() -> None:
+    apply_feishu_theme()
+    page_header('🎨', '报告模板', 'Word/Excel 模板上传 + ${placeholder} 嵌套字段 + run-aware XML 渲染')
+
     st.markdown(
         '<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">🎨 报告模板自定义化</p>',
         unsafe_allow_html=True,

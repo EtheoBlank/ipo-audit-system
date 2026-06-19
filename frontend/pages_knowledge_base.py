@@ -12,8 +12,8 @@ from __future__ import annotations
 import streamlit as st
 
 # P0 安全修复: 使用共享 api_request (带 Authorization header + 401 处理)
-from frontend._http import api_request as _api
-from frontend._components.safe_render import safe_link
+from frontend._components import apply_feishu_theme, page_header
+from frontend._http import api_request as _api, API_BASE_URL
 
 KB_CATEGORIES = [
     "审计实务",
@@ -27,7 +27,11 @@ KB_CATEGORIES = [
 
 
 def show_knowledge_base():
-    st.markdown('<p class="sub-header">📚 自助知识库</p>', unsafe_allow_html=True)
+    apply_feishu_theme()
+    page_header('📚', '自助知识库', 'PDF / EPUB / DOCX / TXT / MD 实务书籍, 三种嵌入 provider 检索')
+
+    # [飞书化] st.markdown('<p class="sub-header">📚 自助知识库</p>', unsafe_allow_html=True)  # 已被 page_header() 替代
+
     st.caption(
         "上传你喜欢的实务书籍 / 案例集 / 准则解读 → 系统切块向量化 → "
         "生成审计说明时自动调用相似案例。"

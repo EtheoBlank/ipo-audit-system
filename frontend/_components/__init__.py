@@ -7,4 +7,31 @@
 - charts:        简单的 bar/line 辅助
 - period_picker: 期末日期 (text_input / date_input) + 校验
 - download_excel: 一致的下载按钮
+- feishu_theme:  飞书浅色主题设计令牌 + CSS 注入
+- feishu_components: 飞书化组件库 (页头/指标卡/徽章/空状态/表格/红点)
 """
+from frontend._components.feishu_theme import (  # noqa: F401
+    FEISHU_C,
+    FEISHU_FONT,
+    FEISHU_MONO,
+    FEISHU_R,
+    FEISHU_S,
+    FeishuColors,
+    FeishuRadius,
+    FeishuSpace,
+    apply_feishu_theme,
+    feishu_fade_in,
+)
+from frontend._components.feishu_components import (  # noqa: F401
+    data_table,
+    empty_state,
+    feishu_divider,
+    metric_card,
+    page_header,
+    render_status_badge,
+    render_top_badges,
+    section_card_end,
+    section_card_start,
+    status_badge,
+    status_dot,
+)

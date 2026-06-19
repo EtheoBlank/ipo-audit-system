@@ -7,6 +7,7 @@ from typing import Any, Dict
 import pandas as pd
 import streamlit as st
 
+from frontend._components import apply_feishu_theme, page_header
 from frontend._http import api_request
 from frontend._components.project_picker import pick_project
 
@@ -418,6 +419,9 @@ def _tab_report(project_id: int) -> None:
 
 
 def show_related_parties() -> None:
+    apply_feishu_theme()
+    page_header('🤝', '关联方专项', 'DeepSeek 关联方推断 + 规则识别 + AI 降级')
+
     st.markdown(
         '<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">🤝 关联方专项</p>',
         unsafe_allow_html=True,

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -34,8 +35,8 @@ from app.services.comprehensive.template_parser import TemplateParser
 from app.services.comprehensive.web_search_engine import (
     WebSearchEngine,
 )
+from frontend._components import apply_feishu_theme, page_header
 from frontend._components.safe_render import safe_inline_text
-from frontend._http import API_BASE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +260,11 @@ def _truncate(s: str, n: int) -> str:
 
 
 def show_comprehensive_workpaper():
-    st.markdown("## 📑 综合底稿自动生成")
+    apply_feishu_theme()
+    page_header('📑', '综合底稿自动生成', '事务所模板上传 → 字段映射 → AI 填充 → QA 引擎')
+
+    # [飞书化]     st.markdown("## 📑 综合底稿自动生成")  # 已被 page_header() 替代
+
     st.caption(
         "上传事务所的 Excel 综合底稿模板 → 选项目 → 系统自动调用 "
         "「基础底稿 + 审计手册规则 + 权威信息检索 + 一次性问答」"
@@ -278,10 +283,15 @@ def show_comprehensive_workpaper():
         return
 
     # P0 安全: 不在 session_state 长期保存大文件 bytes (内存压力). 临时存路径
-    # 注意: 当前实现没有保存到磁盘, 只写到 session_state. 简化方案: 把 bytes 存到临时文件
+    # P0 修复: 多用户并发 anon 文件名互相覆盖; 用 username + project_id + ts
     import tempfile
-    from pathlib import Path
-    tmp = Path(tempfile.gettempdir()) / f"comp_template_{st.session_state.get('user_id', 'anon')}.xlsx"
+    import time as _time
+    _uname = (st.session_state.get("auth_user") or {}).get("username", "anon")
+
+    # 项目 ID: 从 number_input 的 key="selected_project_id" 读 (Streamlit 自动同步)
+    _pid = st.session_state.get("selected_project_id", "x")
+    _fname = f"comp_template_{_uname}_{_pid}_{int(_time.time())}.xlsx"
+    tmp = Path(tempfile.gettempdir()) / _fname
     tmp.write_bytes(uploaded.getvalue())
     st.session_state["__comprehensive_template_path__"] = str(tmp)
 
@@ -296,7 +306,7 @@ def show_comprehensive_workpaper():
 
     # 3) 选项目并跑填充
     st.markdown("### 第 2 步：选择项目并自动填充")
-    project_id = st.number_input("项目ID", min_value=1, value=1, step=1)
+    project_id = st.number_input("项目ID", min_value=1, value=1, step=1, key="selected_project_id")
     if st.button("🚀 开始自动填充", type="primary"):
         with st.spinner("正在调用四路数据源..."):
             ctx = _build_context(int(project_id))

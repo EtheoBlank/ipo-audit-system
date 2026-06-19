@@ -26,10 +26,10 @@ gatherUsageStats = false
 
 [theme]
 base = "light"
-primaryColor = "#4472C4"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F0F2F6"
-textColor = "#262730"
+primaryColor = "#3370FF"             # 飞书主色 (蓝紫)
+backgroundColor = "#FFFFFF"           # 主背景 (白)
+secondaryBackgroundColor = "#F5F6F7"  # 次级背景 (飞书浅灰)
+textColor = "#1F2329"                 # 主文 (飞书深色)
 font = "sans serif"
 
 [client]

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import streamlit as st
+from datetime import date, timedelta
+from frontend._components import apply_feishu_theme, page_header
 import pandas as pd
 
 from frontend._http import api_request
@@ -161,7 +163,7 @@ def _tab_events(project_id: int) -> None:
     col1, col2, col3 = st.columns(3)
     severity = col1.selectbox("严重度", ["全部", "critical", "warn", "notice", "info"])
     review_status = col2.selectbox("审核状态", ["全部", "unread", "read", "ignored"])
-    date_from = col3.date_input("起始日期", value=pd.Timestamp.now() - pd.Timedelta(days=30))
+    date_from = col3.date_input("起始日期", value=date.today() - timedelta(days=30))
 
     params = f"project_id={project_id}&date_from={date_from}"
     if severity != "全部":
@@ -215,7 +217,7 @@ def _tab_events(project_id: int) -> None:
             content = st.text_area("内容", height=100)
             publisher = st.text_input("来源")
             url = st.text_input("URL")
-            date = st.date_input("日期", value=pd.Timestamp.now())
+            event_date = st.date_input("日期", value=date.today())
             sev = st.selectbox("严重度", ["info", "notice", "warn", "critical"])
             if st.form_submit_button("录入"):
                 r = api_request(
@@ -227,7 +229,7 @@ def _tab_events(project_id: int) -> None:
                         "content_text": content,
                         "publisher": publisher,
                         "url": url or None,
-                        "publish_date": str(date),
+                        "publish_date": str(event_date),
                         "severity": sev,
                     },
                 )
@@ -247,7 +249,7 @@ def _tab_briefings(project_id: int) -> None:
     # 强制重新生成 + 立即生成
     col1, col2 = st.columns(2)
     with col1:
-        target_date = st.date_input("指定日期", value=pd.Timestamp.now())
+        target_date = st.date_input("指定日期", value=date.today())
     with col2:
         force = st.checkbox("强制重新生成 (覆盖今日简报)", value=False)
 
@@ -687,8 +689,12 @@ def _tab_settings(project_id: int) -> None:
 
 
 def show_sentiment() -> None:
+    apply_feishu_theme()
+    page_header('📡', '舆情跟踪', '多源抓取 + AI 去重校验 + 简报/季报 + 全局红点')
+
     """舆情跟踪 — Streamlit 页面入口."""
-    st.markdown('<p class="sub-header">📡 舆情跟踪 (IPO 客户)</p>', unsafe_allow_html=True)
+    # [飞书化] st.markdown('<p class="sub-header">📡 舆情跟踪 (IPO 客户)</p>', unsafe_allow_html=True)  # 已被 page_header() 替代
+
     project_id = _pick_project()
     _render_unread_badge()
     tabs = st.tabs(["📊 舆情总览", "📰 事件库", "🗞️ 每日简报", "📈 季度跟踪报告", "⚙️ 别名与信源"])

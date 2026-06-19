@@ -15,6 +15,7 @@ from typing import Any, Optional
 import pandas as pd
 import streamlit as st
 
+from frontend._components import apply_feishu_theme, page_header
 from frontend.app import api_request, get_projects
 
 
@@ -88,7 +89,11 @@ def _render_five_step(data: dict[str, Any]) -> None:
 
 
 def show_contracts() -> None:
-    st.markdown("## 📄 收入合同分析")
+    apply_feishu_theme()
+    page_header('📄', '收入合同分析', 'OCR 识别 + CAS 14 五步法分析 + 风险扫描')
+
+    # [飞书化]     st.markdown("## 📄 收入合同分析")  # 已被 page_header() 替代
+
     st.caption("上传合同图片 / 扫描件 → OCR → CAS 14 五步法分析 + 7 字段要点提取 + 风险扫描")
 
     project = _projects_selectbox()

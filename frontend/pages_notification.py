@@ -7,6 +7,7 @@ from typing import Any, Dict
 import pandas as pd
 import streamlit as st
 
+from frontend._components import apply_feishu_theme, page_header
 from frontend._http import api_request
 from frontend._components.safe_render import safe_link
 
@@ -39,6 +40,9 @@ _SEVERITY_BADGE = {
 
 
 def show_notifications() -> None:
+    apply_feishu_theme()
+    page_header('🔔', '通知中心', '通用通知 / 按模块 / 按严重度聚合')
+
     st.markdown(
         '<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">🔔 通知中心</p>',
         unsafe_allow_html=True,

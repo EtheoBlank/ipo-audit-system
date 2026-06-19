@@ -10,6 +10,7 @@ from typing import Any, Dict
 import pandas as pd
 import streamlit as st
 
+from frontend._components import apply_feishu_theme, page_header
 from frontend._http import api_request
 from frontend._components.project_picker import pick_project
 from frontend._components.data_grid import edit_df as _edit_df
@@ -341,6 +342,9 @@ def _tab_export(project_id: int) -> None:
 
 
 def show_account_audit() -> None:
+    apply_feishu_theme()
+    page_header('📑', '长期资产发生额审定', '固定资产/在建工程/无形资产/长投/商誉/使用权资产 逐笔发生额审定 + 底稿恒等式校验')
+
     st.markdown(
         '<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">📑 长期资产发生额审定</p>',
         unsafe_allow_html=True,

@@ -17,6 +17,7 @@ from typing import Any, Optional
 import pandas as pd
 import streamlit as st
 
+from frontend._components import apply_feishu_theme, page_header
 from frontend._http import api_request
 from frontend._components.project_picker import pick_project_dict
 from frontend._components.data_grid import edit_df as _edit_df
@@ -47,7 +48,11 @@ def _format_df_for_editor(records: list[dict[str, Any]]) -> pd.DataFrame:
 
 
 def show_sales_ledger() -> None:
-    st.markdown("## 📦 销售清单整理")
+    apply_feishu_theme()
+    page_header('📦', '销售清单整理', '散乱文档 → AI 合成结构化销售清单 → 毛利率/截止性/单价波动分析')
+
+    # [飞书化]     st.markdown("## 📦 销售清单整理")  # 已被 page_header() 替代
+
     st.caption(
         "上传散乱文档（合同 / 发票 / 发货单 / 报关单）→ AI 自动合成结构化销售清单"
         "→ 收入循环分析（毛利率、截止性、单价波动、收发存对账、同行业参考）"

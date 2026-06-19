@@ -7,6 +7,7 @@ import json
 import pandas as pd
 import streamlit as st
 
+from frontend._components import apply_feishu_theme, page_header
 from frontend._http import api_request
 from frontend._components.project_picker import pick_project
 
@@ -352,6 +353,9 @@ def _tab_checklist(project_id: int) -> None:
 
 
 def show_ipo_specials() -> None:
+    apply_feishu_theme()
+    page_header('🎯', 'IPO 专属', '内控穿行测试 / 招股书勾稽 / 反馈意见回复')
+
     st.markdown(
         '<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">🎯 IPO 专属 (Pack D)</p>',
         unsafe_allow_html=True,

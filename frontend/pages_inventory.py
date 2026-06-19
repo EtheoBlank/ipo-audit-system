@@ -8,6 +8,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from frontend._components import apply_feishu_theme, page_header
 from frontend._components.project_picker import pick_project_dict
 from frontend._components.download import download_excel
 # P0 安全修复: 使用共享 api_request, 自动带 Authorization header + 401 处理
@@ -23,7 +24,11 @@ def _pick_project():
 
 
 def show_inventory():
-    st.markdown('<p style="font-size:1.5rem;font-weight:bold;color:#2E4057;">📦 收发存盘点 &amp; 减值（成本相关）</p>', unsafe_allow_html=True)
+    apply_feishu_theme()
+    page_header('🏷️', '收发存盘点 & 减值', '金额优先 + 阈值覆盖 + 拍照 OCR 回填 + FIFO 库龄 + NRV 跌价')
+
+    # [飞书化] st.markdown('<p style="font-size:1.5rem;font-weight:bold;color:#2E4057;">📦 收发存盘点 &amp; 减值（成本相关）</p>', unsafe_allow_html=True)  # 已被 page_header() 替代
+
 
     proj = _pick_project()
     if not proj:

@@ -13,17 +13,21 @@ Tabs:
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Any, Optional
 
 import pandas as pd
 import streamlit as st
 
 # P0 安全修复: 使用共享 api_request (带 Authorization header + 401 处理)
 from frontend._http import api_request
+from frontend._components import apply_feishu_theme, page_header
 from frontend._components.safe_render import safe_inline_text
 
 
-@st.cache_data(ttl=60)
+def _current_user_name() -> str:
+    """返回当前登录用户姓名; 未登录时返回空字符串 (避免 '审计师' 歧义)."""
+    user = st.session_state.get("auth_user") or {}
+    return user.get("full_name") or user.get("username") or ""
+
 def fetch_subjects():
     return api_request("GET", "/api/confirmations/subjects") or {}
 
@@ -46,7 +50,11 @@ def fetch_case_summary(case_id: int):
 
 
 def show_confirmations():
-    st.markdown("## 📬 函证管理 (Confirmation)")
+    apply_feishu_theme()
+    page_header('📬', '函证管理', '财政部模板 + 锁定金额快照 + 回函 OCR + AI 解析 + 差异统计')
+
+    # [飞书化]     st.markdown("## 📬 函证管理 (Confirmation)")  # 已被 page_header() 替代
+
     st.caption(
         "从账套自动生成银行/客户/供应商/其他往来询证函统计表 → "
         "确定发函后锁定 → 回函照片 OCR + AI 解析 → 回函情况自动统计"
@@ -159,7 +167,7 @@ def show_confirmations():
                 period_end = st.date_input("报告期截止日", value=date(fiscal_year, 12, 31))
                 notes = st.text_area("备注", value="")
                 generated_by = st.text_input(
-                    "生成人", value=st.session_state.get("user_name", "审计师")
+                    "生成人", value=_current_user_name()
                 )
                 if st.form_submit_button("✅ 创建案卷", type="primary"):
                     payload = {
@@ -220,7 +228,7 @@ def show_confirmations():
                         "random_seed": 42,
                         "include_zero_balance": include_zero,
                         "persist": True,
-                        "generated_by": st.session_state.get("user_name", "审计师"),
+                        "generated_by": _current_user_name(),
                     }
                     with st.spinner("正在从账套聚合并选样..."):
                         r = api_request(
@@ -294,7 +302,7 @@ def show_confirmations():
                 if not case["is_locked"]:
                     if st.button("🔒 确定发函 (锁定案卷)", type="primary"):
                         payload = {
-                            "locked_by": st.session_state.get("user_name", "审计师"),
+                            "locked_by": _current_user_name(),
                             "lock_reason": "已确认函证对象清单",
                         }
                         r = api_request(
@@ -340,7 +348,7 @@ def show_confirmations():
                                         "发函方式", ["邮寄", "电子邮件", "跟函", "电邮+邮寄"]
                                     )
                                     sent_by = st.text_input(
-                                        "发函人", value=st.session_state.get("user_name", "审计师")
+                                        "发函人", value=_current_user_name()
                                     )
                                 with col2:
                                     recipient = st.text_input("收件人", value=it["party_name"])
@@ -500,7 +508,7 @@ def show_confirmations():
                                         "difference_reason": difference_reason,
                                         "response_summary": response_summary,
                                         "auditor_note": auditor_note,
-                                        "confirmed_by": st.session_state.get("user_name", "审计师"),
+                                        "confirmed_by": _current_user_name(),
                                     }
                                     r = api_request(
                                         "POST",

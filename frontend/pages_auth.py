@@ -8,6 +8,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
+from frontend._components import apply_feishu_theme, page_header
 from frontend._http import (
     API_BASE_URL,
     api_request,
@@ -347,6 +348,9 @@ def _tab_approvals() -> None:
 
 
 def show_auth() -> None:
+    apply_feishu_theme()
+    page_header('🔐', '系统管理', '用户 / 事务所 / 角色权限 / 审计轨迹 / 审批流')
+
     """对外入口."""
     st.markdown(
         '<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">🔐 系统管理 (认证 / 用户 / 审计轨迹)</p>',

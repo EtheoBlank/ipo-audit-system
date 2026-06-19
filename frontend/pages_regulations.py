@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 # P0 安全修复: 使用共享 api_request (带 Authorization header + 401 处理)
+from frontend._components import apply_feishu_theme, page_header
 from frontend._http import api_request as _api
 
 SOURCE_CODES = ["CSRC", "MOF", "STA", "SAFE", "PBOC"]
@@ -27,7 +28,11 @@ SOURCE_LABELS = {
 
 
 def show_regulations():
-    st.markdown('<p class="sub-header">⚖️ 法律法规库</p>', unsafe_allow_html=True)
+    apply_feishu_theme()
+    page_header('⚖️', '法律法规库', '证监会 / 财政部 / 税务总局 / 外管局 / 人民银行 政策与准则')
+
+    # [飞书化] st.markdown('<p class="sub-header">⚖️ 法律法规库</p>', unsafe_allow_html=True)  # 已被 page_header() 替代
+
     st.caption(
         "自动抓取证监会 / 财政部 / 国家税务总局 / 外管局 / 人民银行的政策文件、准则、规章、问答口径，"
         "支持来源/日期/关键词多维过滤、全文搜索、按项目收藏。"

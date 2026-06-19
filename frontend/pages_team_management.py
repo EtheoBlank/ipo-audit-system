@@ -8,6 +8,7 @@ from typing import Any, Optional
 import pandas as pd
 import streamlit as st
 
+from frontend._components import apply_feishu_theme, page_header
 from frontend._http import api_request
 from frontend._components.project_picker import pick_project_dict
 from frontend._components.safe_render import safe_inline_text
@@ -665,7 +666,11 @@ def _tab_recommendations() -> None:
 
 
 def show_team_management() -> None:
-    st.markdown("## 👥 项目组管理")
+    apply_feishu_theme()
+    page_header('👥', '项目组管理', '5 级人员库 + AI 工作计划 + 会议评分 + 日报 + 卡点 + 进度看板 + AI 建议')
+
+    # [飞书化]     st.markdown("## 👥 项目组管理")  # 已被 page_header() 替代
+
     st.caption("人员 → 计划 → 日报/会议 → 进度看板 → AI 管理建议")
     tabs = st.tabs(
         [

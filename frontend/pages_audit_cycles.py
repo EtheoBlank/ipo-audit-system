@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from frontend._components import apply_feishu_theme, page_header
 from frontend._http import api_request
 from frontend._components.project_picker import pick_project
 
@@ -293,6 +294,9 @@ def _tab_subsequent(project_id: int) -> None:
 
 
 def show_audit_cycles() -> None:
+    apply_feishu_theme()
+    page_header('🔄', '审计循环', 'P2P / OTC / 费用 / 收入 / 存货 5 大循环底稿与穿行测试')
+
     st.markdown(
         '<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">🔄 审计循环 (Pack C)</p>',
         unsafe_allow_html=True,
