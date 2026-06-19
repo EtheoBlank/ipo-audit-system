@@ -215,8 +215,13 @@ class KnowledgeBaseService:
         category: Optional[str] = None,
         project_id: Optional[int] = None,
         context: Optional[str] = None,
+        firm_id: Optional[int] = None,
     ) -> List[RetrievedChunk]:
-        """检索 — 自动选择 embedder。"""
+        """检索 — 自动选择 embedder.
+
+        P0 (2026-06-19): 加 firm_id 过滤. 之前任意用户可检索全所书籍,
+        等同知识库内容跨所泄露. API 层传 current_user.firm_id.
+        """
         top_k = top_k or settings.KB_DEFAULT_TOP_K
 
         # 准备 query 向量
@@ -240,6 +245,7 @@ class KnowledgeBaseService:
             top_k=top_k,
             book_ids=book_ids,
             category=category,
+            firm_id=firm_id,  # P0 多租户隔离
             keyword_weight=0.4 if query_vector is None else 0.3,
         )
 

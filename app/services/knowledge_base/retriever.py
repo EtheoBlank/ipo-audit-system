@@ -68,10 +68,11 @@ async def retrieve(
     top_k: int = 5,
     book_ids: Optional[Sequence[int]] = None,
     category: Optional[str] = None,
+    firm_id: Optional[int] = None,
     min_score: float = 0.0,
     keyword_weight: float = 0.3,
 ) -> List[RetrievedChunk]:
-    """在已索引的知识库中检索相似 chunk。
+    """在已索引的知识库中检索相似 chunk.
 
     Args:
         query:        原始查询文本 (用于关键词得分)
@@ -79,6 +80,8 @@ async def retrieve(
         top_k:        返回条数
         book_ids:     限定在哪几本书检索 (None = 全部)
         category:     按书的 category 过滤
+        firm_id:      P0 (2026-06-19): 多租户隔离, 仅检索指定事务所的书
+                     None 表示不限 (admin / 测试用); 普通用户应传自己 firm_id
         min_score:    分数低于此阈值的丢弃
         keyword_weight: 关键词得分在最终分数里的权重 (0~1)
     """
@@ -89,6 +92,9 @@ async def retrieve(
         stmt = stmt.where(KnowledgeChunk.book_id.in_(list(book_ids)))
     if category:
         stmt = stmt.where(KnowledgeBook.category == category)
+    if firm_id is not None:
+        # P0 多租户: 仅查指定 firm 的书, 跨所不可见
+        stmt = stmt.where(KnowledgeBook.firm_id == firm_id)
     rows = (await db.execute(stmt)).all()
 
     semantic_weight = 1.0 - keyword_weight

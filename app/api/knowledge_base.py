@@ -266,6 +266,11 @@ async def search_kb(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    # P0 多租户 (2026-06-19): 与 list_books 一致, 非 admin 强制 firm_id = 自己
+    from app.models.db.auth import ROLE_ADMIN as _ADMIN
+    firm_id = None if (current_user is None or current_user.role == _ADMIN) else (
+        current_user.firm_id
+    )
     results = await _kb_service.search(
         db,
         query=req.query,
@@ -274,6 +279,7 @@ async def search_kb(
         category=req.category,
         project_id=req.project_id,
         context=req.context,
+        firm_id=firm_id,
     )
     return [SearchResult(**r.__dict__) for r in results]
 
