@@ -246,17 +246,27 @@ def _tab_movements(project_id: int) -> None:
         if not changes:
             st.info("没有改动")
         else:
-            ok = 0
-            fail = 0
-            # P0 性能: 批量保存接口缺失, 暂时保留逐条 PUT, 待后端 /api/account-audit/movements/batch
-            # 添加后切换 (后端已有 bulk endpoint 见 app/api/account_audit.py)
-            for c in changes:
+            # P1 性能 (2026-06-19): 旧版串行 for c in changes: PUT 50 条要 50×RTT
+            # 改 ThreadPoolExecutor(5) 5 路并发, 不引后端依赖
+            # 旧 c.pop("id") mutate 原 dict → 现在 copy 后 pop, 不污染原数据
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            def _one_put(change: dict) -> bool:
+                c = dict(change)
                 mid = c.pop("id")
                 r = _api("PUT", f"/api/account-audit/movements/{mid}", json=c)
-                if r:
-                    ok += 1
-                else:
-                    fail += 1
+                return bool(r)
+
+            results: list[bool] = []
+            with ThreadPoolExecutor(max_workers=5) as ex:
+                futs = [ex.submit(_one_put, c) for c in changes]
+                for fut in as_completed(futs):
+                    try:
+                        results.append(fut.result())
+                    except Exception:  # noqa: BLE001
+                        results.append(False)
+            ok = sum(1 for x in results if x)
+            fail = len(results) - ok
             st.success(f"已提交 {ok} 条修改, 失败 {fail} 条")
             if ok:
                 st.rerun()
