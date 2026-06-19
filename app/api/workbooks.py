@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from app.api._helpers import get_project_or_404
+
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.db_models import Project, AccountBalance
@@ -272,11 +274,8 @@ async def generate_audit_notes_batch(
     current_user: User = Depends(get_current_user),
 ):
     """为指定底稿批量生成审计说明，并写回 Excel 末尾的"审计说明"sheet。"""
-    project = (
-        await db.execute(select(Project).where(Project.id == req.project_id))
-    ).scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    # P0 IDOR + 多租户 (2026-06-19): 直查 Project 后无 firm 校验
+    project = await get_project_or_404(db, req.project_id, current_user=current_user)
 
     # 1) 找到底稿文件
     import re as _re
@@ -298,24 +297,48 @@ async def generate_audit_notes_batch(
     if not rows:
         raise HTTPException(status_code=404, detail="未找到可生成说明的科目")
 
-    # 3) 逐科目生成
+    # 3) 并发生成 — P0 性能修复 (2026-06-19)
+    # 旧逻辑: 串行 for 循环, 30+ 科目 60s+; 现 asyncio.Semaphore + gather
+    import asyncio as _asyncio
+    sem = _asyncio.Semaphore(5)
+
+    async def _gen_one(ab):
+        async with sem:
+            ctx = AuditNoteContext(
+                project_id=req.project_id,
+                account_code=ab.account_code,
+                account_name=ab.account_name,
+                balance_amount=ab.ending_balance,
+                industry=project.industry,
+                audit_objective=req.audit_objective,
+            )
+            return await audit_note_generator.generate(
+                db,
+                ctx,
+                kb_category=req.kb_category,
+                include_regulations=req.include_regulations,
+            )
+
+    results = await _asyncio.gather(
+        *[_gen_one(ab) for ab in rows],
+        return_exceptions=True,
+    )
+
     notes_payload: list[dict] = []
     ai_enabled = False
-    for ab in rows:
-        ctx = AuditNoteContext(
-            project_id=req.project_id,
-            account_code=ab.account_code,
-            account_name=ab.account_name,
-            balance_amount=ab.ending_balance,
-            industry=project.industry,
-            audit_objective=req.audit_objective,
-        )
-        result = await audit_note_generator.generate(
-            db,
-            ctx,
-            kb_category=req.kb_category,
-            include_regulations=req.include_regulations,
-        )
+    for ab, result in zip(rows, results):
+        if isinstance(result, Exception):
+            logger.warning("生成审计说明失败 %s: %s", ab.account_code, result)
+            notes_payload.append(
+                {
+                    "account_code": ab.account_code,
+                    "account_name": ab.account_name,
+                    "note": f"(AI 生成失败: {type(result).__name__})",
+                    "references_kb": [],
+                    "references_regulations": [],
+                }
+            )
+            continue
         ai_enabled = ai_enabled or result.ai_enabled
         notes_payload.append(
             {
