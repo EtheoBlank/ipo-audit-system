@@ -118,6 +118,7 @@ def show_contracts() -> None:
                 "选择合同图片 / PDF（可多份）",
                 type=["png", "jpg", "jpeg", "bmp", "tiff", "pdf"],
                 accept_multiple_files=True,
+                key="contracts_image_upload",
             )
             note = st.text_input("备注", "")
             if st.button("📤 上传并 OCR", type="primary"):

@@ -830,6 +830,7 @@ async def compute_impairments(
         industry=industry,
         sell_cost_rate=sc_rate,
         completion_cost_rate=req.completion_cost_rate,
+        manual_completion_cost=req.manual_completion_cost or None,
     )
     result = engine.compute(
         movements,
@@ -841,6 +842,7 @@ async def compute_impairments(
         prior_period_end={
             k: datetime.fromisoformat(v) for k, v in prior_period.items()
         } if prior_period else None,
+        manual_completion_cost=req.manual_completion_cost or None,
     )
 
     if req.persist:

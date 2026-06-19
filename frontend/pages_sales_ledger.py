@@ -85,6 +85,7 @@ def show_sales_ledger() -> None:
             "选择文档（可多选）",
             type=["docx", "pdf", "xlsx", "xls"],
             accept_multiple_files=True,
+            key="sales_ledger_doc_upload",
         )
         note = st.text_input("可选备注（例如：'2024年第一季度销售合同汇总'）", "")
 

@@ -452,7 +452,7 @@ def show_data_import():
         return
 
     project_options = {f"{p['id']} - {p['name']}": p["id"] for p in projects}
-    selected = st.selectbox("选择项目", list(project_options.keys()))
+    selected = st.selectbox("选择项目", list(project_options.keys()), key="data_import_project")
     project_id = project_options[selected]
 
     tab1, tab2, tab3 = st.tabs(["📋 科目余额表", "📒 序时账", "🏦 银行对账单"])
@@ -460,7 +460,9 @@ def show_data_import():
     with tab1:
         section_card_start("导入科目余额表", "📋")
         st.markdown("**支持格式**: `.xlsx`, `.xls`, `.csv` | **ERP**: 金蝶、用友、SAP 自动识别")
-        uploaded_file = st.file_uploader("选择科目余额表文件", type=["xlsx", "xls", "csv"])
+        uploaded_file = st.file_uploader(
+            "选择科目余额表文件", type=["xlsx", "xls", "csv"], key="data_import_balance_upload"
+        )
         if uploaded_file and st.button("导入科目余额表", type="primary", use_container_width=True):
             files = {"file": (uploaded_file.name, uploaded_file.read(), uploaded_file.type)}
             result = api_request(
@@ -473,7 +475,9 @@ def show_data_import():
 
     with tab2:
         section_card_start("导入序时账", "📒")
-        uploaded_file = st.file_uploader("选择序时账文件", type=["xlsx", "xls", "csv"])
+        uploaded_file = st.file_uploader(
+            "选择序时账文件", type=["xlsx", "xls", "csv"], key="data_import_ledger_upload"
+        )
         if uploaded_file and st.button("导入序时账", type="primary", use_container_width=True):
             files = {"file": (uploaded_file.name, uploaded_file.read(), uploaded_file.type)}
             result = api_request(
@@ -486,7 +490,9 @@ def show_data_import():
 
     with tab3:
         section_card_start("导入银行对账单", "🏦")
-        uploaded_file = st.file_uploader("选择银行对账单文件", type=["xlsx", "xls", "csv"])
+        uploaded_file = st.file_uploader(
+            "选择银行对账单文件", type=["xlsx", "xls", "csv"], key="data_import_bank_upload"
+        )
         if uploaded_file and st.button("导入银行对账单", type="primary", use_container_width=True):
             files = {"file": (uploaded_file.name, uploaded_file.read(), uploaded_file.type)}
             result = api_request("POST", f"/api/projects/{project_id}/bank-statements", files=files)
@@ -504,7 +510,7 @@ def show_workbook_generation():
         return
 
     project_options = {f"{p['id']} - {p['name']}": p["id"] for p in projects}
-    selected = st.selectbox("选择项目", list(project_options.keys()))
+    selected = st.selectbox("选择项目", list(project_options.keys()), key="workbook_project")
     project_id = project_options[selected]
 
     section_card_start("选择模板类型", "📋")

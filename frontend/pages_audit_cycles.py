@@ -83,7 +83,7 @@ def _tab_fixed_assets(project_id: int) -> None:
     cost = c1.number_input("原值", value=120000.0, step=1000.0, key="fa_cost")
     salvage = c2.number_input("残值率", value=0.05, min_value=0.0, max_value=0.5, step=0.01, key="fa_salvage")
     life = c3.number_input("使用年限 (月)", value=120, min_value=1, step=12, key="fa_life")
-    method = st.selectbox("方法", ["straight_line", "double_declining"])
+    method = st.selectbox("方法", ["straight_line", "double_declining"], key="fa_method")
     if st.button("📊 计算"):
         r = _api(
             "POST",
@@ -252,9 +252,9 @@ def _tab_estimates(project_id: int) -> None:
 def _tab_subsequent(project_id: int) -> None:
     st.markdown("### 📅 后续期间 + 持续经营")
     st.markdown("#### 后续期间事项分类")
-    desc = st.text_input("事项描述", value="应收账款无法收回, 金额 100 万")
-    event_date = st.text_input("事项日期", value="2025-02-15")
-    bs_date = st.text_input("资产负债表日", value="2024-12-31")
+    desc = st.text_input("事项描述", value="应收账款无法收回, 金额 100 万", key="subseq_desc")
+    event_date = st.text_input("事项日期", value="2025-02-15", key="subseq_event_date")
+    bs_date = st.text_input("资产负债表日", value="2024-12-31", key="subseq_bs_date")
     if st.button("📊 分类"):
         r = _api(
             "POST",

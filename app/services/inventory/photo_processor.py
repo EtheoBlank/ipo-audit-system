@@ -73,6 +73,77 @@ def _to_float(v: Any) -> Optional[float]:
         return None
 
 
+# ---- P0-A (2026-06-19): name 模糊匹配 helper -----------------------
+
+# 中文按字切 + 英文/数字按词切, 兼容中英混排.
+# 例: "M001 圆钢" → ["M001", "圆", "钢"] (字母+数字相邻合并)
+_TOKEN_RE = re.compile(r"[一-鿿]|[A-Za-z]+\d*|\d+|[A-Za-z]")
+
+
+def _tokenize(s: str) -> list[str]:
+    """中文按字 + 英文/数字相邻合并为单 token."""
+    if not s:
+        return []
+    raw = _TOKEN_RE.findall(s)
+    # 合并相邻的 [A-Za-z]+ 与 \d+ 为单 token (e.g. "M" + "001" → "M001")
+    merged: list[str] = []
+    for tok in raw:
+        if (
+            merged
+            and re.fullmatch(r"[A-Za-z]+", merged[-1])
+            and re.fullmatch(r"\d+", tok)
+        ):
+            merged[-1] = merged[-1] + tok
+        else:
+            merged.append(tok)
+    return merged
+
+
+def _name_similarity(a: str, b: str) -> float:
+    """Jaccard token 相似度, 兼容中文按字符切.
+
+    例: '不锈钢' vs '不锈钢轴承' → tokens={不, 锈, 钢} ∩ {不, 锈, 钢, 轴, 承}
+         → |∩|=3, |∪|=5, Jaccard=0.6 (边界, 配合长度比兜底).
+    """
+    a_tokens = set(_tokenize(a))
+    b_tokens = set(_tokenize(b))
+    if not a_tokens or not b_tokens:
+        return 0.0
+    union = a_tokens | b_tokens
+    if not union:
+        return 0.0
+    return len(a_tokens & b_tokens) / len(union)
+
+
+def _name_matches(nm: str, row_name: str, *, length_ratio_min: float = 0.5,
+                  jaccard_min: float = 0.6) -> bool:
+    """两条 name 是否"实质相同".
+
+    判定规则 (二选一即匹配, 但都需满足长度比 ≥ length_ratio_min):
+      A) 子串关系 (旧逻辑) + 长度比 ≥ length_ratio_min
+      B) Jaccard token 相似度 ≥ jaccard_min
+
+    长度比 = min(|nm|, |row_name|) / max(|nm|, |row_name|)
+    """
+    if not nm or not row_name:
+        return False
+    a, b = nm, row_name
+    len_a, len_b = len(a), len(b)
+    if not len_a or not len_b:
+        return False
+    length_ratio = min(len_a, len_b) / max(len_a, len_b)
+    if length_ratio < length_ratio_min:
+        return False
+    # 路径 A: 子串匹配 + 长度比兜底
+    if a in b or b in a:
+        return True
+    # 路径 B: Jaccard token 相似度
+    if _name_similarity(a, b) >= jaccard_min:
+        return True
+    return False
+
+
+
 def _chunk_text(text: str, max_len: int = 7500) -> list[str]:
     """Split a long OCR text into chunks ≤ max_len, preferring line boundaries."""
     if len(text) <= max_len:
@@ -309,12 +380,16 @@ class CountPhotoProcessor:
             cand = [s for s in cand if id(s) not in used]
 
             if not cand and row.material_name:
-                # fallback by name substring
+                # P0-A (2026-06-19): 防止 '不锈钢' 误匹配 '不锈钢轴承' 等.
+                # 旧版纯子串匹配会让审计师拍照回填后, 实盘数量写到错误的 sheet,
+                # 报告差异对不上. 改用 "子串+长度比" 或 "Jaccard token 相似度" 二选一.
                 for s in sheet_list:
                     if id(s) in used:
                         continue
                     nm = str(getattr(s, "material_name", "") or "").strip()
-                    if nm and (nm in row.material_name or row.material_name in nm):
+                    if not nm:
+                        continue
+                    if _name_matches(nm, row.material_name):
                         cand = [s]
                         break
 

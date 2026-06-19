@@ -1,5 +1,6 @@
 """API routes for workbook generation."""
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import List, Optional
@@ -76,7 +77,10 @@ async def generate_workbook(
     if request.template_type not in template_generators:
         raise HTTPException(status_code=400, detail=f"不支持的模板类型: {request.template_type}")
 
-    output_path = template_generators[request.template_type](df_balances)
+    # P1 (2026-06-19): openpyxl wb.save() 同步 IO, to_thread 释放 event loop.
+    output_path = await asyncio.to_thread(
+        template_generators[request.template_type], df_balances
+    )
 
     return WorkbookGenerateResponse(
         file_path=str(output_path),
@@ -362,7 +366,8 @@ async def generate_audit_notes_batch(
         company_name=project.company_name,
         fiscal_year=project.fiscal_year,
     )
-    gen.write_audit_notes_sheet(candidate, notes_payload)
+    # P1 (2026-06-19): openpyxl wb.save() 同步 IO, to_thread 释放 event loop.
+    await asyncio.to_thread(gen.write_audit_notes_sheet, candidate, notes_payload)
 
     return AuditNoteBatchResponse(
         workbook_file=candidate.name,

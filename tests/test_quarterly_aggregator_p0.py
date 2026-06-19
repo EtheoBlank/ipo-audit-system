@@ -4,6 +4,8 @@
   - aggregator 排除 is_prior_year=True 的事件
   - aggregator 排除 review_status='ignored' 的事件
   - 正常事件全纳入
+  - 同季度事件被聚合
+  - 空窗口返回空
 """
 from __future__ import annotations
 
@@ -25,10 +27,14 @@ os.environ.setdefault("AUDIT_LOG_WRITE_ONLY", "false")
 
 from app.core.database import Base  # noqa: E402
 from app.models.db_models import (  # noqa: E402
+    SentimentDailyBriefing,
     SentimentEvent,
     SentimentQuarterlyReport,
 )
-from app.services.sentiment.quarterly.aggregator import aggregate_window  # noqa: E402
+from app.services.sentiment.quarterly.aggregator import (  # noqa: E402
+    aggregate_window,
+    lock_references,
+)
 
 
 # ============================================================
@@ -79,6 +85,7 @@ def _mk_event(
     publish_date="2024-02-15",
     is_prior_year=False,
     review_status="pending",
+    content_text="",
 ):
     return SentimentEvent(
         project_id=project_id,
@@ -86,9 +93,20 @@ def _mk_event(
         title=f"事件{code}",
         url=f"http://x/{code}",
         publish_date=publish_date,
+        content_text=content_text or f"事件{code}的内容",
         content_hash=f"hash_{code}",
         is_prior_year=is_prior_year,
         review_status=review_status,
+    )
+
+
+def _mk_briefing(code, project_id=1, briefing_date="2024-02-15"):
+    return SentimentDailyBriefing(
+        project_id=project_id,
+        briefing_date=briefing_date,
+        title=f"简报{code}",
+        ai_summary=f"这是简报{code}的摘要",
+        event_count=1,
     )
 
 
@@ -104,8 +122,8 @@ class TestAggregatorFilters:
     """
 
     @pytest.mark.asyncio
-    async def test_aggregator_excludes_prior_year(self, session, report):
-        """is_prior_year=True 的事件被排除."""
+    async def test_aggregate_window_excludes_prior_year(self, session, report):
+        """is_prior_year=True 事件被排除."""
         session.add(_mk_event("A"))  # 正常, 应纳入
         session.add(_mk_event("B", is_prior_year=True))  # 上年同期, 排除
         session.add(_mk_event("C"))  # 正常, 应纳入
@@ -119,8 +137,8 @@ class TestAggregatorFilters:
         assert len(events) == 2
 
     @pytest.mark.asyncio
-    async def test_aggregator_excludes_ignored(self, session, report):
-        """review_status='ignored' 的事件被排除."""
+    async def test_aggregate_window_excludes_ignored(self, session, report):
+        """review_status='ignored' 事件被排除."""
         session.add(_mk_event("D", review_status="ignored"))  # 审计师剔除
         session.add(_mk_event("E", review_status="pending"))  # 正常
         session.add(_mk_event("F", review_status="verified"))  # 已核实
@@ -134,7 +152,7 @@ class TestAggregatorFilters:
         assert len(events) == 2
 
     @pytest.mark.asyncio
-    async def test_aggregator_includes_normal(self, session, report):
+    async def test_aggregate_window_includes_normal(self, session, report):
         """正常事件 (is_prior_year=False + review_status != ignored) 全纳入."""
         session.add(_mk_event("G", review_status="pending"))
         session.add(_mk_event("H", review_status="verified"))
@@ -145,3 +163,80 @@ class TestAggregatorFilters:
         assert len(events) == 3
         codes = sorted([e.title for e in events])
         assert codes == ["事件G", "事件H", "事件I"]
+
+    @pytest.mark.asyncio
+    async def test_aggregate_window_groups_by_quarter(self, session, report):
+        """同季度事件被聚合, 不同日期都进入同一窗口."""
+        # Q1 窗口: 2024-01-01 ~ 2024-03-31
+        session.add(_mk_event("JAN", publish_date="2024-01-15"))
+        session.add(_mk_event("FEB", publish_date="2024-02-20"))
+        session.add(_mk_event("MAR", publish_date="2024-03-25"))
+        # 边界: 窗口外 (4月) 不应纳入
+        session.add(_mk_event("APR", publish_date="2024-04-05"))
+        # 边界: 上年末 (去年12月) 不应纳入
+        session.add(_mk_event("DEC_LAST_YEAR", publish_date="2023-12-31"))
+        await session.commit()
+
+        _briefings, events = await aggregate_window(session, report)
+        titles = [e.title for e in events]
+        # 3 个 Q1 内的事件应全部进入
+        assert "事件JAN" in titles
+        assert "事件FEB" in titles
+        assert "事件MAR" in titles
+        assert len(events) == 3, f"窗口外事件被错误纳入: {titles}"
+
+    @pytest.mark.asyncio
+    async def test_aggregate_window_empty_returns_empty(self, session, report):
+        """无事件 / 全部被排除 → 返回 ([], [])."""
+        # 没有任何事件
+        briefings, events = await aggregate_window(session, report)
+        assert briefings == []
+        assert events == []
+
+        # 全部 prior_year / ignored → 也应返回空
+        session.add(_mk_event("P", is_prior_year=True))
+        session.add(_mk_event("I", review_status="ignored"))
+        await session.commit()
+
+        briefings, events = await aggregate_window(session, report)
+        assert briefings == []
+        assert events == []
+
+    @pytest.mark.asyncio
+    async def test_aggregate_window_includes_briefings_in_range(self, session, report):
+        """简报按 briefing_date 落在窗口内, 全纳入 (无 ignored 字段)."""
+        session.add(_mk_briefing("B1", briefing_date="2024-01-10"))
+        session.add(_mk_briefing("B2", briefing_date="2024-03-30"))
+        # 窗口外
+        session.add(_mk_briefing("OUT", briefing_date="2024-04-01"))
+        await session.commit()
+
+        briefings, _events = await aggregate_window(session, report)
+        assert len(briefings) == 2
+        # 升序
+        assert briefings[0].title == "简报B1"
+        assert briefings[1].title == "简报B2"
+
+
+class TestLockReferences:
+    """lock_references 把 briefing/event id 写回 report (JSON 快照)."""
+
+    @pytest.mark.asyncio
+    async def test_lock_writes_ids_json(self, session, report):
+        """把 id 序列化成 JSON 写回 report 字段."""
+        # 不同 briefing_date 避开 (project_id, briefing_date) 唯一约束
+        b1 = _mk_briefing("B1", briefing_date="2024-02-10")
+        b2 = _mk_briefing("B2", briefing_date="2024-02-20")
+        e1 = _mk_event("E1", publish_date="2024-02-15")
+        session.add_all([b1, b2, e1])
+        await session.commit()
+        await session.refresh(b1)
+        await session.refresh(b2)
+        await session.refresh(e1)
+
+        await lock_references(session, report, [b1, b2], [e1])
+
+        import json
+
+        assert json.loads(report.referenced_briefing_ids_json) == [b1.id, b2.id]
+        assert json.loads(report.referenced_event_ids_json) == [e1.id]

@@ -187,9 +187,12 @@ class InventoryAgingEngine:
         industry: str = "默认",
         sell_cost_rate: float = 0.05,
         completion_cost_rate: float = 0.0,
+        manual_completion_cost: Optional[dict[str, float]] = None,
     ):
         # ``sell_cost_rate`` = 估计销售费用 + 税费 占含税收入的比例（默认 5%）
         # ``completion_cost_rate`` = 至完工成本占产成品售价的比例（原材料/在产品 NRV 用）
+        # P0-B (2026-06-19): 完工成本是绝对值, 与 NRV 单价线性相关不合理.
+        # 增加 ``manual_completion_cost`` {material_code: 至完工单价} 优先于 rate 模型.
         self.industry = industry
         self.rates = DEFAULT_AGING_RATES.get(industry) or DEFAULT_AGING_RATES["默认"]
         # 包含匹配
@@ -200,6 +203,7 @@ class InventoryAgingEngine:
                     break
         self.sell_cost_rate = sell_cost_rate
         self.completion_cost_rate = completion_cost_rate
+        self.manual_completion_cost = dict(manual_completion_cost or {})
 
     @classmethod
     def is_completion_category(cls, category: Optional[str]) -> bool:
@@ -410,6 +414,7 @@ class InventoryAgingEngine:
         prior_qty: Optional[dict[str, float]] = None,
         manual_nrv: Optional[dict[str, float]] = None,
         prior_period_end: Optional[dict[str, datetime]] = None,
+        manual_completion_cost: Optional[dict[str, float]] = None,
     ) -> ImpairmentResult:
         """
         :param movements: 收发存行（ORM 对象或 dict）。
@@ -421,11 +426,17 @@ class InventoryAgingEngine:
         :param manual_nrv: {material_code: 手工 NRV 单价}（覆盖销售清单结果）。
         :param prior_period_end: {material_code: 上年期末日 datetime}（可选）—
             用于精确计算期初库龄。为 None 时退回 period_end - 365 天保守兜底。
+        :param manual_completion_cost: {material_code: 至完工成本单价}（可选）—
+            P0-B (2026-06-19): 完工成本是绝对值, 优先于 completion_cost_rate
+            (nrv_unit * rate) 的简化模型. 缺失物料沿用 rate 模型.
         """
         prior_impairments = prior_impairments or {}
         prior_qty = prior_qty or {}
         manual_nrv = manual_nrv or {}
         sales_records = sales_records or []
+        # P0-B: 合并 __init__ 传参与 compute 传参, 后者覆盖前者
+        if manual_completion_cost is not None:
+            self.manual_completion_cost = {**self.manual_completion_cost, **manual_completion_cost}
 
         # P1 性能 (2026-06-19): O(N×M) → O(N+M) — 一次性按 product_code 分桶
         # 旧版每物料调用 nrv_unit_price_from_sales 全表扫 sales_records,
@@ -564,9 +575,20 @@ class InventoryAgingEngine:
             if nrv_unit is not None:
                 est_sell_cost_unit = nrv_unit * self.sell_cost_rate
                 # 完工口径：原材料/在产品 NRV 还要扣"至完工的加工成本"
-                if self.is_completion_category(category) and self.completion_cost_rate > 0:
-                    completion_cost_unit = nrv_unit * self.completion_cost_rate
-                    method_label = "nrv-完工口径"
+                # P0-B (2026-06-19): 完工成本是绝对值, 优先 manual_completion_cost[code],
+                # 否则回退到行业默认 (nrv * completion_cost_rate, 简化模型).
+                if self.is_completion_category(category):
+                    manual_cost = self.manual_completion_cost.get(code)
+                    if manual_cost is not None:
+                        completion_cost_unit = float(manual_cost)
+                        method_label = "nrv-完工口径(手工)"
+                    elif self.completion_cost_rate > 0:
+                        # 简化模型: 完工成本 = NRV * rate, 已知与 NRV 线性相关的局限
+                        completion_cost_unit = nrv_unit * self.completion_cost_rate
+                        method_label = "nrv-完工口径"
+                    else:
+                        completion_cost_unit = 0.0
+                        method_label = "nrv-出售口径"
                 else:
                     completion_cost_unit = 0.0
                     method_label = "nrv-出售口径"
