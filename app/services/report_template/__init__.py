@@ -441,10 +441,15 @@ class ReportTemplateService:
         return total, items
 
     @staticmethod
-    async def get(db: AsyncSession, template_id: int) -> Optional[ReportTemplate]:
-        return (
-            await db.execute(select(ReportTemplate).where(ReportTemplate.id == template_id))
-        ).scalar_one_or_none()
+    async def get(
+        db: AsyncSession,
+        template_id: int,
+        firm_id: Optional[int] = None,
+    ) -> Optional[ReportTemplate]:
+        stmt = select(ReportTemplate).where(ReportTemplate.id == template_id)
+        if firm_id is not None:
+            stmt = stmt.where(ReportTemplate.firm_id == firm_id)
+        return (await db.execute(stmt)).scalar_one_or_none()
 
     @staticmethod
     async def create(
@@ -493,12 +498,13 @@ class ReportTemplateService:
     async def update(
         db: AsyncSession,
         *,
+        firm_id: Optional[int] = None,
         template_id: int,
         template_name: Optional[str] = None,
         description: Optional[str] = None,
         is_active: Optional[bool] = None,
     ) -> Optional[ReportTemplate]:
-        tpl = await ReportTemplateService.get(db, template_id)
+        tpl = await ReportTemplateService.get(db, template_id, firm_id=firm_id)
         if tpl is None:
             return None
         if template_name is not None:
@@ -513,8 +519,8 @@ class ReportTemplateService:
         return tpl
 
     @staticmethod
-    async def delete(db: AsyncSession, template_id: int) -> bool:
-        tpl = await ReportTemplateService.get(db, template_id)
+    async def delete(db: AsyncSession, template_id: int, firm_id: Optional[int] = None) -> bool:
+        tpl = await ReportTemplateService.get(db, template_id, firm_id=firm_id)
         if tpl is None:
             return False
         await db.delete(tpl)
@@ -525,6 +531,7 @@ class ReportTemplateService:
     async def render(
         db: AsyncSession,
         *,
+        firm_id: Optional[int] = None,
         template_id: int,
         context: Dict[str, Any],
         project_id: Optional[int] = None,
@@ -533,7 +540,7 @@ class ReportTemplateService:
         user_display: Optional[str] = None,
         strict: bool = False,
     ) -> Tuple[bytes, str, ReportRenderHistory]:
-        tpl = await ReportTemplateService.get(db, template_id)
+        tpl = await ReportTemplateService.get(db, template_id, firm_id=firm_id)
         if tpl is None:
             raise ValueError(f"模板 id={template_id} 不存在")
         if not tpl.is_active:

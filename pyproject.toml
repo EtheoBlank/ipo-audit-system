@@ -87,3 +87,9 @@ target-version = "py310"
 [tool.mypy]
 python_version = "3.10"
 strict = true
+
+# P0 修复: pytest-asyncio 默认 strict 模式, async def test 没加 @pytest.mark.asyncio
+# 会被静默跳过 (false negative). 改 auto 后所有 async def test 自动识别.
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

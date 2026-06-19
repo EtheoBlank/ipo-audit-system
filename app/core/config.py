@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     CSRC_URL: str = "http://www.csrc.gov.cn"
     SSE_URL: str = "http://www.sse.com.cn"
     SZSE_URL: str = "http://www.szse.cn"
+    # 巨潮资讯 (cninfo) — 统一聚合 CSRC/SSE/SZSE 监管公告, 公开接口
+    CNINFO_URL: str = "http://www.cninfo.com.cn"
+    CNINFO_QUERY_PATH: str = "/new/hisAnnouncement/query"
 
     # 法律法规来源 URL — 自动抓取官方政策文件用
     # 这些站点结构经常变，URL 模板放在配置里方便后续微调

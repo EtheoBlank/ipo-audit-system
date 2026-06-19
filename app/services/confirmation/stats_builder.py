@@ -382,15 +382,17 @@ class ConfirmationStatsBuilder:
         journals: list[ChronologicalAccount],
         account_codes: set[str],
     ) -> dict[str, dict[str, Any]]:
-        """按辅助核算聚合对方 + 本期发生额 + 期末余额。
+        """按辅助核算聚合对方 + 本期发生额 + 期末余额.
 
-        P0 修复:
-          - AccountBalance 没有 auxiliary_accounting 字段, 只在 journals 中找对方
-          - AccountBalance 提供按 account_code 级别的期末余额作为参考
+        P0 修复 (2026-06-17):
+          - 旧版用本期发生额近似 ending_balance → 多年挂账函证为 0
+          - 新版: 从 AccountBalance 拿 account_code 级别 ending_balance,
+                  按本期发生额比例分摊到对方级. 无本期活动的 code → "(未指定对方)" 桶.
         """
         by_party: dict[str, dict[str, Any]] = {}
+        UNASSIGNED = "(未指定对方)"
 
-        # 1) 从 AccountBalance 拿 account_code -> 期末余额 的映射 (供后续 sum 兜底)
+        # 1) 从 AccountBalance 拿 account_code -> 期末余额 的映射
         balance_by_code: dict[str, float] = {}
         for b in balances:
             if b.account_code in account_codes:
@@ -398,37 +400,80 @@ class ConfirmationStatsBuilder:
                     b.ending_balance or 0
                 )
 
-        # 2) 从序时账按对方聚合
+        # 2) 从序时账按 (party_key, account_code) 聚合本期发生额
+        per_pc: dict[tuple[str, str], dict[str, Any]] = {}
         for j in journals:
             if j.account_code not in account_codes:
                 continue
             aux = (j.auxiliary_accounting or "").strip()
-            if not aux:
-                continue
-            key = self._normalize_party_name(aux)
-            if key not in by_party:
-                by_party[key] = {
-                    "party_name": aux,
-                    "party_id": aux,
+            party_key = self._normalize_party_name(aux) if aux else UNASSIGNED
+            party_name = aux if aux else UNASSIGNED
+            pc_key = (party_key, j.account_code)
+            if pc_key not in per_pc:
+                per_pc[pc_key] = {
+                    "party_name": party_name,
+                    "debit": 0.0,
+                    "credit": 0.0,
+                    "activity_abs": 0.0,
+                    "account_name": j.account_name or "",
+                }
+            entry = per_pc[pc_key]
+            d = float(j.debit_amount or 0)
+            c = float(j.credit_amount or 0)
+            entry["debit"] += d
+            entry["credit"] += c
+            entry["activity_abs"] += abs(d - c)
+
+        # 3) 算每个 account_code 的总活动量 (用于比例分摊)
+        total_activity_by_code: dict[str, float] = {}
+        for (_pk, code), data in per_pc.items():
+            total_activity_by_code[code] = total_activity_by_code.get(code, 0.0) + data["activity_abs"]
+
+        # 4) 分摊 ending_balance 到对方级 + 合成 by_party
+        for (party_key, code), data in per_pc.items():
+            if party_key not in by_party:
+                by_party[party_key] = {
+                    "party_name": data["party_name"],
+                    "party_id": data["party_name"],
                     "ending_balance": 0.0,
                     "debit": 0.0,
                     "credit": 0.0,
                     "account_codes": set(),
                     "account_names": set(),
                 }
-            entry = by_party[key]
-            entry["debit"] += j.debit_amount or 0
-            entry["credit"] += j.credit_amount or 0
-            entry["account_codes"].add(j.account_code)
-            entry["account_names"].add(j.account_name)
-            # ending_balance 用对方级别的余额 (P0: 简化 - 真实场景应从科目余额表的对方辅助核算取)
-            # 这里用本期发生额近似 (贷方 - 借方) for 应收/应付
-            if j.account_code in ("1122", "1123", "1221", "2202", "2203", "2241"):
-                # 应收类余额 = 借方 - 贷方, 应付类余额 = 贷方 - 借方
-                if j.account_code in ("1122", "1123", "1221"):
-                    entry["ending_balance"] = entry["debit"] - entry["credit"]
-                else:
-                    entry["ending_balance"] = entry["credit"] - entry["debit"]
+            entry = by_party[party_key]
+            entry["debit"] += data["debit"]
+            entry["credit"] += data["credit"]
+            entry["account_codes"].add(code)
+            entry["account_names"].add(data["account_name"])
+            code_balance = balance_by_code.get(code, 0.0)
+            code_total = total_activity_by_code.get(code, 0.0)
+            if code_total > 0:
+                entry["ending_balance"] += code_balance * (data["activity_abs"] / code_total)
+            # code_total == 0 表示该科目本期无活动 (长年挂账),
+            # 此时余额不会被任何对方分到, 见下方残余处理
+
+        # 5) 残余: 本期无活动的科目余额 → 落到 "(未指定对方)" 桶
+        assigned_by_code: dict[str, float] = {}
+        for (_pk, code), data in per_pc.items():
+            share = data["activity_abs"] / max(1e-9, total_activity_by_code.get(code, 0.0))
+            assigned_by_code[code] = assigned_by_code.get(code, 0.0) + balance_by_code.get(code, 0.0) * share
+        for code, total_balance in balance_by_code.items():
+            residual = total_balance - assigned_by_code.get(code, 0.0)
+            if abs(residual) < 0.01:
+                continue
+            if UNASSIGNED not in by_party:
+                by_party[UNASSIGNED] = {
+                    "party_name": UNASSIGNED,
+                    "party_id": UNASSIGNED,
+                    "ending_balance": 0.0,
+                    "debit": 0.0,
+                    "credit": 0.0,
+                    "account_codes": set(),
+                    "account_names": set(),
+                }
+            by_party[UNASSIGNED]["ending_balance"] += residual
+            by_party[UNASSIGNED]["account_codes"].add(code)
 
         return by_party
 

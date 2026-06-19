@@ -8,11 +8,9 @@ from typing import Iterable, Optional, Sequence
 import logging
 
 from app.core.config import settings
+from app.models.db.account_audit import DEFAULT_LONG_TERM_ASSET_PREFIXES
 
 logger = logging.getLogger(__name__)
-
-# 长期资产判定 — 与 account_audit 服务共用同一份默认前缀清单
-from app.models.db.account_audit import DEFAULT_LONG_TERM_ASSET_PREFIXES
 
 
 def _csv_prefixes(raw: Optional[str]) -> list[str]:
@@ -335,14 +333,24 @@ class WorkbookGenerator:
         wb.save(output_path)
         return output_path
 
-    def generate_cash_flow(self, chronological_accounts: pd.DataFrame) -> Path:
+    def generate_cash_flow(
+        self,
+        chronological_accounts: pd.DataFrame,
+        account_balances: Optional[pd.DataFrame] = None,
+    ) -> Path:
         """Generate cash flow statement workbook (现金流量表).
 
+        P0 重写 (2026-06-17): 之前完全空表.
+        实现: 从序时账筛 1001/1002/1012 (现金及现金等价物) 行, 按 voucher_no 对方科目
+        + summary 关键词分类到 经营/投资/筹资 三大活动.
+        期末现金从 account_balances (可选) 取 1001/1002/1012 ending_balance 之和.
+
         Args:
-            chronological_accounts: DataFrame with chronological account data
+            chronological_accounts: 序时账 (含 account_code, debit_amount, credit_amount, summary)
+            account_balances: 科目余额表 (含 account_code, ending_balance, beginning_balance) — 可选
 
         Returns:
-            Path to generated Excel file
+            Path to 现金流量表 .xlsx
         """
         wb = Workbook()
         ws = wb.active
@@ -350,7 +358,6 @@ class WorkbookGenerator:
 
         styles = self._get_styles()
 
-        # Title
         ws.merge_cells("A1:E1")
         title_cell = ws["A1"]
         title_cell.value = f"{self.company_name} - 现金流量表 ({self.fiscal_year}年度)"
@@ -358,22 +365,200 @@ class WorkbookGenerator:
         title_cell.alignment = styles["center_align"]
         ws.row_dimensions[1].height = 30
 
-        # Headers
         headers = ["项目", "行次", "本期金额", "上期金额", "备注"]
         for col, header in enumerate(headers, 1):
             ws.cell(row=2, column=col, value=header)
             self._apply_header_style(ws, 2, col)
         ws.row_dimensions[2].height = 25
 
-        # P0 正确性修复: 之前完全空表. 现金流量表需要从序时账/科目余额表
-        # 按经营/投资/筹资三大活动归集, 暂未实现完整分类逻辑, 写一行占位
-        logger.warning(
-            "generate_cash_flow: 现金流量表分类 (经营/投资/筹资) 尚未实现, 暂写占位行"
+        # 1) 分类关键词 — 用于从凭证摘要识别现金流活动
+        # 投资活动按 in/out 分开 — 注意 "购建" 会同时匹配 "购建固定" (out) 和 "处置固定" (in) 子串冲突
+        # 投资 out 关键词放在前面, 处置/收回 关键词放在 in
+        investing_in_kw = (
+            "收回投资", "处置固定", "处置无形", "处置子公司",
+            "取得投资收", "取得投资收益",
         )
-        ws.cell(row=3, column=1, value="(经营/投资/筹资活动分类尚未实现, 需从序时账按凭证摘要+对方科目归集)")
+        investing_out_kw = (
+            "购建固定", "购建无形", "购建", "在建工程", "投资支付", "长期股权",
+        )
+        # 筹资活动 — 注意顺序: in 先 out 后, 防 "取得借款" 吃掉 "偿还借款"
+        financing_in_kw = ("取得借款", "银行借款", "吸收投资", "增资", "实收资本", "发行股")
+        financing_out_kw = ("偿还借款", "偿还债务", "分红", "股利", "利润分配", "偿付利息")
+        operating_inflow_kw = ("销售商品", "提供劳务", "收到货款", "税费返还", "其他经营收")
+        operating_outflow_kw = ("购买商品", "接受劳务", "支付货款", "支付给职工", "工资薪金", "各项税费")
+
+        # 2) 从序时账筛现金及现金等价物行 (1001/1002/1012)
+        cash_codes = {"1001", "1002", "1012"}
+        operating_in = 0.0
+        operating_out = 0.0
+        investing_in = 0.0
+        investing_out = 0.0
+        financing_in = 0.0
+        financing_out = 0.0
+        classified_count = 0
+        unclassified_count = 0
+
+        if chronological_accounts is not None and not chronological_accounts.empty:
+            for _, row in chronological_accounts.iterrows():
+                code = str(row.get("account_code", "") or "").strip()
+                if code not in cash_codes:
+                    continue
+                summary = str(row.get("summary", "") or "")
+                debit = float(row.get("debit_amount", 0) or 0)
+                credit = float(row.get("credit_amount", 0) or 0)
+                # 现金行: debit 表示现金流入, credit 表示现金流出
+                # (对方科目在另一条记录, 这里按 summary 推断)
+                classified = True
+                if any(kw in summary for kw in investing_in_kw):
+                    investing_in += debit
+                elif any(kw in summary for kw in investing_out_kw):
+                    investing_out += credit
+                elif any(kw in summary for kw in financing_in_kw):
+                    financing_in += debit
+                elif any(kw in summary for kw in financing_out_kw):
+                    financing_out += credit
+                elif any(kw in summary for kw in operating_inflow_kw):
+                    operating_in += debit
+                elif any(kw in summary for kw in operating_outflow_kw):
+                    operating_out += credit
+                else:
+                    # 兜底: 归入经营活动 (按借贷方向)
+                    operating_in += debit
+                    operating_out += credit
+                    classified = False
+                    unclassified_count += 1
+                if classified:
+                    classified_count += 1
+
+        # 3) 期末/期初现金及现金等价物余额 (从 account_balances)
+        ending_cash = 0.0
+        beginning_cash = 0.0
+        if account_balances is not None and not account_balances.empty:
+            cash_ab = account_balances[
+                account_balances["account_code"].astype(str).str.strip().isin(cash_codes)
+            ]
+            ending_cash = float(cash_ab["ending_balance"].sum()) if "ending_balance" in cash_ab else 0.0
+            beginning_cash = float(cash_ab["beginning_balance"].sum()) if "beginning_balance" in cash_ab else 0.0
+
+        operating_net = operating_in - operating_out
+        investing_net = investing_in - investing_out
+        financing_net = financing_in - financing_out
+        net_change = operating_net + investing_net + financing_net
+        # 净增加额 = 期末 - 期初 (校验)
+        net_change_check = ending_cash - beginning_cash if (account_balances is not None) else net_change
+
+        # 4) 写表
+        row_idx = 3
+        # 经营活动
+        ws.cell(row=row_idx, column=1, value="一、经营活动产生的现金流量")
+        ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+        row_idx += 1
+        for label, val in [
+            ("销售商品、提供劳务收到的现金", operating_in),
+        ]:
+            ws.cell(row=row_idx, column=1, value=label)
+            ws.cell(row=row_idx, column=3, value=round(val, 2))
+            for col in range(1, 6):
+                self._apply_data_style(ws, row_idx, col, col in [3, 4])
+            row_idx += 1
+        ws.cell(row=row_idx, column=1, value="经营活动现金流入小计")
+        ws.cell(row=row_idx, column=3, value=round(operating_in, 2))
+        ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+        row_idx += 1
+        for label, val in [
+            ("购买商品、接受劳务支付的现金", operating_out),
+        ]:
+            ws.cell(row=row_idx, column=1, value=label)
+            ws.cell(row=row_idx, column=3, value=round(val, 2))
+            for col in range(1, 6):
+                self._apply_data_style(ws, row_idx, col, col in [3, 4])
+            row_idx += 1
+        ws.cell(row=row_idx, column=1, value="经营活动现金流出小计")
+        ws.cell(row=row_idx, column=3, value=round(operating_out, 2))
+        ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+        row_idx += 1
+        ws.cell(row=row_idx, column=1, value="经营活动产生的现金流量净额")
+        ws.cell(row=row_idx, column=3, value=round(operating_net, 2))
+        ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+        row_idx += 1
+
+        # 投资活动
+        ws.cell(row=row_idx, column=1, value="二、投资活动产生的现金流量")
+        ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+        row_idx += 1
+        ws.cell(row=row_idx, column=1, value="投资活动现金流入小计")
+        ws.cell(row=row_idx, column=3, value=round(investing_in, 2))
+        ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+        row_idx += 1
+        ws.cell(row=row_idx, column=1, value="投资活动现金流出小计")
+        ws.cell(row=row_idx, column=3, value=round(investing_out, 2))
+        ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+        row_idx += 1
+        ws.cell(row=row_idx, column=1, value="投资活动产生的现金流量净额")
+        ws.cell(row=row_idx, column=3, value=round(investing_net, 2))
+        ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+        row_idx += 1
+
+        # 筹资活动
+        ws.cell(row=row_idx, column=1, value="三、筹资活动产生的现金流量")
+        ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+        row_idx += 1
+        ws.cell(row=row_idx, column=1, value="筹资活动现金流入小计")
+        ws.cell(row=row_idx, column=3, value=round(financing_in, 2))
+        ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+        row_idx += 1
+        ws.cell(row=row_idx, column=1, value="筹资活动现金流出小计")
+        ws.cell(row=row_idx, column=3, value=round(financing_out, 2))
+        ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+        row_idx += 1
+        ws.cell(row=row_idx, column=1, value="筹资活动产生的现金流量净额")
+        ws.cell(row=row_idx, column=3, value=round(financing_net, 2))
+        ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+        row_idx += 1
+
+        # 现金净增加额
+        ws.cell(row=row_idx, column=1, value="四、现金及现金等价物净增加额")
+        ws.cell(row=row_idx, column=3, value=round(net_change, 2))
+        ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+        row_idx += 1
+
+        # 期初/期末 (从 account_balances 取)
+        if account_balances is not None:
+            ws.cell(row=row_idx, column=1, value="加：期初现金及现金等价物余额")
+            ws.cell(row=row_idx, column=3, value=round(beginning_cash, 2))
+            ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+            row_idx += 1
+            ws.cell(row=row_idx, column=1, value="五、期末现金及现金等价物余额")
+            ws.cell(row=row_idx, column=3, value=round(ending_cash, 2))
+            ws.cell(row=row_idx, column=1).font = styles["subheader_font"]
+            row_idx += 1
+
+        # 校验注释
+        if account_balances is not None and abs(net_change - net_change_check) > 0.01:
+            ws.cell(row=row_idx, column=5, value=f"⚠ 净增加额({net_change:.2f}) ≠ 期末-期初({net_change_check:.2f})")
+            row_idx += 1
+        if unclassified_count:
+            ws.cell(
+                row=row_idx,
+                column=5,
+                value=f"⚠ {unclassified_count} 条现金流水按摘要兜底归入经营活动, 请复核",
+            )
+            row_idx += 1
+
+        col_widths = [35, 10, 18, 18, 25]
+        for idx, width in enumerate(col_widths, 1):
+            ws.column_dimensions[chr(64 + idx)].width = width
 
         output_path = self.output_dir / f"现金流量表_{self.fiscal_year}.xlsx"
         wb.save(output_path)
+        logger.info(
+            "generate_cash_flow: 经营净额=%.2f 投资净额=%.2f 筹资净额=%.2f 净增加=%.2f 期末=%.2f",
+            operating_net,
+            investing_net,
+            financing_net,
+            net_change,
+            ending_cash,
+        )
         return output_path
 
     def generate_trial_balance(

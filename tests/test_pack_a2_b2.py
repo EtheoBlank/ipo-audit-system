@@ -140,7 +140,8 @@ class TestLegacyApisImport:
         """projects 的写端点应至少 import 了鉴权依赖."""
         from app.api import projects
 
-        src = open(projects.__file__, encoding="utf-8").read()
+        with open(projects.__file__, encoding="utf-8") as fh:
+            src = fh.read()
         assert "get_current_user" in src or "get_current_user_optional" in src
         assert "ensure_project_in_firm" in src
         assert "scope_projects_to_firm" in src

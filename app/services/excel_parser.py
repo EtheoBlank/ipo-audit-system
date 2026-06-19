@@ -7,6 +7,22 @@ from fastapi import UploadFile
 from app.core.config import settings
 
 
+def _safe_temp_path(upload: UploadFile) -> Path:
+    """P0 安全修复 (2026-06-18): 统一 sanitize 上传文件名, 防路径穿越.
+
+    upload.filename 用户可控, 含 '../../../etc/passwd' 可越界. 取 .name 拿最后一段,
+    再用 is_relative_to 校验 temp_path 必须落在 settings.UPLOAD_DIR 内.
+    4 个 parse_* 方法 (科目余额表 / 序时账 / 银行对账单 / CSV) 共用.
+    """
+    safe_name = Path(upload.filename or "upload.xlsx").name
+    if not safe_name or safe_name in (".", ".."):
+        raise ValueError(f"非法的文件名: {upload.filename!r}")
+    temp_path = settings.UPLOAD_DIR / f"temp_{safe_name}"
+    if not temp_path.resolve().is_relative_to(settings.UPLOAD_DIR.resolve()):
+        raise ValueError(f"非法的文件名: {upload.filename!r}")
+    return temp_path
+
+
 class ExcelParser:
     """Parse Excel files for audit data."""
 
@@ -16,12 +32,7 @@ class ExcelParser:
 
         Expected columns: 科目编码, 科目名称, 期初余额, 借方发生额, 贷方发生额, 期末余额, 余额方向
         """
-        # P0 安全修复: sanitize 文件名, 防路径穿越 (upload.filename 用户可控, 含 ../ 可越界)
-        safe_name = Path(file.filename or "upload.xlsx").name
-        temp_path = settings.UPLOAD_DIR / f"temp_{safe_name}"
-        # 防御性校验: 解析后必须在 UPLOAD_DIR 内
-        if not temp_path.resolve().is_relative_to(settings.UPLOAD_DIR.resolve()):
-            raise ValueError(f"非法的文件名: {file.filename}")
+        temp_path = _safe_temp_path(file)
 
         # Save uploaded file
         content = await file.read()
@@ -70,7 +81,8 @@ class ExcelParser:
 
         Expected columns: 凭证日期, 凭证号, 科目编码, 科目名称, 借方金额, 贷方金额, 摘要, 辅助核算
         """
-        temp_path = settings.UPLOAD_DIR / f"temp_{file.filename}"
+        # P0 安全: 统一走 _safe_temp_path
+        temp_path = _safe_temp_path(file)
 
         content = await file.read()
         with open(temp_path, "wb") as f:
@@ -109,7 +121,8 @@ class ExcelParser:
 
         Expected columns: 对账单日期, 凭证号, 描述, 借方金额, 贷方金额, 余额, 银行账号
         """
-        temp_path = settings.UPLOAD_DIR / f"temp_{file.filename}"
+        # P0 安全
+        temp_path = _safe_temp_path(file)
 
         content = await file.read()
         with open(temp_path, "wb") as f:
@@ -144,7 +157,8 @@ class ExcelParser:
     @staticmethod
     async def parse_csv(file: UploadFile) -> pd.DataFrame:
         """Parse CSV file."""
-        temp_path = settings.UPLOAD_DIR / f"temp_{file.filename}"
+        # P0 安全
+        temp_path = _safe_temp_path(file)
 
         content = await file.read()
         with open(temp_path, "wb") as f:

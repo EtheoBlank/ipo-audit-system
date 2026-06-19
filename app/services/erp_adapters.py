@@ -52,6 +52,34 @@ class BaseERPAdapter(ABC):
         self.column_mappings: List[ERPColumnMapping] = []
         self.required_fields: List[str] = []
 
+    @staticmethod
+    def infer_balance_direction(account_code: Optional[str], ending_balance: float = 0.0) -> str:
+        """P0 修复: 按 account_code 前缀推导借贷方向.
+
+        旧版用 ending_balance >= 0 判断 → 负债 ending_balance 经常 > 0 被错判为"借".
+        中国会计准则科目编码:
+          - 1xxx 资产 (默认借方余额)
+          - 2xxx 负债 (默认贷方余额)
+          - 3xxx 所有者权益 (默认贷方余额)
+          - 4xxx 权益类调整 (实收资本/资本公积, 贷方余额)
+          - 5xxx 成本费用 (借方)
+          - 6xxx 收入 (贷方)
+          - 7xxx 损益类 (借方)
+        ending_balance 反号时 (备抵/反向), 方向反转.
+        """
+        if not account_code:
+            return "借"
+        code = str(account_code).strip()
+        if code.startswith("1"):  # 资产
+            return "借" if ending_balance >= 0 else "贷"
+        if code.startswith(("2", "3", "4")):  # 负债 / 权益
+            return "贷" if ending_balance >= 0 else "借"
+        if code.startswith("5"):  # 成本费用
+            return "借" if ending_balance >= 0 else "贷"
+        if code.startswith(("6", "7")):  # 收入 / 损益
+            return "贷" if ending_balance >= 0 else "借"
+        return "借"
+
     @abstractmethod
     def get_name(self) -> str:
         """返回ERP系统名称."""
@@ -230,11 +258,14 @@ class KingdeeCloudAdapter(BaseERPAdapter):
     def parse_account_balance(self, raw_data: pd.DataFrame) -> pd.DataFrame:
         df = self.map_columns(raw_data)
 
-        # 处理借贷方向 - 云星空用FAccountProperty或根据余额方向判断
-        if "ending_balance" in df.columns and "beginning_balance_cr" in df.columns:
-            # 根据余额方向判断借贷
+        # P0 修复: 借贷方向按 account_code 前缀推导 (BaseERPAdapter.infer_balance_direction)
+        # 旧版 ending_balance >= 0 → 负债 ending>0 误判为"借"
+        if "account_code" in df.columns:
             df["balance_direction"] = df.apply(
-                lambda row: "借" if row.get("ending_balance", 0) >= 0 else "贷", axis=1
+                lambda row: self.infer_balance_direction(
+                    row.get("account_code"), row.get("ending_balance", 0) or 0
+                ),
+                axis=1,
             )
         else:
             df["balance_direction"] = "借"

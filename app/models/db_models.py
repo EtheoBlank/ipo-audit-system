@@ -1126,6 +1126,8 @@ class KnowledgeBook(Base):
     # 嵌入元数据
     embedding_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     embedding_dim: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # TF-IDF 词表状态 (JSON: vocab + idf), 用于跨书共享词表
+    tfidf_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     indexed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

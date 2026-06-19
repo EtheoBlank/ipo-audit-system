@@ -52,16 +52,16 @@
 ### 业务逻辑错误
 - `app/services/team_management/__init__.py`: import 失败时整包不可用
 - `app/services/related_parties/__init__.py`: 同上
-- `app/services/audit_cycles/__init__.py` line 432: 月度递推 off-by-one (i=1 时 month 跳到上一年 12 月)
-- `app/services/audit_cycles/__init__.py` line 219: double_declining 月折旧率计算公式错 (24/life/12 实际是 0.27 元/月, 应 33 元/月)
-- `app/services/audit_cycles/__init__.py` line 181: PayrollReconciler discrepancy 公式用 50% 经验值永远 True
-- `app/services/confirmation/stats_builder.py` line 426: ending_balance 用本期发生额近似, 严重漏函证 (多年挂账函证为 0)
-- `app/services/confirmation/response_processor.py` line 130: AI 输出 response_status 无 enum 校验, 任意字符串入库
-- `app/services/sales_ledger/analyzer.py` line 280: _summary profit 没扣 return/discount/rebate, 毛利率被高估
-- `app/services/workbook_generator.py` line 281: cash_flow 仍是空表 (本轮只加了 warning 占位, 实际需重写)
-- `app/services/regulatory_scraper.py` line 44: CSRC URL 路径拼音乱码, 永远 404
-- `app/services/regulatory_scraper.py` line 84: SSE URL 拼接错, 永远 404
-- `app/services/regulatory_scraper.py` line 125: SZSE JSON 响应被当 HTML 用 BS4 解析, 永远 0 条
+- ~~`app/services/audit_cycles/__init__.py` line 432: 月度递推 off-by-one (i=1 时 month 跳到上一年 12 月)~~ ✅ 2026-06-17 修复
+- ~~`app/services/audit_cycles/__init__.py` line 219: double_declining 月折旧率计算公式错~~ ❌ 2026-06-17 经核实公式正确 (NBV*0.2/12 = NBV*2/life_months), 锁定为 regression guard
+- ~~`app/services/audit_cycles/__init__.py` line 181: PayrollReconciler discrepancy 公式用 50% 经验值永远 True~~ ✅ 2026-06-17 修复
+- ~~`app/services/confirmation/stats_builder.py` line 426: ending_balance 用本期发生额近似, 严重漏函证 (多年挂账函证为 0)~~ ✅ 2026-06-17 修复 — 改用 balance_by_code 按本期发生比例分摊到对方级, 无活动 → "(未指定对方)" 桶
+- ~~`app/services/confirmation/response_processor.py` line 130: AI 输出 response_status 无 enum 校验, 任意字符串入库~~ ✅ 2026-06-17 修复 — 加白名单 {match/partial/mismatch/reject/unclear} + _sanitize_response_status 静态方法
+- ~~`app/services/sales_ledger/analyzer.py` line 280: _summary profit 没扣 return/discount/rebate, 毛利率被高估~~ ✅ 2026-06-17 修复
+- ~~`app/services/workbook_generator.py` line 281: cash_flow 仍是空表~~ ✅ 2026-06-17 修复 — 完整重写, 加 account_balances 参数, 经营/投资/筹资三段 + 期末现金 + 校验
+- ~~`app/services/regulatory_scraper.py` line 44: CSRC URL 路径拼音乱码, 永远 404~~ ✅ 2026-06-17 修复 — 跳巨潮 (cninfo) 统一接口
+- ~~`app/services/regulatory_scraper.py` line 84: SSE URL 拼接错, 永远 404~~ ✅ 2026-06-17 修复 — 跳巨潮
+- ~~`app/services/regulatory_scraper.py` line 125: SZSE JSON 响应被当 HTML 用 BS4 解析, 永远 0 条~~ ✅ 2026-06-17 修复 — 巨潮 + 原 URL fallback 用 response.json()
 
 ### 性能 / 资源
 - `app/services/inventory/aging_engine.py` line 379: 100w 行 movements 内存峰值 1GB
@@ -71,9 +71,9 @@
 - `app/services/erp_adapters.py` line 263: 重复列名 rename 抛 ValueError
 
 ### 业务口径
-- `app/services/erp_adapters.py` line 236: balance_direction 推导错, 所有负债 ending>0 判为 '借'
-- `app/services/trial_balance_engine.py` line 46: current_period 没按方向过滤 sum
-- `app/services/knowledge_base/chunker.py` line 92: 章节切换时 _flush 用旧 chapter, 第二个章节首段被标旧章节
+- ~~`app/services/erp_adapters.py` line 236: balance_direction 推导错, 所有负债 ending>0 判为 '借'~~ ✅ 2026-06-17 修复 — 加 BaseERPAdapter.infer_balance_direction 按 account_code 前缀 (1=资产借/2=负债贷/3=权益贷/...) 推导
+- ~~`app/services/trial_balance_engine.py` line 46: current_period 没按方向过滤 sum~~ ✅ 2026-06-17 修复 — current_period debit/credit 按 balance_direction 过滤求和
+- `app/services/knowledge_base/chunker.py` line 92: 章节切换时 _flush 用旧 chapter ❌ 2026-06-17 经实测当前实现正确 (第二个章节首段不会被标旧章节), 保持不变
 
 ### 模型/数据
 - `app/models/db/db_models.py` (~30 处): 所有 monetary 字段 Float → Numeric(20, 2) — **需 Alembic DB 迁移**
