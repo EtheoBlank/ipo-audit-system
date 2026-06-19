@@ -66,6 +66,7 @@ from app.api._helpers import get_or_404
 from app.core.database import get_db
 from app.models.db_models import (
     NoLlmConfigured,
+    Project,
     SENTIMENT_DOC_STATUS_APPROVED,
     SENTIMENT_DOC_STATUS_DRAFT,
     SENTIMENT_DOC_STATUS_FROZEN,
@@ -304,8 +305,18 @@ async def read_one(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # P0 IDOR 修复 (2026-06-19): 先加载通知, 校验所属项目在当前 user.firm 内
+    from app.models.db_models import SentimentNotification as _SN, Project as _Proj
+
+    n = (
+        await db.execute(select(_SN).where(_SN.id == notification_id))
+    ).scalar_one_or_none()
+    if n is None:
+        raise HTTPException(status_code=404, detail="通知不存在")
+    if n.project_id is not None:
+        await ensure_project_in_firm(db, n.project_id, current_user)
     ok = await mark_read(db, notification_id)
-    if not ok:
+    if not ok and not n.is_read:
         raise HTTPException(status_code=404, detail="通知不存在或已读")
     await db.commit()
     return {"ok": True}
@@ -317,7 +328,29 @@ async def read_all(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    n = await mark_all_read(db, project_id=project_id)
+    # P0 IDOR 修复 (2026-06-19): project_id 必走 firm 校验; 不传则按 user 的项目范围
+    if project_id is not None:
+        await ensure_project_in_firm(db, project_id, current_user)
+        n = await mark_all_read(db, project_id=project_id)
+    else:
+        # 不传 project_id: scope 到当前 user 可访问的项目 (避免误标别所)
+        from app.models.db_models import SentimentNotification as _SN
+        from app.services.auth.tenant import scope_projects_to_firm
+
+        proj_q = select(Project.id)
+        proj_q = scope_projects_to_firm(proj_q, current_user)
+        scoped_ids = [pid for (pid,) in (await db.execute(proj_q)).all()]
+        if not scoped_ids:
+            return {"ok": True, "count": 0}
+        from sqlalchemy import update as _upd
+
+        stmt = (
+            _upd(_SN)
+            .where(_SN.is_read.is_(False), _SN.project_id.in_(scoped_ids))
+            .values(is_read=True, read_at=datetime.now(timezone.utc))
+        )
+        res = await db.execute(stmt)
+        n = res.rowcount or 0
     await db.commit()
     return {"ok": True, "count": n}
 
