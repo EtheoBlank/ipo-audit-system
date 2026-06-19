@@ -222,19 +222,40 @@ async def get_book(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    # P0 多租户 (2026-06-19): 与 list_books 一致, 非 admin 强制 firm_id 匹配,
+    # firm_id=NULL 老数据仅 admin 可见
+    from app.models.db.auth import ROLE_ADMIN as _ADMIN
     book = (
         await db.execute(select(KnowledgeBook).where(KnowledgeBook.id == book_id))
     ).scalar_one_or_none()
     if not book:
         raise HTTPException(status_code=404, detail="书籍不存在")
+    if current_user is None or current_user.role != _ADMIN:
+        if current_user is None or not current_user.firm_id:
+            raise HTTPException(status_code=404, detail="书籍不存在")
+        if book.firm_id is None or book.firm_id != current_user.firm_id:
+            raise HTTPException(status_code=404, detail="书籍不存在")
     return book
 
 
 @router.delete("/books/{book_id}")
 async def delete_book(
     book_id: int,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # P0 多租户 (2026-06-19): 删前 ORM 取出校验 firm 隔离, admin 跨所
+    from app.models.db.auth import ROLE_ADMIN as _ADMIN
+    book = (
+        await db.execute(select(KnowledgeBook).where(KnowledgeBook.id == book_id))
+    ).scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="书籍不存在")
+    if current_user.role != _ADMIN:
+        if not current_user.firm_id:
+            raise HTTPException(status_code=404, detail="书籍不存在")
+        if book.firm_id is None or book.firm_id != current_user.firm_id:
+            raise HTTPException(status_code=404, detail="书籍不存在")
     await _kb_service.delete_book(book_id)
     return {"message": "已删除"}
 

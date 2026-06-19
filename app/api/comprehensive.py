@@ -160,12 +160,16 @@ async def download_template(
     template_id: str,
     version: Optional[str] = None,
     session: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
     """下载模板 .xlsx 字节流。"""
     from fastapi.responses import Response
 
-    firm_id = str(current_user.firm_id) if current_user else ""
+    # 多租户硬隔离: 强制登录 + 必须有 firm_id, 杜绝 AUTH_ENABLED=false 时
+    # 匿名用户构造 firm_id="" 直接下载任意事务所模板的 IDOR
+    if not current_user.firm_id:
+        raise HTTPException(status_code=403, detail="用户未关联事务所, 无权下载模板")
+    firm_id = str(current_user.firm_id)
     firm_id = _safe_id(firm_id, "firm_id")
     template_id = _safe_id(template_id, "template_id")
     if version is not None:

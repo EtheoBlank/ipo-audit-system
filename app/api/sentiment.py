@@ -152,7 +152,7 @@ from app.models.db.auth import User
 from app.services.auth import get_current_user, get_current_user_optional
 from app.services.auth.tenant import ensure_project_in_firm, _is_admin, _user_firm_id
 from app.services.auth.dependencies import require_role
-from app.models.db.auth import ROLE_ADMIN
+from app.models.db.auth import ROLE_ADMIN, ROLE_MANAGER
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sentiment", tags=["舆情跟踪"])
@@ -256,9 +256,10 @@ async def toggle_source(
     source_id: int,
     body: SentimentSourceToggle,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    # P0 RBAC (2026-06-19): 信源启停影响全局抓取, 限制 manager+ (与 scheduler/approve 同级)
+    current_user: User = Depends(require_role(ROLE_MANAGER)),
 ):
-    src = await get_or_404(db, SentimentSource, source_id, "信源")
+    src = await get_or_404(db, SentimentSource, source_id, label="信源")
     src.is_enabled = body.is_enabled
     await db.commit()
     await db.refresh(src)

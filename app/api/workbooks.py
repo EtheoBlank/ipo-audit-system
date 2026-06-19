@@ -88,18 +88,28 @@ async def generate_workbook(
 @router.get("/download/{filename}")
 async def download_workbook(
     filename: str,
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Download generated workbook file.
 
-    Security: only allow alphanumeric + underscore/dash/dot filenames
-    and resolve against the output root to prevent path traversal.
+    Security:
+      - only allow alphanumeric + underscore/dash/dot filenames
+      - resolve against the output root to prevent path traversal
+      - 多租户硬隔离: 从 filename 抽出 project_id 后, 用 ensure_project_in_firm
+        校验 current_user.firm_id 是否能访问; 抽不到 project_id 直接 404 防绕过
     """
     import re
 
     # Reject obviously malicious filenames (path traversal, special chars)
     if not re.match(r"^[\w.\-]+$", filename):
         raise HTTPException(status_code=400, detail="非法文件名")
+
+    # 多租户硬隔离: 从 filename 抽 project_id, 校验 firm 归属
+    m = re.search(r"project_(\d+)", filename)
+    if not m:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    await ensure_project_in_firm(db, int(m.group(1)), current_user)
 
     # Search for file in any project directory
     file_path: Path | None = None
@@ -189,12 +199,8 @@ async def generate_audit_note(
     返回的 ``note`` 是 markdown，前端可直接渲染或复制到 Excel 备注。
     ``references_kb`` / ``references_regulations`` 列出引用依据，便于回溯。
     """
-    # 项目存在性校验 (避免拿到陈旧 project_id)
-    project = (
-        await db.execute(select(Project).where(Project.id == req.project_id))
-    ).scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    # 多租户硬隔离: 替换原来的 select(Project)+404, 跨事务所访问直接 403
+    project = await ensure_project_in_firm(db, req.project_id, current_user)
 
     industry = req.industry or project.industry
 

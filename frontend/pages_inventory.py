@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -13,6 +13,42 @@ from frontend._components.project_picker import pick_project_dict
 from frontend._components.download import download_excel
 # P0 安全修复: 使用共享 api_request, 自动带 Authorization header + 401 处理
 from frontend._http import api_request as _api
+
+
+# P0 安全: 统一日期范围校验, 防止用户选未来日期导致库龄计算异常
+def _safe_date_input(
+    label: str,
+    key: str,
+    default: date,
+    min_value: date | None = None,
+    max_value: date | None = None,
+    **kwargs,
+) -> date:
+    """带日期范围校验的 st.date_input 包装器。
+
+    - 底层仍调 st.date_input, 通过 min_value/max_value 限制可选范围
+    - 用户绕过 picker 输入未来日期时 (e.g. 2099-12-31), 会报错并回退到 max_value
+    - 防止跌价计算用未来 period_end 导致库龄为负数、漏算跌价准备
+    """
+    _min = min_value if min_value is not None else date(2000, 1, 1)
+    _max = max_value if max_value is not None else date.today()
+    # 默认值若超出范围, 强制夹紧
+    clamped_default = max(_min, min(default, _max))
+    value = st.date_input(
+        label,
+        value=clamped_default,
+        min_value=_min,
+        max_value=_max,
+        key=key,
+        **kwargs,
+    )
+    if value > _max:
+        st.error(f"⚠️ {label} 不能晚于今天 ({_max.isoformat()})")
+        return _max
+    if value < _min:
+        st.error(f"⚠️ {label} 不能早于 {_min.isoformat()}")
+        return _min
+    return value
 
 
 def _pick_project():
@@ -73,7 +109,7 @@ def _tab_import(project_id: int, default_pe: date):
                "必含列：物料编码、物料名称、期末数量、期末金额（或单价）。")
     col1, col2 = st.columns(2)
     with col1:
-        period_end = st.date_input("报告期截止日", value=default_pe, key="imp_pe")
+        period_end = _safe_date_input("报告期截止日", key="imp_pe", default=default_pe)
     with col2:
         is_prior = st.checkbox("作为上年同期数据导入（用于跌价转回）", value=False, key="imp_prior")
     replace = st.checkbox("导入前清空相同期间数据", value=True, key="imp_replace")
@@ -106,7 +142,7 @@ def _tab_plan(project_id: int, default_pe: date, industry: str):
     st.markdown("#### 行业化盘点计划（可与 AI 对话修改）")
     col1, col2 = st.columns(2)
     with col1:
-        pe = st.date_input("盘点基准日", value=default_pe, key="plan_pe")
+        pe = _safe_date_input("盘点基准日", key="plan_pe", default=default_pe)
     with col2:
         ind = st.text_input("行业（不填则用项目行业）", value=industry, key="plan_ind")
     days_b = st.number_input("基准日前几天开始监盘", value=0, min_value=0, max_value=10)
@@ -184,7 +220,7 @@ def _tab_plan(project_id: int, default_pe: date, industry: str):
 
 def _tab_count_sheet(project_id: int, default_pe: date):
     st.markdown("#### 生成盘点用表（金额优先 + 阈值覆盖）")
-    pe = st.date_input("盘点基准日", value=default_pe, key="cs_pe")
+    pe = _safe_date_input("盘点基准日", key="cs_pe", default=default_pe)
 
     # 阈值模拟
     with st.expander("🔍 先模拟不同覆盖率，看金额覆盖 vs 行数权衡"):
@@ -334,7 +370,7 @@ def _tab_completion(project_id: int, default_pe: date):
     st.markdown("#### 盘点率 & 盘盈盘亏统计")
     col1, col2 = st.columns(2)
     with col1:
-        pe = st.date_input("报告期截止日", value=default_pe, key="comp_pe")
+        pe = _safe_date_input("报告期截止日", key="comp_pe", default=default_pe)
     with col2:
         mat = st.number_input(
             "重要性水平金额（元）", value=0.0, min_value=0.0, key="comp_mat",
@@ -399,7 +435,7 @@ def _tab_completion(project_id: int, default_pe: date):
 
 def _tab_impairment(project_id: int, default_pe: date):
     st.markdown("#### 库龄分析 + 跌价计提 + 跌价转回")
-    pe = st.date_input("报告期截止日", value=default_pe, key="imp_pe2")
+    pe = _safe_date_input("报告期截止日", key="imp_pe2", default=default_pe)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -568,7 +604,7 @@ def _tab_code_mapping(project_id: int):
 def _tab_export(project_id: int, default_pe: date):
     st.markdown("#### 一键导出整套底稿")
     st.caption("生成的工作簿含：收发存明细 / 盘点计划 / 盘点用表 / 已盘点情况 / 盘点率统计 / 库龄分析 / 跌价测试 / 跌价汇总")
-    pe = st.date_input("报告期截止日", value=default_pe, key="exp_pe")
+    pe = _safe_date_input("报告期截止日", key="exp_pe", default=default_pe)
     if st.button("📥 生成并下载", type="primary", key="exp_btn"):
         # 走统一的 _api (auth 头 + 统一错误处理), 不再直连 requests
         content = _api(

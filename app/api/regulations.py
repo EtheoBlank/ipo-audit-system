@@ -23,6 +23,7 @@ from app.core.database import AsyncSessionLocal, get_db
 from app.models.db_models import Regulation, RegulationFavorite
 from app.models.db.auth import User
 from app.services.auth import get_current_user, get_current_user_optional
+from app.services.auth.tenant import ensure_project_in_firm, _is_admin, _user_firm_id
 from app.services.regulation_scraper import (
     RegulationScraperService,
     item_to_dict,
@@ -348,6 +349,9 @@ async def favorite_regulation(
     ).scalar_one_or_none()
     if not reg:
         raise HTTPException(status_code=404, detail="法规不存在")
+    # P0 多租户 (2026-06-19): 收藏到 project 时, 校验 project 属于当前 firm
+    if req.project_id is not None:
+        await ensure_project_in_firm(db, req.project_id, current_user)
     fav = RegulationFavorite(
         regulation_id=regulation_id,
         project_id=req.project_id,
@@ -373,6 +377,9 @@ async def unfavorite(
     ).scalar_one_or_none()
     if not fav:
         raise HTTPException(status_code=404, detail="收藏记录不存在")
+    # P0 多租户 (2026-06-19): 删除前校验 favorite 关联的 project 属于当前 firm
+    if fav.project_id is not None:
+        await ensure_project_in_firm(db, fav.project_id, current_user)
     await db.delete(fav)
     await db.commit()
     return {"message": "已取消收藏"}
@@ -385,9 +392,23 @@ async def list_favorites(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    # P0 多租户 (2026-06-19): 非 admin + 显式传 project_id 时, 校验 project 属于当前 firm;
+    # 未传 project_id 时, 通过 join Project + firm_id 过滤
+    from app.models.db_models import Project
     q = select(RegulationFavorite)
     if project_id is not None:
+        await ensure_project_in_firm(db, project_id, current_user)
         q = q.where(RegulationFavorite.project_id == project_id)
+    else:
+        if not _is_admin(current_user):
+            firm_id = _user_firm_id(current_user)
+            if firm_id is not None:
+                q = q.join(Project, Project.id == RegulationFavorite.project_id).where(
+                    or_(Project.firm_id == firm_id, Project.firm_id.is_(None))
+                )
+            else:
+                # 无 firm 的用户 (AUTH_ENABLED=false / 匿名 / 无 firm) — 软隔离放过
+                pass
     if tag:
         q = q.where(RegulationFavorite.tag == tag)
     q = q.order_by(RegulationFavorite.created_at.desc())
