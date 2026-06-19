@@ -302,6 +302,13 @@ class InventoryAgingEngine:
         period_end: datetime,
     ) -> Optional[tuple[float, int]]:
         """Return (weighted avg unit price, sample count) of post-period sales
+        for the given material. None if no qualifying sales found.
+
+        性能 (2026-06-19): P1 — 旧版 O(N×M), N 物料 × M 销售行;
+        上层 compute() 已按 product_code 预分桶, 此函数只扫自己桶里少量记录,
+        单次 compute_impairments 从 2.5M iter 降到 ~M iter.
+        """
+        """Return (weighted avg unit price, sample count) of post-period sales
         for the given material. None if no qualifying sales found."""
         total_amount = 0.0
         total_qty = 0.0
@@ -381,6 +388,18 @@ class InventoryAgingEngine:
         prior_qty = prior_qty or {}
         manual_nrv = manual_nrv or {}
         sales_records = sales_records or []
+
+        # P1 性能 (2026-06-19): O(N×M) → O(N+M) — 一次性按 product_code 分桶
+        # 旧版每物料调用 nrv_unit_price_from_sales 全表扫 sales_records,
+        # 500 物料 × 5K 销售 = 2.5M iter. 分桶后每桶 O(本桶大小)
+        _sales_bucket: dict[str, list[Any]] = {}
+        for _sr in sales_records:
+            _code = (
+                getattr(_sr, "product_code", "")
+                if not isinstance(_sr, dict)
+                else _sr.get("product_code", "")
+            )
+            _sales_bucket.setdefault(str(_code) if _code else "", []).append(_sr)
 
         # 仅取本期（is_prior_year=False）数据
         def _is_current(m: Any) -> bool:
@@ -481,7 +500,10 @@ class InventoryAgingEngine:
                 nrv_unit = float(manual_nrv[code])
                 nrv_src = "手工/外部询价"
             else:
-                result = self.nrv_unit_price_from_sales(sales_records, code, period_end)
+                # 传入本物料预分桶, 避免每次全表扫
+                result = self.nrv_unit_price_from_sales(
+                    _sales_bucket.get(code, []), code, period_end
+                )
                 if result:
                     nrv_unit, sample_n = result
                     nrv_src = f"销售清单({sample_n}笔)"

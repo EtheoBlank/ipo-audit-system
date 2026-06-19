@@ -72,22 +72,34 @@ def _make_report() -> "FillReport":  # type: ignore[name-defined]
 
 
 def test_export_writes_values_and_creates_log_sheet():
-    """把 FillReport 写回原模板，并在 _log 表中记录来源。"""
+    """把 FillReport 写回原模板，并在 _log 表中记录来源。
+
+    2026-06-19 P1 修复: 旧版 _export_to_excel 读 __comprehensive_template_bytes__
+    (永远空), 改成读 __comprehensive_template_path__ (实际有 tempfile).
+    """
     from frontend.pages_comprehensive import _export_to_excel  # type: ignore
 
-    # 把模板字节放进 session_state 是 Streamlit 的事；这里我们用 monkeypatch
+    # 把模板字节写到 tempfile, path 放进 session_state
+    import tempfile
+    from pathlib import Path
     raw = _build_template_with_placeholders()
-    import streamlit as st  # noqa: F401
-    # 模拟 st.session_state
-    class _SS(dict):
-        def get(self, k, default=None):
-            return super().get(k, default)
-    st.session_state = _SS({
-        "__comprehensive_template_bytes__": raw,
-    })
+    tmp_dir = Path(tempfile.gettempdir())
+    tmp_path = tmp_dir / "test_export_template.xlsx"
+    tmp_path.write_bytes(raw)
+    try:
+        import streamlit as st  # noqa: F401
+        class _SS(dict):
+            def get(self, k, default=None):
+                return super().get(k, default)
+        st.session_state = _SS({
+            "__comprehensive_template_path__": str(tmp_path),
+        })
 
-    out = _export_to_excel(_make_schema(), _make_report())
-    assert out  # non-empty
+        out = _export_to_excel(_make_schema(), _make_report())
+        assert out  # non-empty
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
     wb = load_workbook(filename=io.BytesIO(out))
     ws = wb["S"]

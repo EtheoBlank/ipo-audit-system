@@ -190,11 +190,12 @@ def _export_to_excel(schema: TemplateSchema, report: FillReport) -> bytes:
     - 来源/置信度/引用写入独立的 ``_log`` 工作表，避免与值列冲突
     - 原模板的公式、合并、格式、其它单元格内容完全保留
     """
-    # 从 session_state 取原文件
-    raw: bytes = st.session_state.get("__comprehensive_template_bytes__", b"")
-    if not raw:
+    # P1 修复 (2026-06-19): 旧读 __comprehensive_template_bytes__ 永远空 (未存)
+    # 实际写到 tempfile, path 存在 __comprehensive_template_path__
+    tmp_path = st.session_state.get("__comprehensive_template_path__", "")
+    if not tmp_path or not Path(tmp_path).exists():
         return b""
-
+    raw = Path(tmp_path).read_bytes()
     wb = load_workbook(filename=io.BytesIO(raw))
     by_id = {r.field_id: r for r in report.results}
 
