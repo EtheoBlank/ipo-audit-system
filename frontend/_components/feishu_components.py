@@ -32,6 +32,8 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
+import html
+
 import pandas as pd
 import streamlit as st
 
@@ -49,11 +51,11 @@ def page_header(
     subtitle: Optional[str] = None,
 ) -> None:
     """飞书页头 — 大标题 + 副标题 + 蓝紫左边框装饰."""
-    sub_html = f'<div class="subtitle">{subtitle}</div>' if subtitle else ""
+    sub_html = f'<div class="subtitle">{html.escape(subtitle)}</div>' if subtitle else ""
     st.markdown(
         f"""
         <div class="feishu-page-header feishu-fade-in">
-            <h1><span>{icon}</span><span>{title}</span></h1>
+            <h1><span>{html.escape(icon)}</span><span>{html.escape(title)}</span></h1>
             {sub_html}
         </div>
         """,
@@ -206,10 +208,10 @@ def data_table(
     if max_rows is not None:
         df = df.head(max_rows)
 
-    head = "".join(f"<th>{c}</th>" for c in df.columns)
+    head = "".join(f"<th>{html.escape(str(c))}</th>" for c in df.columns)
     body_rows = []
     for _, row in df.iterrows():
-        cells = "".join(f"<td>{v}</td>" for v in row.values)
+        cells = "".join(f"<td>{html.escape(str(v))}</td>" for v in row.values)
         body_rows.append(f"<tr>{cells}</tr>")
     body = "".join(body_rows)
 

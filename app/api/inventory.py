@@ -460,6 +460,8 @@ async def update_count_sheet(
     s = res.scalar_one_or_none()
     if not s:
         raise HTTPException(status_code=404, detail="盘点行不存在")
+    # P0 IDOR 修复 (2026-06-19): 按 sheet_id 直查时无 firm 校验, 跨所可写实盘数
+    await get_project_or_404(db, s.project_id, current_user=current_user)
     if counted_qty is not None:
         s.counted_qty = counted_qty
         # DateTime 列是 naive — 去掉 tz 以兼容 SQLite/PG
@@ -536,6 +538,8 @@ async def revise_count_plan(
     plan = res.scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail="盘点计划不存在")
+    # P0 IDOR 修复 (2026-06-19): 按 plan_id 直查时无 firm 校验, 跨所可改他人盘点计划
+    await get_project_or_404(db, plan.project_id, current_user=current_user)
 
     # 解开 DB 字段 → CountPlanDraft
     from app.services.inventory.count_plan import CountPlanDraft
