@@ -122,11 +122,25 @@ class ContractAnalyzer:
         try:
             return await self.client.chat_json(system=system, user=user_msg, max_tokens=4000)
         except DeepSeekError as exc:
+            # P1 (2026-06-19): 旧 string 错误前端无法区分重试
+            # 新结构化 {error: {code, message, retryable}}
             logger.warning("DeepSeek contract analysis failed: %s", exc)
-            return {"error": str(exc)}
+            return {
+                "error": {
+                    "code": "deepseek_failed",
+                    "message": str(exc),
+                    "retryable": True,
+                }
+            }
         except json.JSONDecodeError as exc:
             logger.warning("DeepSeek returned non-JSON: %s", exc)
-            return {"error": f"AI 返回非 JSON: {exc}"}
+            return {
+                "error": {
+                    "code": "schema_mismatch",
+                    "message": f"AI 返回非 JSON: {exc}",
+                    "retryable": False,  # 改 prompt 重试可能修好
+                }
+            }
 
     @staticmethod
     def scan_risks(
