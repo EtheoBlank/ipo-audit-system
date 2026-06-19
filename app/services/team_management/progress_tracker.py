@@ -84,64 +84,72 @@ class ProgressTracker:
         if not members:
             return []
 
-        # 3) 拉所有 WorkPlanItem
-        items_q = await db.execute(
-            select(WorkPlanItem)
+        # 3) 拉所有 WorkPlanItem — P1 性能 (2026-06-19): 旧版拉全表 + Python O(M×N) 计数
+        # 新版: SQL GROUP BY member_id, status 一次拿 count, dict lookup O(1)
+        items_agg_q = await db.execute(
+            select(
+                WorkPlanItem.member_id,
+                WorkPlanItem.status,
+                func.count(WorkPlanItem.id),
+            )
             .join(WorkPlan, WorkPlan.id == WorkPlanItem.plan_id)
             .where(WorkPlan.project_id == project_id)
+            .group_by(WorkPlanItem.member_id, WorkPlanItem.status)
         )
-        items = items_q.scalars().all()
-        items_by_member: dict[Optional[int], list[WorkPlanItem]] = {}
-        for it in items:
-            items_by_member.setdefault(it.member_id, []).append(it)
+        # {(member_id, status): count} + {(member_id): total}
+        status_count_by_member: dict[int, dict[str, int]] = {}
+        total_by_member: dict[int, int] = {}
+        for mid, st, cnt in items_agg_q.all():
+            mid = int(mid) if mid is not None else 0
+            status_count_by_member.setdefault(mid, {})[st] = int(cnt)
+            total_by_member[mid] = total_by_member.get(mid, 0) + int(cnt)
 
-        # 4) 拉近 7 天 DailyReport
+        # 4) 拉近 7 天 DailyReport — P1 (2026-06-19): 同理 GROUP BY member_id 一次性聚合
         from datetime import date, timedelta as _td
 
         seven_days_ago = (date.today() - _td(days=7)).isoformat()
-        reports_q = await db.execute(
-            select(DailyReport)
+        reports_agg_q = await db.execute(
+            select(
+                DailyReport.member_id,
+                func.sum(DailyReport.hours_logged),
+                func.max(DailyReport.report_date),
+            )
             .where(
                 DailyReport.project_id == project_id,
                 DailyReport.report_date >= seven_days_ago,
             )
-            .order_by(DailyReport.report_date.desc())
-            .limit(500)
+            .group_by(DailyReport.member_id)
         )
-        reports = reports_q.scalars().all()
-
         hours_by_member: dict[int, float] = {}
         last_report_by_member: dict[int, str] = {}
-        for r in reports:
-            # 严格 7 天过滤 — 与字段名 hours_logged_7d 保持一致
-            hours_by_member[r.member_id] = hours_by_member.get(r.member_id, 0.0) + float(
-                r.hours_logged or 0
-            )
-            key = r.member_id
-            if key not in last_report_by_member:
-                last_report_by_member[key] = r.report_date
+        for mid, hours_sum, max_date in reports_agg_q.all():
+            mid = int(mid)
+            hours_by_member[mid] = float(hours_sum or 0)
+            if max_date is not None:
+                last_report_by_member[mid] = max_date
 
-        # 5) 拉卡点
-        blockers_q = await db.execute(
-            select(Blocker).where(
+        # 5) 拉卡点 — 同理 GROUP BY
+        blockers_agg_q = await db.execute(
+            select(Blocker.member_id, func.count(Blocker.id))
+            .where(
                 Blocker.project_id == project_id,
                 Blocker.status.in_(
                     [BLOCKER_STATUS_OPEN, BLOCKER_STATUS_IN_PROGRESS, BLOCKER_STATUS_ESCALATED]
                 ),
             )
+            .group_by(Blocker.member_id)
         )
-        blockers = blockers_q.scalars().all()
-        open_blockers_by_member: dict[int, int] = {}
-        for b in blockers:
-            open_blockers_by_member[b.member_id] = open_blockers_by_member.get(b.member_id, 0) + 1
+        open_blockers_by_member: dict[int, int] = {
+            int(mid): int(cnt) for mid, cnt in blockers_agg_q.all()
+        }
 
         out: list[MemberProgressData] = []
         for m in members:
-            mi = items_by_member.get(m.id, [])
-            total = len(mi)
-            done = sum(1 for x in mi if x.status == TASK_STATUS_DONE)
-            inprog = sum(1 for x in mi if x.status == TASK_STATUS_IN_PROGRESS)
-            blocked = sum(1 for x in mi if x.status == TASK_STATUS_BLOCKED)
+            sc = status_count_by_member.get(m.id, {})
+            total = total_by_member.get(m.id, 0)
+            done = sc.get(TASK_STATUS_DONE, 0)
+            inprog = sc.get(TASK_STATUS_IN_PROGRESS, 0)
+            blocked = sc.get(TASK_STATUS_BLOCKED, 0)
             rate = (done / total) if total > 0 else 0.0
             out.append(
                 MemberProgressData(
