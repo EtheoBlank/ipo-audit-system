@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -557,6 +558,15 @@ class ChecklistItemUpdate(BaseModel):
     upload_date: Optional[str] = None
     file_path: Optional[str] = None
     notes: Optional[str] = None
+
+    @field_validator("upload_date")
+    @classmethod
+    def _upload_date_iso(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return v
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+            raise ValueError("upload_date 必须是 YYYY-MM-DD 格式")
+        return v
 
 
 @router.put("/submission/checklist/{item_id}")

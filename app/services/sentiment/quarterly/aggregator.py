@@ -47,6 +47,10 @@ async def aggregate_window(
             SentimentEvent.publish_date.is_not(None),
             SentimentEvent.publish_date >= ws,
             SentimentEvent.publish_date <= we,
+            # P0-5 (2026-06-19): 排除上年同期数据 (误归到本季度) + 审计师已标记 ignored 的事件.
+            # 审计师标记 ignored 的事件不应进入季报 (避免 "已剔除噪声" 又被回写).
+            SentimentEvent.is_prior_year == False,  # noqa: E712
+            SentimentEvent.review_status != "ignored",
         )
         .order_by(SentimentEvent.publish_date.asc())
     )

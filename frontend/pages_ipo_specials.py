@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import pandas as pd
 import streamlit as st
@@ -102,7 +103,7 @@ def _tab_prospectus(project_id: int) -> None:
 
     st.markdown("#### 关键数据 metric 录入 + 系统勾稽")
     pid = st.number_input("招股书 ID", min_value=0, step=1, value=0)
-    if pid:
+    if pid and pid > 0:
         c1, c2 = st.columns(2)
         code = c1.text_input("指标 code (gross_margin / revenue / 等)")
         name = c2.text_input("指标名称")
@@ -126,6 +127,8 @@ def _tab_prospectus(project_id: int) -> None:
                     else f"⚠️ 差异 {r.get('diff_amount')} ({r.get('diff_pct'):.2f}%)"
                 )
                 st.info(ok)
+    else:
+        st.warning("请先填招股书 ID (必须 > 0) 后再勾稽")
 
 
 def _tab_period_compare(project_id: int) -> None:
@@ -338,18 +341,24 @@ def _tab_checklist(project_id: int) -> None:
 
     with st.expander("✏️ 标记某项已上传", expanded=False):
         item_id = st.number_input("清单项 ID", min_value=0, step=1, value=0)
-        upload_date = st.text_input("上传日期", value="2025-06-13")
+        upload_date = st.date_input("上传日期", value=date(2025, 6, 13))
         notes = st.text_input("备注")
         if st.button("提交"):
-            if item_id:
+            if item_id and item_id > 0:
                 r = _api(
                     "PUT",
                     f"/api/ipo-specials/submission/checklist/{item_id}",
-                    json={"is_uploaded": True, "upload_date": upload_date, "notes": notes or None},
+                    json={
+                        "is_uploaded": True,
+                        "upload_date": upload_date.isoformat(),
+                        "notes": notes or None,
+                    },
                 )
                 if r:
                     st.success("已更新")
                     st.rerun()
+            else:
+                st.warning("请先填清单项 ID (必须 > 0)")
 
 
 def show_ipo_specials() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Dict
 
 import pandas as pd
@@ -235,7 +236,7 @@ def _tab_transactions(project_id: int) -> None:
                 ],
             )
             amount = c3.number_input("金额*", min_value=0.0, step=100.0)
-            period_end = c1.text_input("期末日期 YYYY-MM-DD")
+            period_end = c1.date_input("期末日期", value=date.today())
             pricing = c2.text_input("定价依据 (市场公允/成本加成/协议)")
             note = c3.text_input("备注")
             ok = st.form_submit_button("提交", type="primary")
@@ -244,7 +245,7 @@ def _tab_transactions(project_id: int) -> None:
                 "party_id": int(party_id),
                 "transaction_type": tx_type,
                 "amount": float(amount),
-                "period_end": period_end or None,
+                "period_end": period_end.isoformat(),
                 "pricing_basis": pricing or None,
                 "notes": note or None,
             }
@@ -257,9 +258,9 @@ def _tab_transactions(project_id: int) -> None:
 
     st.markdown("---")
     st.markdown("#### 公允性测试")
-    period_end_for_check = st.text_input("期末日期 (留空 = 全部)", key="rp_fair_pe")
+    period_end_for_check = st.date_input("期末日期 (留空 = 全部)", value=None, key="rp_fair_pe")
     if st.button("🔍 跑公允性测试"):
-        payload = {"period_end": period_end_for_check or None}
+        payload = {"period_end": period_end_for_check.isoformat() if period_end_for_check else None}
         with st.spinner("分析中..."):
             r = _api(
                 "POST",

@@ -371,6 +371,12 @@ class CountPhotoProcessor:
                 continue
             book_qty = float(getattr(s, "book_qty", 0) or 0)
             uc = float(getattr(s, "book_unit_cost", 0) or 0)
+            book_amount = float(getattr(s, "book_amount", 0) or 0)
+            # P0-1 (2026-06-19): ERP 通常先存数量+金额, 算加权平均前 unit_cost 暂为 0.
+            # 此处兜底: uc <= 0 但 amount/qty 都非 0 → 用 amount/qty 反推,
+            # 否则 delta_amount 全 0, 盘盈盘亏金额失真.
+            if uc <= 0 and book_amount > 0 and book_qty > 0:
+                uc = book_amount / book_qty
             delta_qty = float(cq) - book_qty
             delta_amount = delta_qty * uc
             if abs(delta_qty) < 1e-6:

@@ -1471,6 +1471,13 @@ class SentimentEvent(Base):
     matched_alias: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     raw_payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 原始 JSON
 
+    # P0-5 (2026-06-19): 上年同期数据标记 — 季报窗口聚合时排除 (典型场景:
+    # 同期对比 / 上年统计误归到本季度). True = 上年同期, 季报 / 简报不应纳入.
+    # 测试用 in-memory sqlite 不走迁移, Base.metadata.create_all 自动建列.
+    is_prior_year: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
+
     attached_briefing_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("sentiment_daily_briefings.id"), nullable=True, index=True
     )
@@ -1869,6 +1876,10 @@ class TeamMember(Base):
         String(20), nullable=True
     )  # 入职日期 YYYY-MM-DD
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # P0 软删除字段 (2026-06-19): 替代硬删除 delete_member, 保留审计师/员工历史关联
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    deactivated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    deactivated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 

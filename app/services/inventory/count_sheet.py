@@ -20,6 +20,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,9 @@ class CountSheetResult:
     selected_items: int  # 选中的物料数
     tier_summary: dict[str, dict[str, Any]]  # {"A": {...}, "B": {...}, "C": {...}}
     strategy: CountSheetStrategy
+    # P0-2 (2026-06-19): 抽样审计日志 — 把 B/C/R 类抽到的 DataFrame index 写下来,
+    # 现场监盘核对 "同 seed 必出同结果" / 出具审计底稿时回溯.
+    audit_log: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -86,6 +90,7 @@ class CountSheetResult:
             "selected_items": self.selected_items,
             "tier_summary": self.tier_summary,
             "strategy_desc": self.strategy.describe(),
+            "audit_log": self.audit_log,
         }
 
 
@@ -94,11 +99,19 @@ class CountSheetBuilder:
 
     @staticmethod
     def _row_from_movement(m: Any, tier: str, reason: str, rank: int) -> dict[str, Any]:
-        """Convert an InventoryMovement-like object/dict to a sheet row."""
+        """Convert an InventoryMovement-like object/dict to a sheet row.
+
+        P0-1 (2026-06-19): ERP 通常先存数量+金额, 算加权平均前 unit_cost 暂为 0,
+        此处兜底: 若 unit_cost <= 0 但 amount 和 qty 都非 0, 用 amount/qty 推回单价,
+        否则下游 completion_stats 算 delta_amount 时会全 0 (盘盈盘亏金额失真).
+        """
         get = (lambda k: m.get(k)) if isinstance(m, dict) else (lambda k: getattr(m, k, None))
         qty = float(get("ending_qty") or 0)
         unit_cost = float(get("unit_cost") or 0)
         amount = float(get("ending_amount") or qty * unit_cost)
+        # 兜底反推 unit_cost (防止 ERP 落地前 unit_cost=0 的全 0 跌价)
+        if unit_cost <= 0 and amount > 0 and qty > 0:
+            unit_cost = amount / qty
         return {
             "material_code": str(get("material_code") or ""),
             "material_name": str(get("material_name") or ""),
@@ -160,6 +173,7 @@ class CountSheetBuilder:
                 selected_items=0,
                 tier_summary={},
                 strategy=strategy,
+                audit_log={"sampled_indexes": {"B": [], "C": [], "R": []}, "seed": strategy.random_seed},
             )
 
         df = pd.DataFrame(raw).sort_values("ending_amount", ascending=False).reset_index(drop=True)
@@ -189,41 +203,73 @@ class CountSheetBuilder:
         a_df = df[a_mask].copy()
         rest = df[~a_mask].copy()
 
-        # ---- B 类：MUS（按金额加权）或随机抽 ----------------------------
-        b_n = math.ceil(len(rest) * strategy.b_sample_ratio)
-        b_n = min(b_n, len(rest))
-        if b_n <= 0:
-            b_df = rest.head(0)
-        elif strategy.b_sample_method == "mus" and rest["ending_amount"].sum() > 0:
-            # weights = ending_amount / sum，金额越大越易抽中
-            b_df = rest.sample(
-                n=b_n,
-                replace=False,
-                weights=rest["ending_amount"].clip(lower=0.0001),
-                random_state=strategy.random_seed,
-            )
-        else:
-            b_df = rest.sample(n=b_n, random_state=strategy.random_seed)
-        rest_after_b = rest.drop(b_df.index)
+        # ---- B/C/R 类：numpy Generator 抽样, 保证跨 pandas 版本复现 ----
+        # P0-2 (2026-06-19): pd.DataFrame.sample(random_state=N) 在不同 pandas
+        # 版本下行为不一致 (np.random MT19937 vs Generator), 审计现场复现要求
+        # "同 seed 必出同结果". 改用 np.random.default_rng(seed) 显式构造,
+        # 一次抽完所有候选 index 再按比例切片, 同时把抽到的 index 写入 log/audit.
+        rng = np.random.default_rng(strategy.random_seed)
+        # 抽样日志 (审计追溯: 同 seed 必出同结果 + 现场监盘时核对)
+        sampled_indexes_log: dict[str, list[int]] = {"B": [], "C": [], "R": []}
+        all_rest_idx = list(rest.index)
+        b_idx: list[int] = []  # 提前定义, 防下方 if 块未赋值时 NameError
+        if all_rest_idx:
+            # ---- B 类：MUS（按金额加权）或随机抽 --------------------
+            b_n = math.ceil(len(rest) * strategy.b_sample_ratio)
+            b_n = min(b_n, len(rest))
+            if b_n > 0:
+                if strategy.b_sample_method == "mus" and rest["ending_amount"].sum() > 0:
+                    # weights = ending_amount / sum，金额越大越易抽中
+                    weights = rest["ending_amount"].clip(lower=0.0001).to_numpy()
+                    weights = weights / weights.sum()
+                    chosen = rng.choice(len(all_rest_idx), size=b_n, replace=False, p=weights)
+                else:
+                    chosen = rng.choice(len(all_rest_idx), size=b_n, replace=False)
+                b_idx = [all_rest_idx[i] for i in chosen]
+                sampled_indexes_log["B"] = b_idx
+                b_df = rest.loc[b_idx]
+            else:
+                b_df = rest.head(0)
+            b_idx_set = set(b_idx)
+            rest_after_b_idx = [i for i in all_rest_idx if i not in b_idx_set] if b_n > 0 else all_rest_idx
+            rest_after_b = rest.loc[rest_after_b_idx]
 
-        # ---- C 类：在剩余里覆盖性抽 -------------------------------------
-        c_n = math.ceil(len(rest_after_b) * strategy.c_sample_ratio)
-        c_df = (
-            rest_after_b.sample(
-                n=min(c_n, len(rest_after_b)), random_state=strategy.random_seed + 1
-            )
-            if c_n
-            else rest_after_b.head(0)
-        )
-        rest_after_b.drop(c_df.index)
+            # ---- C 类：在剩余里覆盖性抽 ----------------------------
+            c_n = math.ceil(len(rest_after_b) * strategy.c_sample_ratio)
+            c_n = min(c_n, len(rest_after_b))
+            if c_n > 0:
+                rab_idx = list(rest_after_b.index)
+                chosen_c = rng.choice(len(rab_idx), size=c_n, replace=False)
+                c_idx = [rab_idx[i] for i in chosen_c]
+                sampled_indexes_log["C"] = c_idx
+                c_df = rest_after_b.loc[c_idx]
+            else:
+                c_df = rest_after_b.head(0)
+        else:
+            b_df = rest.head(0)
+            c_df = rest.head(0)
 
         # ---- R 类：反向抽盘（物→账）— 从所有物料里再随机抽，验证账外存货 ----
         # 注意：R 类与 A/B/C 不互斥，可重复采（审计师同一物料既正向核对账面，也反向从实物查账）
         r_n = math.ceil(len(df) * strategy.reverse_sample_ratio)
-        r_df = (
-            df.sample(n=min(r_n, len(df)), random_state=strategy.random_seed + 2)
-            if r_n
-            else df.head(0)
+        r_n = min(r_n, len(df))
+        if r_n > 0:
+            all_df_idx = list(df.index)
+            chosen_r = rng.choice(len(all_df_idx), size=r_n, replace=False)
+            r_idx = [all_df_idx[i] for i in chosen_r]
+            sampled_indexes_log["R"] = r_idx
+            r_df = df.loc[r_idx]
+        else:
+            r_df = df.head(0)
+
+        # 写审计日志 (与 results 一起回填到 CountSheetResult)
+        logger.info(
+            "抽样完成 seed=%s B=%d C=%d R=%d 抽样index=%s",
+            strategy.random_seed,
+            len(sampled_indexes_log["B"]),
+            len(sampled_indexes_log["C"]),
+            len(sampled_indexes_log["R"]),
+            sampled_indexes_log,
         )
 
         # 组装最终行
@@ -274,6 +320,12 @@ class CountSheetBuilder:
             selected_items=len(rows),
             tier_summary=tier_summary,
             strategy=strategy,
+            audit_log={
+                "seed": strategy.random_seed,
+                "method": "numpy.default_rng",
+                "sampled_indexes": sampled_indexes_log,
+                "b_method": strategy.b_sample_method,
+            },
         )
 
     @classmethod

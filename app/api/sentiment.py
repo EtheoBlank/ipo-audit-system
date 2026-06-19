@@ -153,6 +153,7 @@ from app.services.auth import get_current_user, get_current_user_optional
 from app.services.auth.tenant import ensure_project_in_firm, _is_admin, _user_firm_id
 from app.services.auth.dependencies import require_role
 from app.models.db.auth import ROLE_ADMIN, ROLE_MANAGER
+from app.models.db.notification import ALL_NOTIF_SEVERITIES
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sentiment", tags=["舆情跟踪"])
@@ -445,9 +446,17 @@ async def ignore_event(
 async def import_event(
     body: SentimentEventImport,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    # P0 RBAC (2026-06-19): Assistant 不应能 import 绕过抓取流程;
+    # 手工录入舆情 = 录入关键事件, 至少 manager+ 才能确认, 否则任意 assistant 可注入 critical 事件.
+    current_user: User = Depends(require_role(ROLE_MANAGER)),
 ):
     await ensure_project_in_firm(db, body.project_id, current_user)
+    # P0 severity 白名单 (2026-06-19): 防止客户端伪造 critical 事件触发全局告警风暴
+    if body.severity not in ALL_NOTIF_SEVERITIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"severity 必须是 {ALL_NOTIF_SEVERITIES} 之一, 收到 {body.severity!r}",
+        )
     ch = compute_content_hash(
         source_code="manual",
         title=body.title,

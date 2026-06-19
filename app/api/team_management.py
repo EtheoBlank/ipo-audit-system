@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,8 +26,9 @@ from app.models.db_models import (
     WorkPlanItem,
     BLOCKER_STATUS_OPEN,
     MEMBER_STATUS_ACTIVE,
+    MEMBER_STATUS_INACTIVE,
 )
-from app.models.db.auth import User
+from app.models.db.auth import ROLE_ADMIN, User
 from app.services.auth import get_current_user, get_current_user_optional
 from app.services.auth.tenant import (
     ensure_project_in_firm,
@@ -70,6 +71,28 @@ from app.services.team_management.progress_tracker import ProgressTracker
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/team-management", tags=["项目组管理"])
+
+
+# ============================================================
+#  人员软删除 helper (P0 2026-06-19)
+#  ============================================================
+
+
+def _soft_delete_member(
+    member: TeamMember, current_user: User
+) -> None:
+    """软删除 TeamMember — 保留审计师/员工历史关联 (ProjectAssignment / DailyReport 等).
+
+    软删除: is_active=False + deactivated_at + deactivated_by. 后续 list_members 等
+    可按 is_active 过滤; 历史 ProjectAssignment/DailyReport 仍可查 (member_id 留有引用).
+
+    关联的 ProjectAssignment / WorkPlanItem / DailyReport / Blocker 维持原状 —
+    审计师报告需要显示"已离职 X 提交", 不应级联断链.
+    """
+    member.is_active = False
+    member.deactivated_at = datetime.now(timezone.utc)
+    member.deactivated_by = current_user.id
+    member.status = MEMBER_STATUS_INACTIVE  # 同步 status 字段供前端 status='inactive' 过滤
 
 
 # ============================================================
@@ -142,11 +165,39 @@ async def delete_member(
     member_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    # P0 硬删除二次确认 (2026-06-19): 仅 admin + header X-Confirm-Hard-Delete=yes 才走硬删除,
+    # 否则走软删除 (推荐, 保留审计师历史关联)
+    x_confirm_hard_delete: Optional[str] = Header(None, alias="X-Confirm-Hard-Delete"),
 ):
+    """删除成员 — 默认软删除 (推荐, 保留历史 ProjectAssignment / DailyReport).
+
+    软删除: 仅置 is_active=False, 关联记录维持原状.
+    硬删除: 仅 admin 可触发, 需 header ``X-Confirm-Hard-Delete: yes``.
+            硬删除触发 ORM cascade, 若 TeamMember 没正确配 cascade 会留下幽灵 member_id.
+    """
     m = await ensure_team_member_in_firm(db, member_id, current_user)
-    await db.delete(m)
+    if x_confirm_hard_delete == "yes":
+        # 二次确认 + 角色守卫
+        if current_user.role != ROLE_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail=f"硬删除需 admin 角色, 当前 {current_user.role}",
+            )
+        logger.warning(
+            "硬删除 TeamMember id=%s by user_id=%s", m.id, current_user.id
+        )
+        await db.delete(m)
+        await db.commit()
+        return {"message": "人员已硬删除", "hard_deleted": True}
+    # 默认软删除
+    _soft_delete_member(m, current_user)
     await db.commit()
-    return {"message": "人员已删除"}
+    await db.refresh(m)
+    return {
+        "message": "人员已软删除 (保留历史关联)",
+        "soft_deleted": True,
+        "deactivated_at": m.deactivated_at.isoformat() if m.deactivated_at else None,
+    }
 
 
 # ============================================================

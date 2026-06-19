@@ -223,6 +223,13 @@ class InventoryAgingEngine:
 
         :param prior_period_end: 上年期末日（如 2023-12-31），用于精确计算
             期初库龄。为 None 时退回 period_end - 365 天保守兜底。
+
+        P0-3 (2026-06-19): 重复计入防御. 若用户在 movements 同时提供 prior_period_end
+        又在每行填了 inbound_date (典型场景: 整体迁移 ERP 历史但明细不全),
+        opening_qty 会被当作"prior 期末的单一聚合批" + 每行 inbound_qty 独立批,
+        双重计入. ERP 通常无逐批明细, opening 是 prior 期末聚合, 不能再拆.
+        同一物料: prior_period_end 给定 → opening 仅作 1 批, 不再叠加 inbound 批;
+        compute() 层负责校验并拒绝错误组合.
         """
         # 构造合成批次列表 [(入库日期, 剩余数量)]
         batches: list[tuple[datetime, float]] = []
@@ -230,7 +237,15 @@ class InventoryAgingEngine:
         if opening_qty_total > 0:
             if prior_period_end is not None:
                 # 精确使用上年期末日, 期初库龄 = period_end - prior_period_end
+                # P0-3 (2026-06-19): 当 prior_period_end 提供时, opening_qty 视为
+                # "prior 期末的单一聚合批" — 不再叠加每行 inbound_qty (否则双重计入).
                 batches.append((prior_period_end, opening_qty_total))
+                # 提前返回聚合路径: 跳过 inbound 批次解析
+                batches.sort(key=lambda x: x[0])
+                # 直接走 FIFO 扣减 (后续逻辑复用)
+                return InventoryAgingEngine._fifo_aging_from_batches(
+                    batches, period_end, movements, opening_qty_total
+                )
             else:
                 # 兜底: 期初统一当 "已经 365 天" 处理（保守）
                 batches.append((period_end - pd.Timedelta(days=365), opening_qty_total))
@@ -244,6 +259,22 @@ class InventoryAgingEngine:
 
         batches.sort(key=lambda x: x[0])  # FIFO: 最早入库的先出
 
+        return InventoryAgingEngine._fifo_aging_from_batches(
+            batches, period_end, movements, opening_qty_total
+        )
+
+    @staticmethod
+    def _fifo_aging_from_batches(
+        batches: list[tuple[datetime, float]],
+        period_end: datetime,
+        movements: list[dict[str, Any]],
+        opening_qty_total: float,
+    ) -> AgingBucket:
+        """从已构造的批次列表 [(dt, qty)] 走完 FIFO 扣减 + 库龄分桶.
+
+        P0-3 (2026-06-19): 抽出 fifo_aging 的剩余逻辑, 让"仅含 prior 期末的单一聚合批"
+        路径也能复用扣减 + 分桶逻辑, 不再走 inbound 重复.
+        """
         total_outbound = sum(float(m.get("outbound_qty") or 0) for m in movements)
         remaining_out = total_outbound
         # 从头扣减
@@ -484,6 +515,21 @@ class InventoryAgingEngine:
                 continue
 
             code_prior_end = prior_period_end.get(code) if prior_period_end else None
+            # P0-3 (2026-06-19): 错误组合校验. 若同时提供 prior_period_end
+            # 又在 movements 填了 inbound_date (典型场景: ERP 历史迁移明细不全),
+            # opening_qty 会被双重计入 (单批 + 每行 inbound). 此时应拒绝,
+            # 强制二选一: 要么用 prior_period_end (整体聚合), 要么走逐批 inbound.
+            if code_prior_end is not None:
+                has_inbound_with_date = any(
+                    (m.get("inbound_qty") or 0) > 0 and m.get("inbound_date") is not None
+                    for m in ms
+                )
+                if has_inbound_with_date:
+                    raise ValueError(
+                        f"物料 {code}: prior_period_end 与 inbound_date/inbound_qty "
+                        f"不可同时提供 (opening_qty 会被双重计入). "
+                        f"请二选一: 要么删除 inbound_date 走聚合路径, 要么不传 prior_period_end."
+                    )
             aging = self.fifo_aging(ms, period_end, prior_period_end=code_prior_end)
 
             # 账实差异检测：FIFO 推算后剩余数量与账面期末数偏离 > 5% → 在 note 标注

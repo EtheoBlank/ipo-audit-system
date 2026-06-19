@@ -20,6 +20,11 @@ from app.models.db_models import (
     SentimentSubject,
     PaidSourceMissingKey,
 )
+from app.services.notification import NotificationService
+from app.models.db.notification import (
+    NOTIF_MODULE_SENTIMENT,
+    NOTIF_SEVERITY_WARN,
+)
 from app.services.sentiment.dedup import RawSentimentItem
 from app.services.sentiment.http_client import SentimentHttpClient
 from app.services.sentiment.notifier import create_notification
@@ -167,6 +172,9 @@ class SentimentScraperService:
 
         # 信源状态收集
         source_status: dict[str, str] = {}
+        # P0-4 (2026-06-19): 收集被跳过的付费信源 (无 API key), run_daily_scan 末尾汇总时
+        # 推红点 (NotificationService.push), 提醒管理员配置. 仅付费源, 免费源不通知.
+        skipped_paid_codes: list[str] = []
 
         # 抓取 + 入库
         async with SentimentHttpClient() as http:
@@ -183,6 +191,7 @@ class SentimentScraperService:
                     key = getattr(settings, meta["api_key_ref"], "") if meta["api_key_ref"] else ""
                     if not key:
                         source_status[code] = "skipped"
+                        skipped_paid_codes.append(code)
                         logger.debug("信源 %s 无 API key, 跳过", code)
                         continue
                     adapter_cls = meta["factory"]()
@@ -245,6 +254,10 @@ class SentimentScraperService:
                 link_url=f"/sentiment?project_id={project.id}",
             )
 
+        # P0-4 (2026-06-19): 付费信源无 key → 推红点 (管理员可感知 "信源配置缺失")
+        if skipped_paid_codes:
+            await self._notify_missing_paid_sources(db, project, skipped_paid_codes)
+
         await db.commit()
         logger.info(
             "scrape_project: project=%s 命中 %d 条 (新增 %d) 各源状态=%s",
@@ -254,6 +267,69 @@ class SentimentScraperService:
             source_status,
         )
         return added, source_status
+
+    async def _first_time_missing(self, db: AsyncSession, source_code: str) -> bool:
+        """返回 True 当 source_code 在最近 30 天没出现过 source_missing_key 通知.
+        P0-4 (2026-06-19): 30 天内已通知过 → 不重复推, 避免噪声刷屏.
+        """
+        from sqlalchemy import and_, func, select
+
+        from app.models.db.notification import Notification
+
+        cutoff = _utcnow() - timedelta(days=30)
+        stmt = (
+            select(func.count(Notification.id))
+            .where(
+                and_(
+                    Notification.module == NOTIF_MODULE_SENTIMENT,
+                    Notification.type == "source_missing_key",
+                    Notification.resource_type == "sentiment_source",
+                    Notification.resource_id == source_code,
+                    Notification.created_at >= cutoff,
+                )
+            )
+        )
+        n = int((await db.execute(stmt)).scalar_one() or 0)
+        return n == 0
+
+    async def _notify_missing_paid_sources(
+        self,
+        db: AsyncSession,
+        project: Project,
+        skipped_codes: list[str],
+    ) -> None:
+        """对每个跳过的付费信源, 30 天内首次发现就推一条 source_missing_key 通知."""
+        for code in skipped_codes:
+            meta = _PROVIDER_REGISTRY.get(code) or {}
+            display = meta.get("display_name", code)
+            api_key_ref = meta.get("api_key_ref") or ""
+            try:
+                first = await self._first_time_missing(db, code)
+            except Exception as exc:
+                logger.warning("查 source_missing_key 历史失败 %s: %s", code, exc)
+                first = True  # 兜底: 失败就当首次, 至少推一条
+            if not first:
+                continue
+            body = (
+                f"项目 {project.company_name}: 付费信源 {display} ({code}) 未配置 API key. "
+                f"请在环境变量 {api_key_ref} 设置密钥后重启扫描. "
+                f"重复出现将不再提示 (30 天内)."
+            )
+            try:
+                await NotificationService.push(
+                    db,
+                    module=NOTIF_MODULE_SENTIMENT,
+                    type="source_missing_key",
+                    title=f"舆情信源缺密钥: {display}",
+                    body=body,
+                    severity=NOTIF_SEVERITY_WARN,
+                    resource_type="sentiment_source",
+                    resource_id=code,
+                    project_id=project.id,
+                    commit=False,  # 留给 scrape_project 末尾统一 commit
+                )
+            except Exception as exc:
+                logger.warning("推 source_missing_key 通知失败 %s: %s", code, exc)
 
     async def _run_one_source(
         self,

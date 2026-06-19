@@ -11,6 +11,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -40,6 +41,14 @@ router = APIRouter(prefix="/api/contracts", tags=["收入合同"])
 
 
 # ---------- helpers ------------------------------------------------------
+
+
+def _safe_unlink(path: Path) -> None:
+    """安全删除临时文件, 供 asyncio.to_thread 调用. 失败静默 (missing_ok 语义)."""
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _to_response(c: ContractDocument) -> ContractDocumentResponse:
@@ -92,18 +101,16 @@ async def upload_contract(
     save_dir.mkdir(parents=True, exist_ok=True)
     temp_path = save_dir / f"contract_{file.filename}"
     content = await file.read()
-    temp_path.write_bytes(content)
+    # P0 性能 (2026-06-19): 50MB+ 合同同步 write_bytes 阻塞 event loop, 改 to_thread
+    await asyncio.to_thread(temp_path.write_bytes, content)
 
     try:
         engine, ocr_text = ContractOCR.run(temp_path, file.filename or "")
     except OCRError as exc:
-        temp_path.unlink(missing_ok=True)
+        await asyncio.to_thread(_safe_unlink, temp_path)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
-        try:
-            temp_path.unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
-            pass
+        await asyncio.to_thread(_safe_unlink, temp_path)
 
     doc = ContractDocument(
         project_id=project_id,

@@ -156,16 +156,21 @@ class TestFifoDoubleComputeNoDuplicateOpening:
     """P0-5: 多次 compute 同一项目, opening batches 不重复 (不双重加权)"""
 
     def test_compute_twice_same_project_opening_not_duplicated(self):
-        """同一 movements 反复 compute, 期初批次只算一次 (单次调用内的循环)"""
+        """同一 movements 反复 compute, 期初批次只算一次 (单次调用内的循环).
+
+        P0-3 (2026-06-19): 现在 prior_period_end 与 inbound_date 不可同时提供
+        (会双重计入). 本测试改用纯 prior 聚合路径: opening_qty=100, 无 inbound 批,
+        验证两次 compute 结果一致 + 不累积.
+        """
         pe = datetime(2024, 12, 31)
         prior_pe = datetime(2023, 12, 31)
         movs = [{
             "material_code": "M", "material_name": "M",
             "opening_qty": 100, "opening_amount": 1000,
-            "inbound_qty": 50, "inbound_amount": 500,
+            "inbound_qty": 0, "inbound_amount": 0,
             "outbound_qty": 0, "outbound_amount": 0,
-            "ending_qty": 150, "ending_amount": 1500,
-            "inbound_date": pe - timedelta(days=30),
+            "ending_qty": 100, "ending_amount": 1000,
+            "inbound_date": None,  # P0-3: prior_period_end 与 inbound_date 二选一
         }]
         # 第一次 compute
         r1 = InventoryAgingEngine().compute(
@@ -178,8 +183,7 @@ class TestFifoDoubleComputeNoDuplicateOpening:
             prior_period_end={"M": prior_pe},
         )
         # 两次结果应一致 (单次 compute 内部没有累积)
-        assert r1.summary["aging_le_90"] == pytest.approx(r2.summary["aging_le_90"], rel=1e-6)
-        assert r1.summary["aging_181_365"] == pytest.approx(r2.summary["aging_181_365"], rel=1e-6)
+        assert r1.summary["aging_366_730"] == pytest.approx(r2.summary["aging_366_730"], rel=1e-6)
         # 加权均龄也应一致
         assert r1.rows[0].aging.weighted_avg_age == pytest.approx(
             r2.rows[0].aging.weighted_avg_age, rel=1e-6

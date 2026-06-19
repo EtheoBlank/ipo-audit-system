@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import uuid
@@ -46,6 +47,15 @@ _kb_service = KnowledgeBaseService()
 
 
 _ALLOWED_SUFFIXES = {"pdf", "epub", "docx", "txt", "md", "markdown"}
+
+
+def _sync_write(path: Path, content: bytes) -> None:
+    """同步写文件, 供 asyncio.to_thread 调用.
+
+    100MB PDF 同步写会阻塞 event loop 数百 ms, 用 to_thread 释放 worker.
+    """
+    with open(path, "wb") as out:
+        out.write(content)
 
 
 # ----------------------------------------------------------------------
@@ -144,21 +154,29 @@ async def upload_book(
     target = settings.KNOWLEDGE_BASE_DIR / unique
     target.parent.mkdir(parents=True, exist_ok=True)
 
+    # P0 性能 (2026-06-19): 100MB PDF 同步写阻塞 event loop, 改 asyncio.to_thread.
+    # 流式读到 bytes 再 to_thread 写盘 — read 仍 async (上传是网络 IO),
+    # 只有 CPU+磁盘部分交给 thread pool.
     size = 0
-    with target.open("wb") as out:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
-            size += len(chunk)
-            if size > settings.KB_MAX_BOOK_SIZE:
-                out.close()
+    chunks: list[bytes] = []
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+        if size > settings.KB_MAX_BOOK_SIZE:
+            # 清理已落盘的部分 + 关闭 handle
+            try:
                 target.unlink(missing_ok=True)
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"文件过大 (>{settings.KB_MAX_BOOK_SIZE // (1024 * 1024)}MB)",
-                )
+            except Exception:  # noqa: BLE001
+                pass
+            raise HTTPException(
+                status_code=413,
+                detail=f"文件过大 (>{settings.KB_MAX_BOOK_SIZE // (1024 * 1024)}MB)",
+            )
+    content_bytes = b"".join(chunks)
+    await asyncio.to_thread(_sync_write, target, content_bytes)
 
     book = KnowledgeBook(
         title=(title or Path(filename).stem)[:500],
