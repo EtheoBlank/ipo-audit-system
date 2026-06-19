@@ -281,14 +281,30 @@ def _tab_capital_occupation(project_id: int) -> None:
     else:
         st.info("暂无资金占用记录")
 
+    # P1 修复 (2026-06-19): 旧 expander 内 button click → expander 折叠 → widget 重建
+    # → party_id 重置 0, 用户要点 2 次才能拿到结果
+    # 新: 结果存 session_state, expander 外展示; 加 keyed 默认值防 reset
+    result_key = f"rp_co_result_{project_id}"
     with st.expander("🔍 自动计算占用余额", expanded=False):
         c1, c2, c3 = st.columns(3)
-        party_id = c1.number_input("party_id", min_value=1, step=1, key="rp_co_party")
-        period_start = c2.text_input("起始日期", key="rp_co_start")
-        period_end = c3.text_input("结束日期", key="rp_co_end")
+        party_id = c1.number_input(
+            "party_id", min_value=1, step=1,
+            value=int(st.session_state.get(f"rp_co_party_{project_id}", 1)),
+            key=f"rp_co_party_{project_id}",
+        )
+        period_start = c2.text_input(
+            "起始日期",
+            value=st.session_state.get(f"rp_co_start_{project_id}", ""),
+            key=f"rp_co_start_{project_id}",
+        )
+        period_end = c3.text_input(
+            "结束日期",
+            value=st.session_state.get(f"rp_co_end_{project_id}", ""),
+            key=f"rp_co_end_{project_id}",
+        )
         if st.button("📊 计算"):
             if party_id and period_start and period_end:
-                r = _api(
+                st.session_state[result_key] = _api(
                     "GET",
                     f"/api/related-parties/projects/{project_id}/capital-occupations/auto-compute",
                     params={
@@ -297,12 +313,17 @@ def _tab_capital_occupation(project_id: int) -> None:
                         "period_end": period_end,
                     },
                 )
-                if r:
-                    st.success(
-                        f"最大占用 {r.get('max_amount', 0):.2f} 元 "
-                        f"(发生 {r.get('voucher_count', 0)} 笔, "
-                        f"最大日期 {r.get('max_date', '-')}, 期末 {r.get('ending_balance', 0):.2f})"
-                    )
+                st.rerun()
+
+    # 结果展示在 expander 外, 不受折叠影响
+    if st.session_state.get(result_key):
+        r = st.session_state[result_key]
+        if r:
+            st.success(
+                f"最大占用 {r.get('max_amount', 0):.2f} 元 "
+                f"(发生 {r.get('voucher_count', 0)} 笔, "
+                f"最大日期 {r.get('max_date', '-')}, 期末 {r.get('ending_balance', 0):.2f})"
+            )
 
 
 def _tab_peer_competition(project_id: int) -> None:

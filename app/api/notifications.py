@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.models.notification import (
     NotificationListResponse,
     NotificationMarkReadRequest,
@@ -27,7 +28,15 @@ router = APIRouter(prefix="/api/notifications", tags=["通知中心"])
 def _resolve_user_id(user: Optional[User]) -> Optional[int]:
     if user is None:
         return None
-    # synthetic admin (AUTH_ENABLED=false 时) id=0 → 视为广播范围
+    # P1 修复 (2026-06-19): user.id=0 旧 fallthrough 到 None → 看全 user_id IS NULL 广播
+    # 当 AUTH_ENABLED=true 时这是危险泄漏; 现区分合成 admin 与真用户
+    if user.id == 0 and settings.AUTH_ENABLED:
+        # 合成 admin 但 AUTH_ENABLED=true 时 user 应已通过 get_current_user 真认证
+        # 这种状态异常, 当作未登录处理避免泄漏
+        raise HTTPException(
+            status_code=401,
+            detail="会话异常 (id=0), 请重新登录",
+        )
     return user.id or None
 
 
