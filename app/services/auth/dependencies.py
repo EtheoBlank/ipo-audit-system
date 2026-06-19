@@ -112,8 +112,10 @@ async def get_current_user(
         # P0 第 2 轮修复 — 同样把 synthetic admin 挂到 request.state, 让审计中间件能记
         try:
             request.state.user = user  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # request.state 写入失败不应该阻断鉴权 (它只是审计中间件便利)
+            # 但 silent 留痕, 因为审计中间件拿不到 user 会丢记录
+            logger.warning("get_current_user: request.state.user 写入失败: %s", exc)
         return user
     user = await _user_from_bearer(credentials, db)
     if user is None:
@@ -125,8 +127,8 @@ async def get_current_user(
     # 把 user 挂到 request.state 方便审计中间件读
     try:
         request.state.user = user  # type: ignore[attr-defined]
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_current_user: request.state.user 写入失败: %s", exc)
     return user
 
 
@@ -147,8 +149,8 @@ async def get_current_user_optional(
     if user is not None:
         try:
             request.state.user = user  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("get_current_user_optional: request.state.user 写入失败: %s", exc)
     return user
 
 

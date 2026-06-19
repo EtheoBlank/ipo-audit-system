@@ -47,8 +47,9 @@ def _safe_unlink(path: Path) -> None:
     """安全删除临时文件, 供 asyncio.to_thread 调用. 失败静默 (missing_ok 语义)."""
     try:
         path.unlink(missing_ok=True)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        # missing_ok 兜底, 但 silent 留痕 (orphan 文件不会被清理)
+        logger.debug("contracts: 临时文件 unlink 失败: path=%s exc=%s", path, exc)
 
 
 def _to_response(c: ContractDocument) -> ContractDocumentResponse:

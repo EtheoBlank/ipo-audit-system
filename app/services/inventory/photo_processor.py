@@ -290,8 +290,12 @@ class CountPhotoProcessor:
                 if dt:
                     try:
                         counted_at_first = datetime.fromisoformat(dt[:10])
-                    except ValueError:
-                        pass
+                    except ValueError as date_exc:
+                        # AI 返回的 counted_at 偶尔格式异常, 不阻塞主流程但留痕
+                        logger.warning(
+                            "CountPhotoProcessor counted_at 解析失败 raw=%r exc=%s",
+                            dt[:32], date_exc,
+                        )
 
         result.parsed_rows = all_rows
         result.counted_by = counted_by_first

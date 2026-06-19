@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import pytest
 
 from app.services.audit_cycles import (
     DepreciationCalculator,
@@ -188,41 +189,57 @@ class TestScanExpenseAnomaliesPeriodEndValidation:
         import app.api.audit_cycles as _ac_module
         from app.services.audit_cycles import ExpensesAnomalyDetector
 
+        # round 29 修: 保存原引用并在 yield 后恢复, 避免污染后续 test (test_idor_p0 等)
+        # 因为该测试是 class 内普通 def, 不能用 yield fixture, 改用 try/finally 包到 TestClient 调用外
         _orig_ensure = _ac_module.ensure_project_in_firm
         _orig_scan = ExpensesAnomalyDetector.scan
         _ac_module.ensure_project_in_firm = _override_ensure
         ExpensesAnomalyDetector.scan = staticmethod(_fake_scan)
-        # TestClient 结束后不需要还原 (进程内 fixture scope 即可)
-        return app, TestClient(app)
+        client = TestClient(app)
+
+        def _restore():
+            _ac_module.ensure_project_in_firm = _orig_ensure
+            ExpensesAnomalyDetector.scan = _orig_scan
+
+        return app, client, _restore
 
     def test_period_end_invalid_format_rejected_400(self):
         """'2024年12月31日' 不是 YYYY-MM-DD → 400."""
-        _, client = self._build_app_and_overrides()
-        r = client.post(
-            "/api/audit-cycles/expenses/scan-anomalies/1",
-            params={"period_end": "2024年12月31日"},
-        )
-        # 校验在 ensure_project_in_firm 之前, 所以应 400
-        assert r.status_code == 400, r.text
-        assert "YYYY-MM-DD" in r.json()["detail"]
+        _, client, restore = self._build_app_and_overrides()
+        try:
+            r = client.post(
+                "/api/audit-cycles/expenses/scan-anomalies/1",
+                params={"period_end": "2024年12月31日"},
+            )
+            # 校验在 ensure_project_in_firm 之前, 所以应 400
+            assert r.status_code == 400, r.text
+            assert "YYYY-MM-DD" in r.json()["detail"]
+        finally:
+            restore()
 
     def test_period_end_iso_format_passes_validation(self):
         """正确 ISO 格式应通过格式校验 (后续步骤可能因 DB 不可用而失败,
         但不应是 400 格式错误)."""
-        _, client = self._build_app_and_overrides()
-        r = client.post(
-            "/api/audit-cycles/expenses/scan-anomalies/1",
-            params={"period_end": "2024-12-31"},
-        )
-        # 校验通过后会跑到 ensure_project_in_firm, 会因为 db=None 报错,
-        # 但绝不应是 400 (格式问题).
-        assert r.status_code != 400, r.text
+        _, client, restore = self._build_app_and_overrides()
+        try:
+            r = client.post(
+                "/api/audit-cycles/expenses/scan-anomalies/1",
+                params={"period_end": "2024-12-31"},
+            )
+            # 校验通过后会跑到 ensure_project_in_firm, 会因为 db=None 报错,
+            # 但绝不应是 400 (格式问题).
+            assert r.status_code != 400, r.text
+        finally:
+            restore()
 
     def test_period_end_none_passes_validation(self):
         """period_end 为空时, 跳过校验 (现有行为)."""
-        _, client = self._build_app_and_overrides()
-        r = client.post(
-            "/api/audit-cycles/expenses/scan-anomalies/1",
-            params={},
-        )
-        assert r.status_code != 400, r.text
+        _, client, restore = self._build_app_and_overrides()
+        try:
+            r = client.post(
+                "/api/audit-cycles/expenses/scan-anomalies/1",
+                params={},
+            )
+            assert r.status_code != 400, r.text
+        finally:
+            restore()

@@ -92,16 +92,20 @@ class RevenueCutoffTester:
         rc_dt = None
         try:
             ship_dt = datetime.strptime(ship_date, "%Y-%m-%d") if ship_date else None
-        except Exception:
-            pass
+        except Exception as exc:
+            # 上游字段脏数据 (非 ISO), 不阻断主流程, 留痕
+            logger.debug("ipo_specials: ship_date 解析失败 raw=%r exc=%s", ship_date, exc)
         try:
             rc_dt = (
                 datetime.strptime(revenue_confirm_date, "%Y-%m-%d")
                 if revenue_confirm_date
                 else None
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "ipo_specials: revenue_confirm_date 解析失败 raw=%r exc=%s",
+                revenue_confirm_date, exc,
+            )
 
         if not ship_dt or not rc_dt:
             return "normal", 0

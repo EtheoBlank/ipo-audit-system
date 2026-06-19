@@ -540,8 +540,10 @@ class ConfirmationLetterGenerator:
             )
             if r.returncode == 0 and out.exists():
                 return out
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # libreoffice 未安装 / 转换超时 / 子进程异常 — 都 fallback 到 docx 原样
+            # silent 是合理的 (上层会用 docx 路径), 但留痕便于排查
+            logger.debug("letter_generator: libreoffice docx→pdf 转换失败 fallback: %s", exc)
         return None
 
     # ---- 一键生成 ----------------------------------------------------

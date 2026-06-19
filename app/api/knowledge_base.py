@@ -169,8 +169,9 @@ async def upload_book(
             # 清理已落盘的部分 + 关闭 handle
             try:
                 target.unlink(missing_ok=True)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as unlink_exc:  # noqa: BLE001
+                # 文件过大要被清掉, unlink 失败不阻塞 413 抛出
+                logger.warning("KB 上传超限清理临时文件失败: path=%s exc=%s", target, unlink_exc)
             raise HTTPException(
                 status_code=413,
                 detail=f"文件过大 (>{settings.KB_MAX_BOOK_SIZE // (1024 * 1024)}MB)",

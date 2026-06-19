@@ -411,6 +411,10 @@ try:
 
     _sa_event.listen(AuditLog, "before_update", _audit_log_block_update)
     _sa_event.listen(AuditLog, "before_delete", _audit_log_block_delete)
-except Exception:  # noqa: BLE001
+except Exception as exc:  # noqa: BLE001
     # 极端情况下 event 注册失败 (例如老版 SQLAlchemy) 不阻塞 ORM 加载
-    pass
+    # silent 是有意的 (模块加载期), 但留痕 — event 失败等于审计保护失效
+    import logging
+    logging.getLogger(__name__).warning(
+        "AuditLog before_update/delete 事件注册失败 — 审计轨迹防篡改保护可能失效: %s", exc
+    )

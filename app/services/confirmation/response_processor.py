@@ -163,8 +163,13 @@ class ConfirmationResponseProcessor:
         if rd:
             try:
                 result.received_date = datetime.fromisoformat(rd[:10])
-            except ValueError:
-                pass
+            except ValueError as date_exc:
+                # 日期格式异常 (AI 偶尔返回 "2024/01/15" / "2024年1月" / 乱七八糟)
+                # 留痕便于排查, 不阻断主流程
+                logger.warning(
+                    "ConfirmationResponse AI received_date 解析失败 raw=%r exc=%s",
+                    rd[:32], date_exc,
+                )
         result.response_method = str(data.get("response_method") or "扫描件")
         result.subjects_detail = data.get("subjects_detail") or {}
         result.response_summary = str(data.get("response_summary") or "")

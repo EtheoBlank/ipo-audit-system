@@ -57,6 +57,54 @@ from app.models.db_models import (
 
 
 # ============================================================
+#  Round 29 修: 防御性 autouse fixture — 防止其他 test (如 test_audit_cycles_p0.py)
+#  monkey-patch 模块级函数 (ensure_project_in_firm / ExpensesAnomalyDetector.scan)
+#  残留污染本文件后续 test。本 fixture 在每个 test 启动时强制恢复
+#  audit_cycles 模块和 ExpensesAnomalyDetector 的真实引用, 保证 IDOR 测试
+#  看到的是生产实现, 而不是被 mock 成"返 None"的版本。
+# ============================================================
+@pytest.fixture(autouse=True)
+def _restore_audit_cycles_module_state():
+    """在每个 IDOR test 启动时恢复 audit_cycles 模块被 monkey-patch 的状态.
+
+    已知污染源: tests/test_audit_cycles_p0.py::TestScanExpenseAnomaliesPeriodEndValidation
+    该 class 在 _build_app_and_overrides 中直接修改
+      - app.api.audit_cycles.ensure_project_in_firm
+      - ExpensesAnomalyDetector.scan
+    且原版用 yield 不还原, 残留到后续 test。
+    """
+    try:
+        import app.api.audit_cycles as _ac_module
+        from app.services.audit_cycles import ExpensesAnomalyDetector
+        from app.services.auth.tenant import ensure_project_in_firm as _real_ensure
+    except ImportError:
+        yield
+        return
+
+    # 记录当前是否已被污染
+    _orig_ensure = _ac_module.ensure_project_in_firm
+    _orig_scan = ExpensesAnomalyDetector.scan
+    _was_polluted_ensure = _orig_ensure is not _real_ensure
+    # ExpensesAnomalyDetector.scan 是 staticmethod, 比较 __func__ 才能判等
+    _orig_scan_func = _orig_scan.__func__ if isinstance(_orig_scan, staticmethod) else _orig_scan
+    from app.services.audit_cycles import ExpensesAnomalyDetector as _EAD
+    _real_scan_func = _EAD.scan.__func__ if isinstance(_EAD.scan, staticmethod) else _EAD.scan
+    _was_polluted_scan = _orig_scan_func is not _real_scan_func
+
+    # 立刻恢复生产引用 (test 启动前)
+    if _was_polluted_ensure:
+        _ac_module.ensure_project_in_firm = _real_ensure
+    if _was_polluted_scan:
+        ExpensesAnomalyDetector.scan = _real_scan_func
+
+    try:
+        yield
+    finally:
+        # test 跑完后, 不强求还原, 留给下一个 autouse 自己处理
+        pass
+
+
+# ============================================================
 #  Fixtures
 # ============================================================
 

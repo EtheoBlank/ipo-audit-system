@@ -37,8 +37,9 @@ def _try_parse_date(s: Any) -> Optional[date]:
     # 1) ISO
     try:
         return date.fromisoformat(s)
-    except (ValueError, TypeError):
-        pass
+    except (ValueError, TypeError) as exc:
+        # 不抛给上层 (fallback 流程), 但留痕便于排查脏数据
+        logger.debug("count_plan: ISO date 解析失败 input=%r exc=%s", s, exc)
     # 2) YYYY/MM/DD 或 YYYY/M/D
     m = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})$", s)
     if m:

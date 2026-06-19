@@ -1,9 +1,13 @@
 """AI-powered risk analysis service for IPO Audit System."""
 
+import logging
+
 import httpx
 import json
 from typing import List, Dict, Optional
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class AIAnalysisService:
@@ -225,8 +229,10 @@ class AIAnalysisService:
             if start_idx >= 0 and end_idx > start_idx:
                 json_str = response[start_idx:end_idx]
                 return json.loads(json_str)
-        except Exception:
-            pass
+        except Exception as exc:
+            # AI 偶尔吐 markdown 包裹 / 截断 / 非法 JSON, fallback 是有意的
+            # 但留痕便于排查 prompt 模板
+            logger.warning("AIAnalysisService._parse_json 失败 fallback: %s", exc)
         return {"error": "无法解析AI响应", "raw_response": response[:500]}
 
     def _parse_list_response(self, response: str) -> List[str]:
@@ -239,8 +245,8 @@ class AIAnalysisService:
                 items = json.loads(json_str)
                 if isinstance(items, list):
                     return items if isinstance(items[0], str) else [str(item) for item in items]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("AIAnalysisService._parse_list 失败 fallback: %s", exc)
         return [response[:500]]
 
     def _parse_list_of_dicts(self, response: str) -> List[Dict]:
@@ -256,6 +262,6 @@ class AIAnalysisService:
                         return items
                     elif isinstance(items[0], str):
                         return [{"recommendation": item} for item in items]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("AIAnalysisService._parse_list_of_dicts 失败 fallback: %s", exc)
         return []

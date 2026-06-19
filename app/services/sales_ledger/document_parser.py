@@ -67,8 +67,12 @@ class DocumentParser:
         finally:
             try:
                 temp_path.unlink(missing_ok=True)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as unlink_exc:  # noqa: BLE001
+                # 临时文件 unlink 失败不阻塞主流程 (finally 块), 但留痕
+                logger.warning(
+                    "document_parser: 临时文件清理失败: path=%s exc=%s",
+                    temp_path, unlink_exc,
+                )
 
         raise DocumentParserError(f"未知文件类型: {ext}")
 

@@ -366,8 +366,12 @@ class TeamManagementService:
             if b.raised_at:
                 try:
                     age_hours = (now - b.raised_at).total_seconds() / 3600.0
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    # 卡点时间差计算失败 (tz-naive vs tz-aware) fallback 0
+                    logger.debug(
+                        "team_management: blocker age 计算失败 fallback=0: blocker_id=%s exc=%s",
+                        getattr(b, "id", None), exc,
+                    )
             recent_blockers_data.append(
                 {
                     "title": b.title,

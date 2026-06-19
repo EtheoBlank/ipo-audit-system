@@ -665,8 +665,12 @@ async def upload_count_photo(
         # 删除已写入的文件，避免 orphan
         try:
             target.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as unlink_exc:
+            # unlink 失败也不阻塞 OCR 错误向上抛 — 但留痕便于排查
+            logger.warning(
+                "清理 OCR 失败照片 orphan 失败 (photo) project=%s file=%s: %s",
+                project_id, safe_name, unlink_exc,
+            )
         raise HTTPException(
             status_code=422,
             detail=f"OCR 失败，无法识别该盘点照片：{exc}。请重新拍摄更清晰、对焦正确的照片，或先安装 OCR 引擎 (paddleocr 推荐)。",
