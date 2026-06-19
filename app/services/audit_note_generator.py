@@ -165,25 +165,39 @@ class AuditNoteGenerator:
         if not keywords:
             return []
 
+        # P0 性能修复 (2026-06-19): 旧版对 Regulation.full_text (Text 无索引) 做 LIKE
+        # 10K+ 条规 × 5 kw × 3 列 = 150 LIKE-on-Text → 全表扫, 单次 10s+
+        # 新版: 只查 title/keywords (短字段, LIKE 快), full_text 留给 Python 后置过滤
         from sqlalchemy import or_
 
+        # 截断关键词防超长 + LIKE 通配符转义
+        from app.services.auth.audit_log import _escape_like
+
+        kw_capped = [k[:30] for k in keywords[:8]]
         clauses = []
-        for kw in keywords:
-            like = f"%{kw}%"
-            clauses.append(Regulation.title.like(like))
-            clauses.append(Regulation.full_text.like(like))
-            clauses.append(Regulation.keywords.like(like))
+        for kw in kw_capped:
+            like = f"%{_escape_like(kw)}%"
+            clauses.append(Regulation.title.like(like, escape="\\"))
+            clauses.append(Regulation.keywords.like(like, escape="\\"))
         stmt = (
             select(Regulation)
             .where(or_(*clauses))
             .order_by(Regulation.publish_date.desc().nullslast())
-            .limit(5)
+            .limit(20)  # 多取一些供 Python 评分
         )
         try:
-            return list((await db.execute(stmt)).scalars().all())
+            rows = list((await db.execute(stmt)).scalars().all())
         except Exception:  # noqa: BLE001
             logger.exception("法规检索失败")
             return []
+
+        # 后置 full_text 二次过滤 (Python 内存级, 不走 DB)
+        def _hit(r: Regulation) -> bool:
+            ft = r.full_text or ""
+            return any(kw in ft for kw in kw_capped)
+
+        rows = [r for r in rows if _hit(r)]
+        return rows[:5]
 
     def _system_prompt(self) -> str:
         return (

@@ -219,9 +219,16 @@ async def create_firm(
 @router.get("/firms", response_model=List[FirmResponse])
 async def list_firms(
     is_active: Optional[bool] = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(ROLE_ADMIN)),
     db: AsyncSession = Depends(get_db),
 ):
+    # P1 IDOR 修复 (2026-06-19): 旧任何登录用户可拉全所 (SaaS 客户名单泄露)
+    # 现在 admin 全可见, 非 admin 仅自己 firm
+    if current_user.role != ROLE_ADMIN:
+        firm = (
+            await db.execute(select(Firm).where(Firm.id == current_user.firm_id))
+        ).scalar_one_or_none()
+        return [FirmResponse.model_validate(firm)] if firm else []
     stmt = select(Firm)
     if is_active is not None:
         stmt = stmt.where(Firm.is_active == is_active)
@@ -236,6 +243,9 @@ async def get_firm(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # P1 IDOR 修复 (2026-06-19): 非 admin 不能读别所 metadata
+    if current_user.role != ROLE_ADMIN and firm_id != current_user.firm_id:
+        raise HTTPException(status_code=403, detail="无权访问其他事务所")
     firm = (await db.execute(select(Firm).where(Firm.id == firm_id))).scalar_one_or_none()
     if firm is None:
         raise HTTPException(status_code=404, detail="事务所不存在")

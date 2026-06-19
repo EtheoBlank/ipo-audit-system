@@ -63,6 +63,22 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api._helpers import get_or_404
+
+
+def _sha256_file(path: str) -> str:
+    """同步计算文件 SHA-256, 8K chunk, 供 asyncio.to_thread 调用."""
+    import hashlib as _hl
+    h = _hl.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _read_file_bytes(path: str) -> bytes:
+    """同步读文件字节, 供 asyncio.to_thread 调用."""
+    with open(path, "rb") as f:
+        return f.read()
 from app.core.database import get_db
 from app.models.db_models import (
     NoLlmConfigured,
@@ -826,16 +842,14 @@ async def download_briefing(
     await ensure_project_in_firm(db, brief.project_id, current_user)
     if not brief.word_report_path or not Path(brief.word_report_path).exists():
         raise HTTPException(status_code=404, detail="Word 文档不存在")
-    # SHA-256 校验
+    # P1 性能 (2026-06-19): 旧版同步 open 阻塞事件循环; 用 asyncio.to_thread 释放
+    import asyncio as _asyncio
     if brief.word_report_sha256:
-        h = hashlib.sha256()
-        with open(brief.word_report_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                h.update(chunk)
-        if h.hexdigest() != brief.word_report_sha256:
+        expected = brief.word_report_sha256
+        actual = await _asyncio.to_thread(_sha256_file, brief.word_report_path)
+        if actual != expected:
             raise HTTPException(status_code=409, detail="文件 SHA-256 与记录不一致, 拒绝下载")
-    with open(brief.word_report_path, "rb") as f:
-        data = f.read()
+    data = await _asyncio.to_thread(_read_file_bytes, brief.word_report_path)
     fname = Path(brief.word_report_path).name
     return StreamingResponse(
         io.BytesIO(data),
@@ -1173,14 +1187,11 @@ async def download_report(
     if not rep.word_report_path or not Path(rep.word_report_path).exists():
         raise HTTPException(status_code=404, detail="Word 文档不存在")
     if rep.word_report_sha256:
-        h = hashlib.sha256()
-        with open(rep.word_report_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                h.update(chunk)
-        if h.hexdigest() != rep.word_report_sha256:
+        expected = rep.word_report_sha256
+        actual = await _asyncio.to_thread(_sha256_file, rep.word_report_path)
+        if actual != expected:
             raise HTTPException(status_code=409, detail="文件 SHA-256 不一致")
-    with open(rep.word_report_path, "rb") as f:
-        data = f.read()
+    data = await _asyncio.to_thread(_read_file_bytes, rep.word_report_path)
     fname = Path(rep.word_report_path).name
     return StreamingResponse(
         io.BytesIO(data),

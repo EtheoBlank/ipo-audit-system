@@ -124,8 +124,9 @@ def _tab_overview(project_id: int) -> None:
 
     st.divider()
 
-    # 当日事件数 / 最近简报
-    today = pd.Timestamp.now().strftime("%Y-%m-%d")
+    # 当日事件数 / 最近简报 — P1 (2026-06-19) 用本地 date.today() 替 pd.Timestamp.now()
+    # pd.Timestamp.now() 用本地 tz, 后端用 UTC, 跨日期 (凌晨 0-8 点) 不一致
+    today = date.today().isoformat()
     events_today = api_request(
         "GET", f"/api/sentiment/events?project_id={project_id}&date_from={today}&date_to={today}"
     )

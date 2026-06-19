@@ -35,6 +35,7 @@ Routes:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -107,6 +108,12 @@ router = APIRouter(prefix="/api/inventory", tags=["收发存盘点&减值"])
 def _deepseek_client() -> DeepSeekClient:
     # 兼容旧名; 实际实现统一到 app.api._helpers.deepseek_client
     return deepseek_client()
+
+
+def _write_bytes(path, data: bytes) -> None:
+    """同步写文件, 供 asyncio.to_thread 调用."""
+    with open(path, "wb") as f:
+        f.write(data)
 
 
 def _default_period_end(proj: Project) -> date:
@@ -634,8 +641,8 @@ async def upload_count_photo(
         allowed_exts={".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".pdf"},
     )
     target = unique_save_path(target_dir, safe_name)
-    with open(target, "wb") as f:
-        f.write(content)
+    # P1 性能 (2026-06-19): 写文件用 asyncio.to_thread 释放事件循环
+    await asyncio.to_thread(_write_bytes, target, content)
 
     media_type = "application/pdf" if suffix == ".pdf" else f"image/{suffix.lstrip('.') or 'jpeg'}"
 
