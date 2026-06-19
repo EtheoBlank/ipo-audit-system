@@ -36,8 +36,13 @@ def _tab_expenses(project_id: int) -> None:
 
     st.markdown("#### 业务招待费 60% / 1‰ 限额测算")
     c1, c2 = st.columns(2)
-    sales = c1.number_input("营业收入", min_value=0.0, value=10_000_000.0, step=100000.0)
-    entertainment = c2.number_input("业务招待费", min_value=0.0, value=100_000.0, step=1000.0)
+    # P2 (2026-06-19): 加 key= 防止 tab 切换时 widget 状态泄漏到其他 number_input
+    sales = c1.number_input(
+        "营业收入", min_value=0.0, value=10_000_000.0, step=100000.0, key="expenses_sales"
+    )
+    entertainment = c2.number_input(
+        "业务招待费", min_value=0.0, value=100_000.0, step=1000.0, key="expenses_entertainment"
+    )
     if st.button("📊 计算限额"):
         r = _api(
             "POST",
