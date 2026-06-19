@@ -83,8 +83,12 @@ class NotificationService:
             logger.exception("推送通知失败 (module=%s, type=%s): %s", module, type, exc)
             try:
                 await db.rollback()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as rollback_exc:  # noqa: BLE001
+                # round23: 推送失败 + rollback 失败 = 双重失明, 必须留痕
+                logger.warning(
+                    "推送通知 rollback 也失败 (module=%s, type=%s): commit_exc=%s, rollback_exc=%s",
+                    module, type, exc, rollback_exc,
+                )
             return None
 
     @staticmethod
@@ -100,8 +104,19 @@ class NotificationService:
                 count += 1
         try:
             await db.commit()
-        except Exception:  # noqa: BLE001
-            await db.rollback()
+        except Exception as commit_exc:  # noqa: BLE001
+            # round23: push_many 批量 commit 失败不应 silent drop, 至少 logger.exception 留 traceback
+            logger.exception(
+                "push_many commit 失败 (items=%d, 已 push 成功的也被回滚): %s",
+                count, commit_exc,
+            )
+            try:
+                await db.rollback()
+            except Exception as rollback_exc:  # noqa: BLE001
+                logger.warning(
+                    "push_many rollback 也失败: commit_exc=%s, rollback_exc=%s",
+                    commit_exc, rollback_exc,
+                )
             count = 0
         return count
 

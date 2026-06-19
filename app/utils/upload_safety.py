@@ -111,10 +111,19 @@ def neutralize_formula(value: object) -> object:
 
 
 def neutralize_dataframe_strings(df, columns: Optional[Iterable[str]] = None):
-    """In-place neutralise DDE prefixes in selected string columns."""
-    cols = (
-        list(columns) if columns is not None else [c for c in df.columns if df[c].dtype == object]
-    )
+    """In-place neutralise DDE prefixes in selected string columns.
+
+    round23 修复: pandas 2.x 默认 StringDtype (kind='O') 与 numpy object dtype
+    不严格相等, 旧版 `df[c].dtype == object` 会漏掉 StringDtype 列,
+    导致中性化静默失效. 改用 kind in ('O','U','S') 同时覆盖两种 string 表示.
+    """
+    def _is_string_col(c: str) -> bool:
+        if c not in df.columns:
+            return False
+        kind = df[c].dtype.kind
+        return kind in ("O", "U", "S")  # object / unicode / bytes
+
+    cols = list(columns) if columns is not None else [c for c in df.columns if _is_string_col(c)]
     for c in cols:
         if c in df.columns:
             df[c] = df[c].apply(neutralize_formula)

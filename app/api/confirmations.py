@@ -566,8 +566,13 @@ async def send_letter(
     subject_matters = []
     try:
         subject_matters = json.loads(item.subject_matters or "[]")
-    except Exception:
-        pass
+    except (TypeError, ValueError) as parse_exc:
+        # round23: subject_matters 损坏不能 silent, 否则锁定的快照是 []
+        logger.warning(
+            "subject_matters 解析失败, 退回空列表: item_id=%s, exc=%s",
+            item.id, parse_exc,
+        )
+        subject_matters = []
 
     gen = _letter_generator()
     try:
@@ -674,8 +679,12 @@ async def send_letter(
         try:
             if path and path.exists():
                 path.unlink()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as cleanup_exc:  # noqa: BLE001
+            # round23: 文件清理失败不能 silent drop, 否则磁盘泄漏无任何痕迹
+            logger.warning(
+                "发函失败后清理 docx/pdf 失败: path=%s, exc=%s (orig_exc=%s)",
+                path, cleanup_exc, exc,
+            )
         raise HTTPException(status_code=500, detail=f"发函失败: {exc}") from exc
     await db.refresh(letter)
     return letter
@@ -782,8 +791,12 @@ async def void_letter(
             p = Path(letter.file_path)
             if p.exists():
                 p.unlink()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as cleanup_exc:  # noqa: BLE001
+            # round23: 文件清理失败留痕, 否则作废发函后磁盘泄漏无任何痕迹
+            logger.warning(
+                "作废发函后清理 docx/pdf 失败: letter_id=%s, path=%s, exc=%s",
+                letter_id, letter.file_path, cleanup_exc,
+            )
     await db.commit()
     await db.refresh(letter)
     return letter
@@ -960,8 +973,12 @@ async def upload_response_photo(
         if path and Path(path).exists():
             try:
                 Path(path).unlink()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as cleanup_exc:  # noqa: BLE001
+                # round23: OCR 失败 + 清理失败 = 双重故障, 必须留痕
+                logger.warning(
+                    "OCR 失败后清理上传文件失败: path=%s, exc=%s (orig_exc=%s)",
+                    path, cleanup_exc, exc,
+                )
         raise HTTPException(status_code=500, detail=f"OCR 处理失败: {exc}") from exc
 
     # 找 / 创建 response (并发保护)
@@ -1044,8 +1061,12 @@ async def upload_response_photo(
         if path and Path(path).exists():
             try:
                 Path(path).unlink()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as cleanup_exc:  # noqa: BLE001
+                # round23: 并发冲突 + 清理失败 = 双重故障, 必须留痕
+                logger.warning(
+                    "IntegrityError 后清理上传文件失败: path=%s, exc=%s",
+                    path, cleanup_exc,
+                )
         raise HTTPException(status_code=409, detail=f"并发冲突: {exc.orig}")
     except Exception as exc:  # noqa: BLE001
         await db.rollback()

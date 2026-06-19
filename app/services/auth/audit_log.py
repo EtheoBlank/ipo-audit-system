@@ -123,11 +123,19 @@ async def record_audit_log(
                 await db.commit()
                 await db.refresh(log)
             except Exception as commit_exc:  # noqa: BLE001
+                # 审计系统自身写日志失败时, 不能再 silently drop, 否则:
+                # 1) 业务路由以为日志已写 (commit=False 路径下还可能污染业务事务)
+                # 2) 故障排查时无任何痕迹
                 logger.exception("audit_log commit 失败 (已吞, 业务不受影响): %s", commit_exc)
                 try:
                     await db.rollback()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as rollback_exc:  # noqa: BLE001
+                    # 兜底: rollback 失败也至少留一行 warning, 否则 audit_log 失明
+                    logger.warning(
+                        "audit_log rollback 也失败 (commit_exc=%s, rollback_exc=%s)",
+                        commit_exc,
+                        rollback_exc,
+                    )
                 return None
         else:
             await db.flush()
@@ -190,14 +198,15 @@ async def query_audit_logs(
         try:
             sd = datetime.fromisoformat(start_date)
             conds.append(AuditLog.created_at >= sd)
-        except Exception:
-            pass
+        except (TypeError, ValueError) as date_exc:
+            # 2026-06-19 round23: 用户传错日期格式不应 500, 也不该 silently 吞 — debug 留痕
+            logger.warning("query_audit_logs: start_date=%r 解析失败, 忽略. err=%s", start_date, date_exc)
     if end_date:
         try:
             ed = datetime.fromisoformat(end_date)
             conds.append(AuditLog.created_at <= ed)
-        except Exception:
-            pass
+        except (TypeError, ValueError) as date_exc:
+            logger.warning("query_audit_logs: end_date=%r 解析失败, 忽略. err=%s", end_date, date_exc)
     if keyword:
         # 限长 + 转义防 LIKE 通配符 DoS
         kw = keyword[:200]
