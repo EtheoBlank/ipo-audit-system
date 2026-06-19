@@ -183,10 +183,22 @@ class TrialBalanceService:
         ]
 
         # Sum bank statement balances
-        total_bank_balance = bank_statements["balance"].iloc[-1] if len(bank_statements) > 0 else 0
+        # P0 修复 (2026-06-18): 防 NaN. 老逻辑: len>0 时 iloc[-1], 但若 'balance' 列全 NaN
+        # 或缺该列, iloc[-1] 返 NaN, abs(NaN)=NaN, JSON 序列化失败 → 500.
+        total_bank_balance: float = 0.0
+        if (
+            len(bank_statements) > 0
+            and "balance" in bank_statements.columns
+        ):
+            _last = bank_statements["balance"].iloc[-1]
+            if pd.notna(_last):
+                try:
+                    total_bank_balance = float(_last)
+                except (TypeError, ValueError):
+                    total_bank_balance = 0.0
 
         # Find difference
-        account_bank_total = bank_accounts["ending_balance"].sum()
+        account_bank_total = bank_accounts["ending_balance"].fillna(0).sum()
         difference = abs(account_bank_total - total_bank_balance)
 
         return {

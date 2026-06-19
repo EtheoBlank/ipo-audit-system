@@ -214,19 +214,26 @@ class InventoryAgingEngine:
     def fifo_aging(
         movements: list[dict[str, Any]],
         period_end: datetime,
+        prior_period_end: Optional[datetime] = None,
     ) -> AgingBucket:
         """Recompute aging from per-batch movements of ONE material.
 
         Each movement dict needs: opening_qty, opening_amount, inbound_qty,
         inbound_date, outbound_qty, ending_qty.
+
+        :param prior_period_end: 上年期末日（如 2023-12-31），用于精确计算
+            期初库龄。为 None 时退回 period_end - 365 天保守兜底。
         """
         # 构造合成批次列表 [(入库日期, 剩余数量)]
-        # - 上一期期末 = 零日批次（入库日期取得不知道时用 period_end - 365 当兜底）
         batches: list[tuple[datetime, float]] = []
         opening_qty_total = sum(float(m.get("opening_qty") or 0) for m in movements)
         if opening_qty_total > 0:
-            # 期初统一当 "已经 365 天" 处理（保守）
-            batches.append((period_end - pd.Timedelta(days=365), opening_qty_total))
+            if prior_period_end is not None:
+                # 精确使用上年期末日, 期初库龄 = period_end - prior_period_end
+                batches.append((prior_period_end, opening_qty_total))
+            else:
+                # 兜底: 期初统一当 "已经 365 天" 处理（保守）
+                batches.append((period_end - pd.Timedelta(days=365), opening_qty_total))
 
         for m in movements:
             qty = float(m.get("inbound_qty") or 0)
@@ -357,6 +364,7 @@ class InventoryAgingEngine:
         prior_impairments: Optional[dict[str, float]] = None,
         prior_qty: Optional[dict[str, float]] = None,
         manual_nrv: Optional[dict[str, float]] = None,
+        prior_period_end: Optional[dict[str, datetime]] = None,
     ) -> ImpairmentResult:
         """
         :param movements: 收发存行（ORM 对象或 dict）。
@@ -366,6 +374,8 @@ class InventoryAgingEngine:
         :param prior_qty: {material_code: 上年期末数量}（可选）— 用于把转回拆成
             "已售出转销营业成本"和"仍在库转回资产减值损失"两部分。
         :param manual_nrv: {material_code: 手工 NRV 单价}（覆盖销售清单结果）。
+        :param prior_period_end: {material_code: 上年期末日 datetime}（可选）—
+            用于精确计算期初库龄。为 None 时退回 period_end - 365 天保守兜底。
         """
         prior_impairments = prior_impairments or {}
         prior_qty = prior_qty or {}
@@ -447,7 +457,8 @@ class InventoryAgingEngine:
                     )
                 continue
 
-            aging = self.fifo_aging(ms, period_end)
+            code_prior_end = prior_period_end.get(code) if prior_period_end else None
+            aging = self.fifo_aging(ms, period_end, prior_period_end=code_prior_end)
 
             # 账实差异检测：FIFO 推算后剩余数量与账面期末数偏离 > 5% → 在 note 标注
             opening_qty_total = sum(float(m.get("opening_qty") or 0) for m in ms)

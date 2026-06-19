@@ -89,6 +89,9 @@ class KnowledgeBaseService:
                 raise ValueError("文档解析后无可用文本")
 
             embedder = self._build_embedder()
+            # 跨书共享 TF-IDF 词表: 从最近一次索引恢复词表状态
+            if isinstance(embedder, TfidfEmbedder):
+                await self._restore_shared_tfidf(db_session=None, embedder=embedder)
             vectors = await self._compute_vectors(embedder, text_chunks)
             model_name = embedder.model_name if hasattr(embedder, "model_name") else "tfidf"
             dim = len(vectors[0]) if vectors else 0
@@ -104,6 +107,9 @@ class KnowledgeBaseService:
                 book.total_chars = sum(c.char_count for c in text_chunks)
                 book.embedding_model = model_name
                 book.embedding_dim = dim
+                # 保存 TF-IDF 词表状态供下一本书共享
+                if isinstance(embedder, TfidfEmbedder):
+                    book.tfidf_state = json.dumps(embedder.to_state(), ensure_ascii=False)
                 book.indexed_at = datetime.now(timezone.utc)
                 await db.commit()
 
@@ -124,6 +130,39 @@ class KnowledgeBaseService:
                     book.error_msg = str(e)[:1000]
                     await db.commit()
             raise
+
+    async def _restore_shared_tfidf(
+        self,
+        db_session: Optional[AsyncSession],
+        embedder: "TfidfEmbedder",
+    ) -> None:
+        """从最近一次成功索引的书籍恢复 TF-IDF 词表状态。"""
+        close_after = db_session is None
+        try:
+            async with AsyncSessionLocal() as session:
+                last = (
+                    await session.execute(
+                        select(KnowledgeBook)
+                        .where(
+                            KnowledgeBook.tfidf_state.is_not(None),
+                            KnowledgeBook.status == "ready",
+                        )
+                        .order_by(KnowledgeBook.indexed_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if last and last.tfidf_state:
+                    try:
+                        embedder.from_state(json.loads(last.tfidf_state))
+                        logger.info(
+                            "TF-IDF 词表已从 book_id=%d 恢复 (词表大小 %d)",
+                            last.id, embedder.dim,
+                        )
+                    except (json.JSONDecodeError, KeyError) as exc:
+                        logger.warning("恢复 TF-IDF 词表失败: %s", exc)
+        finally:
+            if close_after:
+                pass  # async with handles cleanup
 
     async def reindex_book(self, book_id: int) -> dict:
         """重新索引 — 先清掉旧 chunk 再重建。"""
@@ -248,9 +287,8 @@ class KnowledgeBaseService:
         """根据 embedder 类型决定 fit/transform 还是远端 aembed。"""
         texts = [c.content for c in chunks]
         if isinstance(embedder, TfidfEmbedder):
-            # P0 安全修复 (已知限制): TfidfEmbedder.fit() 每次 index_book 都重 fit,
-            # 跨书 cosine 会因为词表不一致返回 0. 建议未来改用共享词表 (corpus-level fit once).
-            # 当前 workaround: 搜索时同 book_id 范围过滤, 或在 KnowledgeBaseService.search 加 book_id= 参数.
+            # TfidfEmbedder.fit() 已实现跨书词表累加 (通过 _corpus 累积 + tfidf_state 持久化),
+            # 此处 fit 会将新书文本合并到已有词表中, 保证跨书 cosine 有效.
             embedder.fit(texts)
             return embedder.transform(texts)
         # 远端 API

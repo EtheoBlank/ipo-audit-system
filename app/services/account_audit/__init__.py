@@ -570,12 +570,14 @@ class AccountAuditService:
         end_audited = end_book  # 默认值; 真正的恒等式校验从下面计算
 
         # 恒等式校验
+        # 借方科目(资产/费用): ending = beg + debit - credit → beg + debit - credit - ending = 0
+        # 贷方科目(负债/权益/收入): ending = beg + credit - debit → beg + credit - debit - ending = 0
         if is_debit_account:
             identity_book = beg + debit_book - credit_book - end_book
             identity_audited = beg_audited + debit_audited - credit_audited - end_audited
         else:
-            identity_book = beg - debit_book + credit_book - end_book
-            identity_audited = beg_audited - debit_audited + credit_audited - end_audited
+            identity_book = beg + credit_book - debit_book - end_book
+            identity_audited = beg_audited + credit_audited - debit_audited - end_audited
 
         is_balanced = abs(identity_audited) < _EPS
         is_lta = is_long_term_asset_account(account_code, prefixes)

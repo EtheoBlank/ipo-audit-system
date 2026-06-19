@@ -270,18 +270,29 @@ class RevenueAnalyzer:
             return {
                 "record_count": 0,
                 "total_revenue": 0.0,
+                "total_return": 0.0,
+                "total_discount": 0.0,
+                "total_rebate": 0.0,
                 "total_cost": 0.0,
                 "total_direct_fee": 0.0,
                 "gross_profit": 0.0,
                 "gross_margin": 0.0,
             }
         revenue = float(self.df["revenue_amount"].sum())
+        # P0 修复: 扣减 return_amount / discount_amount / rebate_amount (列可能不存在)
+        returns = float(self.df["return_amount"].sum()) if "return_amount" in self.df.columns else 0.0
+        discounts = float(self.df["discount_amount"].sum()) if "discount_amount" in self.df.columns else 0.0
+        rebates = float(self.df["rebate_amount"].sum()) if "rebate_amount" in self.df.columns else 0.0
         cost = float(self.df["cost_amount"].sum())
         direct = float(self.df[["shipping_fee", "customs_fee", "other_direct_fee"]].sum().sum())
-        profit = revenue - cost - direct
+        net_revenue = revenue - returns - discounts - rebates
+        profit = net_revenue - cost - direct
         return {
             "record_count": int(len(self.df)),
             "total_revenue": round(revenue, 2),
+            "total_return": round(returns, 2),
+            "total_discount": round(discounts, 2),
+            "total_rebate": round(rebates, 2),
             "total_cost": round(cost, 2),
             "total_direct_fee": round(direct, 2),
             "gross_profit": round(profit, 2),
@@ -313,7 +324,22 @@ class RevenueAnalyzer:
             .reset_index(name="direct_fee")
         )
         grouped = grouped.drop(columns=["direct_fee"]).merge(direct, on=dim, how="left")
-        grouped["profit"] = grouped["revenue"] - grouped["cost"] - grouped["direct_fee"]
+        # 扣减项 (return/discount/rebate) 在 _summary() 中计算净收入,
+        # _pivot() 保持 gross revenue 列不变, 但利润应反映净收入.
+        deduction_cols = ("return_amount", "discount_amount", "rebate_amount")
+        has_deductions = any(c in self.df.columns for c in deduction_cols)
+        if has_deductions:
+            for col in deduction_cols:
+                if col in self.df.columns:
+                    agg = self.df.groupby(dim)[col].sum().reset_index(name=col)
+                    grouped = grouped.merge(agg, on=dim, how="left").fillna({col: 0.0})
+            grouped["total_deduction"] = grouped[
+                [c for c in deduction_cols if c in grouped.columns]
+            ].sum(axis=1)
+            grouped["net_revenue"] = grouped["revenue"] - grouped["total_deduction"]
+            grouped["profit"] = grouped["net_revenue"] - grouped["cost"] - grouped["direct_fee"]
+        else:
+            grouped["profit"] = grouped["revenue"] - grouped["cost"] - grouped["direct_fee"]
         grouped["gross_margin"] = grouped.apply(
             lambda r: (r["profit"] / r["revenue"]) if r["revenue"] else 0.0,
             axis=1,
