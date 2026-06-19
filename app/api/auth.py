@@ -289,8 +289,12 @@ async def create_user(
     ).scalar_one_or_none()
     if existing is not None:
         raise HTTPException(status_code=400, detail=f"用户名 {payload.username} 已存在")
+    # P0 IDOR 修复 (2026-06-19): 非 admin 强制 firm_id = 创建者的事务所, 防止跨所建账号
+    target_firm_id = payload.firm_id
+    if current_user.role != ROLE_ADMIN:
+        target_firm_id = current_user.firm_id
     user = User(
-        firm_id=payload.firm_id,
+        firm_id=target_firm_id,
         username=payload.username,
         password_hash=hash_password(payload.password),
         full_name=payload.full_name,
@@ -332,6 +336,9 @@ async def list_users(
     db: AsyncSession = Depends(get_db),
 ):
     stmt = select(User)
+    # P0 IDOR 修复 (2026-06-19): 非 admin 强制 firm_id = 自己, 防止跨所枚举用户
+    if current_user.role != ROLE_ADMIN:
+        firm_id = current_user.firm_id
     if firm_id is not None:
         stmt = stmt.where(User.firm_id == firm_id)
     if role:
@@ -430,6 +437,9 @@ async def deactivate_user(
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # P0 IDOR 修复 (2026-06-19): 非 admin 不能跨所停用用户
+    if current_user.role != ROLE_ADMIN and user.firm_id != current_user.firm_id:
+        raise HTTPException(status_code=403, detail="无权操作其他事务所的用户")
     if user.id == current_user.id:
         raise HTTPException(status_code=400, detail="不能停用自己")
     user.is_active = False
@@ -457,6 +467,9 @@ async def reset_user_password(
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # P0 IDOR 修复 (2026-06-19): 非 admin 不能跨所重置密码 (可能间接登录)
+    if current_user.role != ROLE_ADMIN and user.firm_id != current_user.firm_id:
+        raise HTTPException(status_code=403, detail="无权操作其他事务所的用户")
     try:
         await svc_reset_password(db, user, payload.new_password)
     except AuthenticationError as exc:
@@ -586,6 +599,8 @@ async def list_audit_logs(
     current_user: User = Depends(require_role(ROLE_QC_PARTNER)),
     db: AsyncSession = Depends(get_db),
 ):
+    # P0 IDOR 修复 (2026-06-19): 非 admin 强制 firm_id, 防跨所读审计轨迹
+    scope_firm_id = None if current_user.role == ROLE_ADMIN else current_user.firm_id
     result = await query_audit_logs(
         db,
         user_id=user_id,
@@ -593,6 +608,7 @@ async def list_audit_logs(
         resource_type=resource_type,
         resource_id=resource_id,
         project_id=project_id,
+        firm_id=scope_firm_id,
         method=method,
         start_date=start_date,
         end_date=end_date,
@@ -794,6 +810,9 @@ async def get_approval(
     wf = await ApprovalEngine.get_workflow(db, workflow_id)
     if wf is None:
         raise HTTPException(status_code=404, detail="审批流不存在")
+    # P0 IDOR 修复 (2026-06-19): 非 admin 不能跨所读审批流
+    if current_user.role != ROLE_ADMIN and wf.firm_id and wf.firm_id != current_user.firm_id:
+        raise HTTPException(status_code=403, detail="无权访问其他事务所的审批流")
     return ApprovalWorkflowResponse.model_validate(wf)
 
 
@@ -804,6 +823,12 @@ async def decide_approval(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # P0 IDOR 修复 (2026-06-19): decide 前先校验 firm, 防止跨所代签
+    pre_wf = await ApprovalEngine.get_workflow(db, workflow_id)
+    if pre_wf is None:
+        raise HTTPException(status_code=404, detail="审批流不存在")
+    if current_user.role != ROLE_ADMIN and pre_wf.firm_id and pre_wf.firm_id != current_user.firm_id:
+        raise HTTPException(status_code=403, detail="无权操作其他事务所的审批流")
     try:
         wf = await ApprovalEngine.decide(
             db,
@@ -841,6 +866,12 @@ async def withdraw_approval(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # P0 IDOR 修复 (2026-06-19): withdraw 前先校验 firm, 防跨所撤回
+    pre_wf = await ApprovalEngine.get_workflow(db, workflow_id)
+    if pre_wf is None:
+        raise HTTPException(status_code=404, detail="审批流不存在")
+    if current_user.role != ROLE_ADMIN and pre_wf.firm_id and pre_wf.firm_id != current_user.firm_id:
+        raise HTTPException(status_code=403, detail="无权操作其他事务所的审批流")
     expected_version = payload.expected_version if payload else None
     try:
         wf = await ApprovalEngine.withdraw(

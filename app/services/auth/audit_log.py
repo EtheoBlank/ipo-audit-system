@@ -158,6 +158,7 @@ async def query_audit_logs(
     resource_type: Optional[str] = None,
     resource_id: Optional[str] = None,
     project_id: Optional[int] = None,
+    firm_id: Optional[int] = None,
     method: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -165,8 +166,14 @@ async def query_audit_logs(
     skip: int = 0,
     limit: int = 100,
 ) -> Dict[str, Any]:
-    """分页查询审计轨迹."""
+    """分页查询审计轨迹.
+
+    :param firm_id: P0 多租户 (2026-06-19): 限定事务所, 非 admin 调用应传当前 user.firm_id
+        防 qc_partner 通过 user_id=? 读别所审计轨迹 (含凭证 payload)
+    """
     conds = []
+    if firm_id is not None:
+        conds.append(AuditLog.firm_id == firm_id)
     if user_id is not None:
         conds.append(AuditLog.user_id == user_id)
     if action:
