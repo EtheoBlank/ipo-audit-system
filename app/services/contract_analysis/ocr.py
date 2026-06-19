@@ -50,9 +50,15 @@ class ContractOCR:
         但读取行为本身违反最小权限)。
         """
         file_path = Path(file_path)
+        # P2 修复 (2026-06-19): file_path.resolve() 在 Windows 不存在路径上抛
+        # FileNotFoundError (WinError 3), 之前裸抛到 500. 现兜底 OCRError
+        try:
+            file_path = file_path.resolve()
+        except (OSError, ValueError) as exc:
+            raise OCRError(f"无法解析文件路径: {file_path} ({exc})") from exc
         if allowed_base is not None:
             allowed_resolved = Path(allowed_base).resolve()
-            target_resolved = file_path.resolve()
+            target_resolved = file_path  # 上面已 resolve 过
             if not target_resolved.is_relative_to(allowed_resolved):
                 raise OCRError(f"file_path 不在允许目录内: {file_path}")
         # Fast path: PDFs often have a text layer
