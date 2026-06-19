@@ -165,6 +165,7 @@ async def upload_book(
         author=author,
         publisher=publisher,
         isbn=isbn,
+        firm_id=current_user.firm_id,  # P0 (2026-06-19): 多租户隔离
         filename=filename,
         file_path=str(target),
         file_type=detect_file_type(filename),
@@ -196,7 +197,17 @@ async def list_books(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    # P0 多租户 (2026-06-19): 旧 select 全表 — 任意登录用户读别所上传内部资料
+    # 新: 非 admin 强制 firm_id = current_user.firm_id
+    # admin 跨所可见; 老数据 firm_id=NULL 在 admin 下可见 (兼容)
+    from app.models.db.auth import ROLE_ADMIN as _ADMIN
     q = select(KnowledgeBook)
+    if current_user is None or current_user.role != _ADMIN:
+        if current_user is not None and current_user.firm_id:
+            q = q.where(KnowledgeBook.firm_id == current_user.firm_id)
+        else:
+            # 没登录 / 无 firm → 不返回
+            return []
     if category:
         q = q.where(KnowledgeBook.category == category)
     if status:

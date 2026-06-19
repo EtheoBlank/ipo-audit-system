@@ -1143,6 +1143,9 @@ class KnowledgeBook(Base):
 
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     indexed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # P0 (2026-06-19): 多租户隔离 — 知识库可能含客户内部资料 / 风险点备忘,
+    # 之前任意登录用户可读别所上传的, 现按 firm_id 过滤
+    firm_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
 
     chunks: Mapped[list["KnowledgeChunk"]] = relationship(
         back_populates="book", cascade="all, delete-orphan"
