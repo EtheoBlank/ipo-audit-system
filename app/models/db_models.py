@@ -190,6 +190,12 @@ class ChronologicalAccount(Base):
     # 关联关系
     project: Mapped["Project"] = relationship(back_populates="chronological_accounts")
 
+    # P1 性能 (2026-06-19): 相关方推断 + 科目聚合常用 WHERE project_id + account_code
+    __table_args__ = (
+        Index("ix_chrono_project_account", "project_id", "account_code"),
+        Index("ix_chrono_project_aux", "project_id", "auxiliary_accounting"),
+    )
+
 
 class BankStatement(Base):
     """银行对账单"""
@@ -347,6 +353,12 @@ class SalesRecord(Base):
 
     project: Mapped["Project"] = relationship(back_populates="sales_records")
     document: Mapped[Optional["SalesDocument"]] = relationship(back_populates="records")
+
+    # P1 性能 (2026-06-19): 客户聚合 + 关联方推断 GROUP BY customer_name 提速
+    __table_args__ = (
+        Index("ix_sales_project_customer", "project_id", "customer_name"),
+        Index("ix_sales_project_ship", "project_id", "ship_date"),
+    )
 
 
 class ContractDocument(Base):

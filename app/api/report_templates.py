@@ -287,13 +287,17 @@ async def render_template(
         payload={"context_keys": list((payload.context or {}).keys())},
     )
 
+    # P1 安全 (2026-06-19): out_name 拼到 Content-Disposition 须防 ; / " 注入
+    # filename= 里出现 ;filename=evil.docx 会被部分代理解析错位
+    import re as _re_rt
+    _safe_name = _re_rt.sub(r"[^A-Za-z0-9_.\-一-龥]", "_", out_name)
     media = (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        if out_name.endswith(".docx")
+        if _safe_name.endswith(".docx")
         else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     return StreamingResponse(
         io.BytesIO(rendered),
         media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
+        headers={"Content-Disposition": f'attachment; filename="{_safe_name}"'},
     )
