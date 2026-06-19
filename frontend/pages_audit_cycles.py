@@ -80,9 +80,9 @@ def _tab_fixed_assets(project_id: int) -> None:
     st.caption("📑 长期资产发生额审定 见 Pack A 模块")
     st.markdown("#### 折旧重算计算器")
     c1, c2, c3 = st.columns(3)
-    cost = c1.number_input("原值", value=120000.0, step=1000.0)
-    salvage = c2.number_input("残值率", value=0.05, min_value=0.0, max_value=0.5, step=0.01)
-    life = c3.number_input("使用年限 (月)", value=120, min_value=1, step=12)
+    cost = c1.number_input("原值", value=120000.0, step=1000.0, key="fa_cost")
+    salvage = c2.number_input("残值率", value=0.05, min_value=0.0, max_value=0.5, step=0.01, key="fa_salvage")
+    life = c3.number_input("使用年限 (月)", value=120, min_value=1, step=12, key="fa_life")
     method = st.selectbox("方法", ["straight_line", "double_declining"])
     if st.button("📊 计算"):
         r = _api(
@@ -170,8 +170,8 @@ def _tab_long_term_investment(project_id: int) -> None:
 
     st.markdown("#### 商誉减值金额")
     c1, c2 = st.columns(2)
-    bv = c1.number_input("含商誉账面价值", value=1_000_000.0, step=10000.0)
-    rec = c2.number_input("可收回金额", value=800_000.0, step=10000.0)
+    bv = c1.number_input("含商誉账面价值", value=1_000_000.0, step=10000.0, key="gw_bv")
+    rec = c2.number_input("可收回金额", value=800_000.0, step=10000.0, key="gw_rec")
     if st.button("📊 算减值"):
         r = _api(
             "POST",
@@ -189,9 +189,9 @@ def _tab_leases(project_id: int) -> None:
     st.markdown("### 🏠 租赁 (CAS 21)")
     st.markdown("#### 使用权资产现值计算")
     c1, c2, c3 = st.columns(3)
-    payment = c1.number_input("月付租金", value=10000.0, step=1000.0)
-    periods = c2.number_input("租期 (月)", value=36, min_value=1, max_value=360, step=1)
-    rate = c3.number_input("年折现率", value=0.05, min_value=0.0, max_value=0.30, step=0.005)
+    payment = c1.number_input("月付租金", value=10000.0, step=1000.0, key="lease_payment")
+    periods = c2.number_input("租期 (月)", value=36, min_value=1, max_value=360, step=1, key="lease_periods")
+    rate = c3.number_input("年折现率", value=0.05, min_value=0.0, max_value=0.30, step=0.005, key="lease_rate")
     if st.button("📊 算 PV"):
         r = _api(
             "POST",
@@ -274,10 +274,10 @@ def _tab_subsequent(project_id: int) -> None:
 
     st.markdown("#### 持续经营评估")
     c1, c2 = st.columns(2)
-    ocf = c1.number_input("未来 12 月经营现金流", value=5_000_000.0, step=100000.0)
-    interest = c2.number_input("12 月利息支出", value=500_000.0, step=10000.0)
-    debt = c1.number_input("12 月到期债务", value=2_000_000.0, step=100000.0)
-    cash = c2.number_input("当前现金", value=1_000_000.0, step=100000.0)
+    ocf = c1.number_input("未来 12 月经营现金流", value=5_000_000.0, step=100000.0, key="gc_ocf")
+    interest = c2.number_input("12 月利息支出", value=500_000.0, step=10000.0, key="gc_interest")
+    debt = c1.number_input("12 月到期债务", value=2_000_000.0, step=100000.0, key="gc_debt")
+    cash = c2.number_input("当前现金", value=1_000_000.0, step=100000.0, key="gc_cash")
     if st.button("📊 评估"):
         r = _api(
             "POST",
