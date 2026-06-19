@@ -132,7 +132,7 @@ def _tab_intangible(project_id: int) -> None:
                 st.error(f"❌ 缺失条件: {', '.join(r.get('missing_conditions', []))}")
 
     st.markdown("#### 研发费用加计扣除")
-    rd_exp = st.number_input("研发支出", value=1_000_000.0, step=10000.0)
+    rd_exp = st.number_input("研发支出", value=1_000_000.0, step=10000.0, key="rd_exp")
     is_mfg = st.checkbox("制造业 (100% 加计)", value=True)
     if st.button("📊 算加计"):
         r = _api(
@@ -154,7 +154,7 @@ def _tab_long_term_investment(project_id: int) -> None:
         "未来年度现金流 (逗号分隔, 通常 5-8 年)",
         value="500000,550000,600000,650000,700000",
     )
-    discount = st.number_input("折现率", value=0.10, min_value=0.01, max_value=0.30, step=0.01)
+    discount = st.number_input("折现率", value=0.10, min_value=0.01, max_value=0.30, step=0.01, key="rd_discount")
     if st.button("📊 算 NPV"):
         try:
             flows = [float(x.strip()) for x in cashflows_text.split(",") if x.strip()]
@@ -205,11 +205,11 @@ def _tab_leases(project_id: int) -> None:
 def _tab_income_tax(project_id: int) -> None:
     st.markdown("### 💵 所得税重算")
     c1, c2 = st.columns(2)
-    pretax = c1.number_input("利润总额", value=10_000_000.0, step=100000.0)
-    permanent = c1.number_input("永久性差异", value=500_000.0, step=10000.0)
-    temporary = c2.number_input("暂时性差异", value=200_000.0, step=10000.0)
-    losses = c2.number_input("弥补亏损用", value=0.0, step=10000.0)
-    rate = st.number_input("名义税率", value=0.25, min_value=0.0, max_value=0.35, step=0.01)
+    pretax = c1.number_input("利润总额", value=10_000_000.0, step=100000.0, key="itax_pretax")
+    permanent = c1.number_input("永久性差异", value=500_000.0, step=10000.0, key="itax_permanent")
+    temporary = c2.number_input("暂时性差异", value=200_000.0, step=10000.0, key="itax_temporary")
+    losses = c2.number_input("弥补亏损用", value=0.0, step=10000.0, key="itax_losses")
+    rate = st.number_input("名义税率", value=0.25, min_value=0.0, max_value=0.35, step=0.01, key="itax_rate")
     if st.button("📊 重算"):
         r = _api(
             "POST",
@@ -232,9 +232,9 @@ def _tab_income_tax(project_id: int) -> None:
 def _tab_estimates(project_id: int) -> None:
     st.markdown("### 📐 重要会计估计 (ECL 三阶段)")
     c1, c2, c3 = st.columns(3)
-    receivable = c1.number_input("应收账款", value=1_000_000.0, step=10000.0)
-    aging = c2.number_input("账龄 (天)", value=60, min_value=0, step=10)
-    lgd = c3.number_input("LGD", value=0.45, min_value=0.0, max_value=1.0, step=0.05)
+    receivable = c1.number_input("应收账款", value=1_000_000.0, step=10000.0, key="ecl_receivable")
+    aging = c2.number_input("账龄 (天)", value=60, min_value=0, step=10, key="ecl_aging")
+    lgd = c3.number_input("LGD", value=0.45, min_value=0.0, max_value=1.0, step=0.05, key="ecl_lgd")
     if st.button("📊 算 ECL"):
         r = _api(
             "POST",
