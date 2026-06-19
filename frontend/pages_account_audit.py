@@ -59,6 +59,25 @@ def _tab_scope(project_id: int) -> None:
                 st.rerun()
 
 
+def _date_input(label: str, *, key: str = "", default: str = "") -> str:
+    """统一期末日期输入 — P1 修复 (2026-06-19).
+
+    旧 5 处 text_input('期末日期') 都没校验, 用户清空就发空字符串
+    到后端触发 500. 新版带正则校验, 不通过显示 warning + return ''
+    让上层函数提前 return, 不发请求.
+    """
+    val = st.text_input(
+        label,
+        value=default or str(date.today()),
+        key=key,
+        help="格式 YYYY-MM-DD, 例如 2024-12-31",
+    )
+    if val and not _re_aa.match(r"^\d{4}-\d{2}-\d{2}$", val):
+        st.warning(f"日期格式不合法: {val!r}, 应为 YYYY-MM-DD")
+        return ""
+    return val
+
+
 def _tab_initialize(project_id: int) -> None:
     st.markdown("### 🔄 从序时账初始化审定记录")
     st.caption(
@@ -67,7 +86,7 @@ def _tab_initialize(project_id: int) -> None:
     )
 
     cols = st.columns(3)
-    period_end = cols[0].text_input("期末日期 YYYY-MM-DD", value=str(date.today()))
+    period_end = _date_input("期末日期 YYYY-MM-DD", default=str(date.today()))
     replace_pending = cols[1].checkbox("替换 pending 行", value=True)
     cols[2].markdown("&nbsp;")
 
@@ -89,7 +108,7 @@ def _tab_initialize(project_id: int) -> None:
 
 def _tab_overview(project_id: int) -> None:
     st.markdown("### 📊 项目总览 (按科目)")
-    period_end = st.text_input("期末日期", value=str(date.today()), key="aa_ov_pe")
+    period_end = _date_input("期末日期", key="aa_ov_pe")
     if not period_end:
         return
     if st.button("🔍 刷新"):
@@ -153,7 +172,7 @@ def _tab_movements(project_id: int) -> None:
     st.markdown("### 📝 发生额逐笔审定")
     cols = st.columns(5)
     account_code = cols[0].text_input("科目编码 (留空查全部)", value="")
-    period_end = cols[1].text_input("期末日期", value=str(date.today()), key="aa_mov_pe")
+    period_end = _date_input("期末日期", key="aa_mov_pe")
     direction = cols[2].selectbox("方向", ["全部", "debit", "credit"])
     status = cols[3].selectbox("状态", ["全部", "pending", "audited", "disputed", "skipped"])
     keyword = cols[4].text_input("摘要关键词")
@@ -278,7 +297,7 @@ def _tab_bulk_upload(project_id: int) -> None:
         "上传 Excel/CSV, 必填列: account_code, voucher_no, direction (debit/credit), audited_amount; "
         "可选: voucher_line_no(默认1) / adjustment_reason / working_paper_ref / note"
     )
-    period_end = st.text_input("期末日期", value=str(date.today()), key="aa_bulk_pe")
+    period_end = _date_input("期末日期", key="aa_bulk_pe")
     f = st.file_uploader("选择文件", type=["xlsx", "xls", "csv"], key="aa_bulk_file")
 
     # 提供模板下载
@@ -325,7 +344,7 @@ def _tab_bulk_upload(project_id: int) -> None:
 def _tab_export(project_id: int) -> None:
     st.markdown("### 📥 导出审定明细 Excel")
     cols = st.columns(2)
-    period_end = cols[0].text_input("期末日期", value=str(date.today()), key="aa_exp_pe")
+    period_end = _date_input("期末日期", key="aa_exp_pe")
     account_code = cols[1].text_input("科目编码 (留空导出全部)", value="")
 
     if st.button("📥 导出", type="primary"):
