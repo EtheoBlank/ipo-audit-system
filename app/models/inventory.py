@@ -54,6 +54,10 @@ class InventoryImportResponse(BaseModel):
     is_prior_year: bool
     imported_count: int
     total_ending_amount: float
+    # round 28 P1-9: 入库日期解析失败行数 — 0 表示无解析失败, >0 提示前端展示
+    date_parse_failed_count: int = 0
+    # round 28 P1-9: 详细失败行 (row_idx, raw_value) 列表 — 默认空, 失败时供前端展示
+    date_parse_failed_rows: list[list] = Field(default_factory=list)
 
 
 # ---- 盘点用表 ----------------------------------------------------------

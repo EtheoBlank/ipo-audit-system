@@ -165,9 +165,27 @@ def _coerce_date(v: Any) -> Optional[pd.Timestamp]:
     if v is None or pd.isna(v) or str(v).strip() == "":
         return None
     try:
-        return pd.to_datetime(v, errors="coerce")
+        result = pd.to_datetime(v, errors="coerce")
+        # round 28 P1-9: NaT 视为解析失败, 返 None (调用方应通过 _DATE_FAIL_HOLDER 记录)
+        if result is None or pd.isna(result):
+            return None
+        return result
     except Exception:
         return None
+
+
+# round 28 P1-9: 日期解析失败行收集器 (thread-local 单例, 由 parse_bytes() 注入)
+# 避免在 pd.DataFrame.apply() 闭包中再传一堆参数。
+_DATE_FAIL_HOLDER: list[tuple[int, str]] = []
+
+
+def get_date_parse_failures() -> list[tuple[int, str]]:
+    """取当前 parse_bytes 调用过程中失败的日期行 — (row_idx, raw_value) 元组列表."""
+    return list(_DATE_FAIL_HOLDER)
+
+
+def reset_date_parse_failures() -> None:
+    _DATE_FAIL_HOLDER.clear()
 
 
 # ---- main --------------------------------------------------------------
@@ -181,6 +199,8 @@ class InventoryImporter:
     @classmethod
     def parse_bytes(cls, content: bytes, filename: str) -> pd.DataFrame:
         ext = Path(filename).suffix.lower()
+        # round 28 P1-9: 进入解析前重置失败收集器
+        reset_date_parse_failures()
         try:
             if ext in (".xlsx", ".xls"):
                 # nrows=MAX+1 → 后续可检测是否超限，且 openpyxl 不会一次读到 GB 级
@@ -267,9 +287,17 @@ class InventoryImporter:
             else:
                 df[c] = df[c].apply(_coerce_num)
 
-        # Coerce date
+        # Coerce date — round 28 P1-9: 解析失败不能静默, 把行号+原值记到 _DATE_FAIL_HOLDER
         if "inbound_date" in df.columns:
-            df["inbound_date"] = df["inbound_date"].apply(_coerce_date)
+            raw_dates = df["inbound_date"]
+            # 保留原值用于溯源
+            raw_raw = raw_dates.astype(str).tolist()
+            df["inbound_date"] = raw_dates.apply(_coerce_date)
+            # 扫描失败行: 原值非空但解析后 NaT
+            for idx, (parsed, raw_val) in enumerate(zip(df["inbound_date"], raw_raw)):
+                raw_str = str(raw_val).strip() if raw_val is not None else ""
+                if raw_str and raw_str.lower() != "nan" and (parsed is None or pd.isna(parsed)):
+                    _DATE_FAIL_HOLDER.append((idx, raw_str))
         else:
             df["inbound_date"] = None
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -60,8 +61,27 @@ async def gen_flowchart(
 
 class SampleRequest(BaseModel):
     cycle_code: str
-    items: List[Dict[str, Any]]
+    # round 28 P1-13: items 限长 200, 单条凭证 max_length 5000 — 防 100k 凭证 OOM
+    items: List[Dict[str, Any]] = Field(..., max_length=200)
     n: int = Field(default=3, ge=1, le=20)
+
+    @field_validator("items")
+    @classmethod
+    def _cap_item_size(cls, v: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # 单条凭证 (dict) 序列化后不超过 5000 字符 — 防单条膨胀 OOM
+        for idx, it in enumerate(v):
+            if not isinstance(it, dict):
+                continue
+            try:
+                if len(json.dumps(it, ensure_ascii=False)) > 5000:
+                    raise ValueError(
+                        f"items[{idx}] 序列化超过 5000 字符上限 (单条凭证过大)"
+                    )
+            except (TypeError, ValueError) as e:
+                if "items[" in str(e):
+                    raise
+                raise ValueError(f"items[{idx}] 不可 JSON 序列化: {e}") from e
+        return v
 
 
 @router.post("/walkthrough/sample")

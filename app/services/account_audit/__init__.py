@@ -370,6 +370,9 @@ class AccountAuditService:
         user_id: Optional[int] = None,
         user_display: Optional[str] = None,
     ) -> Dict[str, Any]:
+        # round 28 P0-6: partial commit 模式 — 失败行不影响已成功的行
+        # 旧版: 单行失败 → commit 整体回滚 → 整个批量白做
+        # 新版: 逐行 try/except + 单行 commit; 失败行 rollback 单独 + 收集 error
         if not items:
             return {"matched": 0, "updated": 0, "not_found": 0, "errors": []}
         # 拉本期所有审定行 dict by 复合键
@@ -392,7 +395,7 @@ class AccountAuditService:
         updated = 0
         not_found = 0
         errors: List[str] = []
-        for item in items:
+        for idx, item in enumerate(items):
             try:
                 key = (item.account_code, item.voucher_no, item.voucher_line_no, item.direction)
                 row = index.get(key)
@@ -410,15 +413,16 @@ class AccountAuditService:
                 row.audited_by_display = user_display
                 row.audited_at = _utcnow_naive()
                 row.updated_at = _utcnow_naive()
+                # partial commit: 单行 commit, 失败不影响其他行
+                await db.commit()
                 updated += 1
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"{item.account_code}/{item.voucher_no}: {exc}")
-        try:
-            await db.commit()
-        except Exception as exc:  # noqa: BLE001
-            await db.rollback()
-            errors.append(f"commit 失败: {exc}")
-            return {"matched": matched, "updated": 0, "not_found": not_found, "errors": errors}
+                # 失败行单独 rollback, 不影响已成功行
+                try:
+                    await db.rollback()
+                except Exception:
+                    logger.exception("bulk_audit: 单行 rollback 失败 idx=%d", idx)
+                errors.append(f"行 {idx}/{item.account_code}/{item.voucher_no}: {exc}")
         return {"matched": matched, "updated": updated, "not_found": not_found, "errors": errors}
 
     # === 查询 ===

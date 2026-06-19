@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -301,6 +302,13 @@ async def scan_expense_anomalies(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
+    # P0-1: 防止错日期格式导致 SQL 异常 (例如 "2024年12月31日" 直接进 LIKE 抛 500).
+    # 跨年范围由前端 st.date_input 限制, 此处只校验 ISO 字符串格式.
+    if period_end is not None and not re.match(r"^\d{4}-\d{2}-\d{2}$", period_end):
+        raise HTTPException(
+            status_code=400,
+            detail="period_end 必须是 YYYY-MM-DD 格式",
+        )
     await ensure_project_in_firm(db, project_id, current_user)
     res = await ExpensesAnomalyDetector.scan(db, project_id=project_id, period_end=period_end)
     return res

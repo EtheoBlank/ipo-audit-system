@@ -14,6 +14,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -29,6 +31,13 @@ _scheduler: Optional[AsyncIOScheduler] = None
 
 
 JOB_ID_DAILY_SCAN = "sentiment_daily_scan"
+
+
+# round 28 P0-5: in-memory 速率限制 — 同 project 60s 内只允许 1 次手动 scan
+# 进程单例 + Lock 防并发; 弱于 Redis 但不依赖外部服务
+_SCAN_RATE_WINDOW_SECONDS = 60
+_recent_scans: dict[int, datetime] = {}
+_recent_scans_lock = threading.Lock()
 
 
 def get_scheduler() -> Optional[AsyncIOScheduler]:
@@ -131,8 +140,44 @@ async def daily_scan_job() -> None:
 # ---- 手动触发 (供 API 调用) --------------------------------------------
 
 
+class ScanRateLimitError(Exception):
+    """同 project 短时间内重复触发 scan_now, 触发 60s 速率限制."""
+
+    def __init__(self, project_id: int, last_scan_at: datetime):
+        self.project_id = project_id
+        self.last_scan_at = last_scan_at
+        super().__init__(f"project {project_id} 60s 内已扫描, last={last_scan_at.isoformat()}")
+
+
+def _check_and_record_scan(project_id: int) -> None:
+    """检查 project_id 是否在速率窗口内, 已存在抛 ScanRateLimitError; 通过则记录当前时间.
+
+    round 28 P0-5: in-memory dict 进程单例 + Lock.
+    """
+    now = datetime.now(timezone.utc)
+    with _recent_scans_lock:
+        last = _recent_scans.get(project_id)
+        if last is not None and (now - last) < timedelta(seconds=_SCAN_RATE_WINDOW_SECONDS):
+            raise ScanRateLimitError(project_id, last)
+        _recent_scans[project_id] = now
+
+
+def _reset_rate_limit(project_id: Optional[int] = None) -> None:
+    """测试辅助: 重置速率窗口. project_id=None 清空全部."""
+    with _recent_scans_lock:
+        if project_id is None:
+            _recent_scans.clear()
+        else:
+            _recent_scans.pop(project_id, None)
+
+
 async def scan_now(project_id: Optional[int] = None) -> dict:
-    """立即触发扫描. project_id 为 None 时扫全部."""
+    """立即触发扫描. project_id 为 None 时扫全部.
+
+    round 28 P0-5: 速率限制 (60s 同 project 一次) 由调用方 (API 层) 在
+    多租户/角色校验之前先调 ``_check_and_record_scan`` 抛 429;
+    firm 校验由 API 层 ``ensure_project_in_firm`` 完成, 本函数不重复校验.
+    """
     from app.services.sentiment.scraper_service import SentimentScraperService
     from sqlalchemy import select
     from app.models.db_models import Project, SentimentSubject

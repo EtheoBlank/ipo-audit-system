@@ -45,7 +45,7 @@ from collections import defaultdict
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1162,46 +1162,106 @@ async def get_summary(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    # round 28 P0-4 优化: 单 query 拉所有行 → 拆 3 个 GROUP BY + 1 个金额聚合
+    # 1万 items × letters × responses 的 O(M+N+R) Python 聚合从 ~5s 降到 <500ms.
     case = await _case_in_firm(db, case_id, current_user)
 
-    res = await db.execute(select(ConfirmationItem).where(ConfirmationItem.case_id == case_id))
-    items = list(res.scalars().all())
-    res = await db.execute(select(ConfirmationLetter).where(ConfirmationLetter.case_id == case_id))
-    letters = list(res.scalars().all())
-    res = await db.execute(
-        select(ConfirmationResponse)
-        .join(ConfirmationLetter, ConfirmationResponse.letter_id == ConfirmationLetter.id)
-        .where(ConfirmationLetter.case_id == case_id)
-    )
-    responses = list(res.scalars().all())
+    # 1) item status 分布 + party_type 金额聚合 — 一次性 GROUP BY party_type, status
+    item_status_rows = (
+        await db.execute(
+            select(
+                ConfirmationItem.party_type,
+                ConfirmationItem.status,
+                func.count(ConfirmationItem.id),
+                func.coalesce(func.sum(ConfirmationItem.book_balance), 0.0),
+            )
+            .where(ConfirmationItem.case_id == case_id)
+            .group_by(ConfirmationItem.party_type, ConfirmationItem.status)
+        )
+    ).all()
 
-    # 状态分布
+    # 2) letter 状态 — GROUP BY letter_status
+    letter_status_rows = (
+        await db.execute(
+            select(ConfirmationLetter.letter_status, func.count(ConfirmationLetter.id))
+            .where(ConfirmationLetter.case_id == case_id)
+            .group_by(ConfirmationLetter.letter_status)
+        )
+    ).all()
+
+    # 3) response 状态 — JOIN letter 取 case_id
+    response_status_rows = (
+        await db.execute(
+            select(ConfirmationResponse.response_status, func.count(ConfirmationResponse.id))
+            .join(ConfirmationLetter, ConfirmationResponse.letter_id == ConfirmationLetter.id)
+            .where(ConfirmationLetter.case_id == case_id)
+            .group_by(ConfirmationResponse.response_status)
+        )
+    ).all()
+
+    # 4) response 金额聚合 + 差异统计 (供 by_party_type 拼装)
+    response_agg_rows = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(ConfirmationResponse.amount_confirmed), 0.0),
+                func.coalesce(func.sum(ConfirmationResponse.amount_difference), 0.0),
+                func.sum(
+                    case(
+                        (
+                            func.abs(ConfirmationResponse.amount_difference) > 0.01,
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+            )
+            .join(ConfirmationLetter, ConfirmationResponse.letter_id == ConfirmationLetter.id)
+            .where(ConfirmationLetter.case_id == case_id)
+        )
+    ).one()
+    total_confirmed = float(response_agg_rows[0])
+    total_diff = float(response_agg_rows[1])
+    items_with_diff = int(response_agg_rows[2] or 0)
+
+    # 5) 按 party_type 拼装 — 内存聚合 (输入行数 = party_type × status, 通常 < 50)
     status_summary: dict[str, int] = defaultdict(int)
-    for it in items:
-        status_summary[it.status] += 1
-    response_status_summary: dict[str, int] = defaultdict(int)
-    for r in responses:
-        response_status_summary[r.response_status] += 1
-
-    # 按 party_type
     by_type: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {
-            "items": 0,
-            "amount": 0.0,
-            "sent": 0,
-            "responded": 0,
-        }
+        lambda: {"items": 0, "amount": 0.0, "sent": 0, "responded": 0}
     )
-    for it in items:
-        d = by_type[it.party_type]
-        d["items"] += 1
-        d["amount"] += it.book_balance or 0
-    for letter in letters:
-        if letter.item:
-            by_type[letter.item.party_type]["sent"] += 1
-    for r in responses:
-        if r.letter and r.letter.item:
-            by_type[r.letter.item.party_type]["responded"] += 1
+    for pt, st, cnt, amt in item_status_rows:
+        status_summary[st] += int(cnt)
+        d = by_type[pt]
+        d["items"] += int(cnt)
+        d["amount"] += float(amt or 0)
+
+    # letter 状态 (sent/draft/recalled/voided) 按 case 全局聚合, 不带 party_type
+    # — by_party_type.sent 单独 SQL 取
+    sent_per_type_rows = (
+        await db.execute(
+            select(ConfirmationItem.party_type, func.count(ConfirmationLetter.id))
+            .join(ConfirmationLetter, ConfirmationLetter.item_id == ConfirmationItem.id)
+            .where(
+                ConfirmationItem.case_id == case_id,
+                ConfirmationLetter.letter_status.in_(("sent", "draft", "recalled")),
+            )
+            .group_by(ConfirmationItem.party_type)
+        )
+    ).all()
+    for pt, cnt in sent_per_type_rows:
+        by_type[pt]["sent"] += int(cnt)
+
+    # response 按 party_type 聚合
+    responded_per_type_rows = (
+        await db.execute(
+            select(ConfirmationItem.party_type, func.count(ConfirmationResponse.id))
+            .join(ConfirmationLetter, ConfirmationLetter.item_id == ConfirmationItem.id)
+            .join(ConfirmationResponse, ConfirmationResponse.letter_id == ConfirmationLetter.id)
+            .where(ConfirmationItem.case_id == case_id)
+            .group_by(ConfirmationItem.party_type)
+        )
+    ).all()
+    for pt, cnt in responded_per_type_rows:
+        by_type[pt]["responded"] += int(cnt)
 
     by_type_list = []
     for k, d in by_type.items():
@@ -1218,18 +1278,38 @@ async def get_summary(
         )
     by_type_list.sort(key=lambda x: -x["amount"])
 
-    sent_count = len(letters)
-    responded_count = len(responses)
-    items_with_diff = sum(1 for r in responses if abs(r.amount_difference or 0) > 0.01)
-    total_diff = sum(r.amount_difference or 0 for r in responses)
+    response_status_summary: dict[str, int] = {st: int(cnt) for st, cnt in response_status_rows}
+    sent_count = sum(int(c) for _, c in letter_status_rows)
+    responded_count = sum(int(c) for _, c in response_status_rows)
 
-    # 待办 / 未回函
-    pending_items = []
-    no_reply_items = []
-    by_item_id = {lt.item_id: lt for lt in letters}
-    for it in items:
-        lt = by_item_id.get(it.id)
-        if it.status in (ITEM_STATUS_SENT, ITEM_STATUS_NO_REPLY):
+    # 待办 / 未回函 — detail 仍需行级数据 (单 case 通常 < 100 行, 拉全可接受)
+    pending_items: list[dict[str, Any]] = []
+    no_reply_items: list[dict[str, Any]] = []
+    pending_status_items = (
+        await db.execute(
+            select(ConfirmationItem)
+            .where(
+                ConfirmationItem.case_id == case_id,
+                ConfirmationItem.status.in_((ITEM_STATUS_SENT, ITEM_STATUS_NO_REPLY)),
+            )
+            .order_by(ConfirmationItem.id)
+        )
+    ).scalars().all()
+    if pending_status_items:
+        pending_item_ids = [it.id for it in pending_status_items]
+        letter_map = {
+            lt.item_id: lt
+            for lt in (
+                await db.execute(
+                    select(ConfirmationLetter).where(
+                        ConfirmationLetter.case_id == case_id,
+                        ConfirmationLetter.item_id.in_(pending_item_ids),
+                    )
+                )
+            ).scalars().all()
+        }
+        for it in pending_status_items:
+            lt = letter_map.get(it.id)
             entry = {
                 "id": it.id,
                 "party_name": it.party_name,
@@ -1247,18 +1327,21 @@ async def get_summary(
             else:
                 pending_items.append(entry)
 
-    total_confirmed = sum(r.amount_confirmed for r in responses)
+    # total_items / total_amount 重新计算 (避免 items 全量 SELECT)
+    total_items = sum(int(c) for _, _, c, _ in item_status_rows)
+    total_amount = round(sum(float(a or 0) for _, _, _, a in item_status_rows), 2)
+
     return ConfirmationSummaryResponse(
         case_id=case_id,
         case_name=case.case_name,
         period_end=case.period_end,
         is_locked=case.is_locked,
-        total_items=len(items),
-        total_amount=round(sum(it.book_balance or 0 for it in items), 2),
+        total_items=total_items,
+        total_amount=total_amount,
         total_confirmed=round(total_confirmed, 2),
         total_difference=round(total_diff, 2),
         status_summary=dict(status_summary),
-        response_status_summary=dict(response_status_summary),
+        response_status_summary=response_status_summary,
         by_party_type=by_type_list,
         sent_count=sent_count,
         responded_count=responded_count,

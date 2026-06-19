@@ -30,6 +30,7 @@ from app.models.db_models import (
     TASK_STATUS_IN_PROGRESS,
     TASK_STATUS_CANCELLED,
 )
+from sqlalchemy import func  # round 28 P1-12 SQL 聚合
 
 logger = logging.getLogger(__name__)
 
@@ -170,26 +171,65 @@ class ProgressTracker:
 
     @staticmethod
     async def collect_project_summary(db: AsyncSession, project_id: int) -> dict[str, Any]:
-        """聚合项目级摘要（不展开人员）。"""
-        items_q = await db.execute(
-            select(WorkPlanItem)
+        """聚合项目级摘要（不展开人员）。
+
+        round 28 P1-12 沿用 round 12 模式, 项目级也 SQL 聚合:
+          - WorkPlanItem GROUP BY status: 状态计数 + 工时
+          - ProjectAssignment GROUP BY project_id: 成员计数
+          - DailyReport GROUP BY project_id: 日报计数
+        替代 Python 循环 + len() 累加, 大项目从 O(N) Python 全扫降到 O(1) SQL.
+        """
+        # 1) 项目任务状态聚合 — 一次拿全
+        items_status_q = await db.execute(
+            select(
+                WorkPlanItem.status,
+                func.count(WorkPlanItem.id),
+                func.coalesce(func.sum(WorkPlanItem.estimated_hours), 0),
+                func.coalesce(func.sum(WorkPlanItem.actual_hours), 0),
+            )
             .join(WorkPlan, WorkPlan.id == WorkPlanItem.plan_id)
             .where(WorkPlan.project_id == project_id)
+            .group_by(WorkPlanItem.status)
         )
-        items = items_q.scalars().all()
+        total = 0
+        done = 0
+        inprog = 0
+        blocked = 0
+        est_hours = 0.0
+        act_hours = 0.0
+        by_status: dict[str, int] = {}
+        for status, cnt, est_sum, act_sum in items_status_q.all():
+            cnt = int(cnt or 0)
+            est_sum = float(est_sum or 0)
+            act_sum = float(act_sum or 0)
+            total += cnt
+            est_hours += est_sum
+            act_hours += act_sum
+            by_status[status] = cnt
+            if status == TASK_STATUS_DONE:
+                done = cnt
+            elif status == TASK_STATUS_IN_PROGRESS:
+                inprog = cnt
+            elif status == TASK_STATUS_BLOCKED:
+                blocked = cnt
 
-        total = len(items)
-        done = sum(1 for x in items if x.status == TASK_STATUS_DONE)
-        inprog = sum(1 for x in items if x.status == TASK_STATUS_IN_PROGRESS)
-        blocked = sum(1 for x in items if x.status == TASK_STATUS_BLOCKED)
-        est_hours = sum(float(x.estimated_hours or 0) for x in items)
-        act_hours = sum(float(x.actual_hours or 0) for x in items)
+        # 2) by_module — 需要相关模块字段, 仍走一次轻量查询 (枚举维度, 一次性)
+        #    大多数项目模块数 < 20, GROUP BY 一把梭
+        by_module_q = await db.execute(
+            select(WorkPlanItem.related_module, func.count(WorkPlanItem.id))
+            .join(WorkPlan, WorkPlan.id == WorkPlanItem.plan_id)
+            .where(
+                WorkPlan.project_id == project_id,
+                WorkPlanItem.status != TASK_STATUS_CANCELLED,
+            )
+            .group_by(WorkPlanItem.related_module)
+        )
+        by_module: dict[str, int] = {}
+        for mod, cnt in by_module_q.all():
+            key = mod or "其他"
+            by_module[key] = int(cnt or 0)
+
         rate = (done / total) if total > 0 else 0.0
-
-        by_module = Counter(
-            (x.related_module or "其他") for x in items if x.status != TASK_STATUS_CANCELLED
-        )
-        by_status = Counter(x.status for x in items)
 
         return {
             "total_items": total,
@@ -199,8 +239,8 @@ class ProgressTracker:
             "completion_rate": round(rate, 3),
             "total_estimated_hours": round(est_hours, 1),
             "total_actual_hours": round(act_hours, 1),
-            "by_module": dict(by_module),
-            "by_status": dict(by_status),
+            "by_module": by_module,
+            "by_status": by_status,
         }
 
     @staticmethod

@@ -155,6 +155,13 @@ async def upload_movements(
     except InventoryImportError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # round 28 P1-9: 收集入库日期解析失败行 — 不能静默
+    from app.services.inventory.importer import get_date_parse_failures
+
+    date_failures = get_date_parse_failures()
+    date_fail_count = len(date_failures)
+    date_fail_rows = [[idx, raw] for idx, raw in date_failures[:50]]  # 至多 50 行防 payload 爆
+
     if replace:
         await db.execute(
             delete(InventoryMovement).where(
@@ -200,6 +207,8 @@ async def upload_movements(
         is_prior_year=is_prior_year,
         imported_count=inserted,
         total_ending_amount=round(total_ending, 2),
+        date_parse_failed_count=date_fail_count,
+        date_parse_failed_rows=date_fail_rows,
     )
 
 

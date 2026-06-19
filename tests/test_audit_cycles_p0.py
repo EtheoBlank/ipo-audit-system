@@ -141,3 +141,88 @@ class TestBuildScheduleMonthRecursion:
         # 兜底: 错误格式返空, 不抛
         assert LeaseAmortizer.compute_periods(start_year_month="invalid", n=12) == []
         assert LeaseAmortizer.compute_periods(start_year_month="2026-01", n=0) == []
+
+
+# ============================================================
+# Round 28 P0-1: scan_expense_anomalies period_end 格式校验
+# ============================================================
+class TestScanExpenseAnomaliesPeriodEndValidation:
+    """P0-1: 错日期格式 (如 "2024年12月31日") 不能进 SQL LIKE, 必须 400 拒绝.
+
+    通过 in-process ASGI 调用 + override 依赖绕过 DB:
+    period_end 格式校验在 ensure_project_in_firm 之前, 所以格式错误的请求
+    不会真正接触 DB, 应直接 400.
+    """
+
+    def _build_app_and_overrides(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from app.api.audit_cycles import router
+        from app.core.database import get_db
+        from app.models.db.auth import User
+        from app.services.auth import get_current_user, require_role
+        from app.services.auth.tenant import ensure_project_in_firm
+
+        app = FastAPI()
+        app.include_router(router)
+
+        async def _override_user():
+            return User(id=1, firm_id=1, username="t", role="assistant")
+
+        async def _override_db():
+            yield None
+
+        async def _override_ensure(db, project_id, user):
+            # 假装校验通过, 直接返 None (实际路径不会再用, 因为 ExpensesAnomalyDetector.scan 也会被 mock)
+            return None
+
+        async def _fake_scan(db, project_id, period_end=None):
+            return {"items": [], "period_end": period_end}
+
+        app.dependency_overrides[get_current_user] = _override_user
+        app.dependency_overrides[get_db] = _override_db
+
+        # Patch ensure_project_in_firm 走 monkeypatch-style: 用 FastAPI dependency 不直观,
+        # 改为 monkey-patch 模块函数引用 (在 conftest fixture 范围外, 直接 module patch).
+        import app.api.audit_cycles as _ac_module
+        from app.services.audit_cycles import ExpensesAnomalyDetector
+
+        _orig_ensure = _ac_module.ensure_project_in_firm
+        _orig_scan = ExpensesAnomalyDetector.scan
+        _ac_module.ensure_project_in_firm = _override_ensure
+        ExpensesAnomalyDetector.scan = staticmethod(_fake_scan)
+        # TestClient 结束后不需要还原 (进程内 fixture scope 即可)
+        return app, TestClient(app)
+
+    def test_period_end_invalid_format_rejected_400(self):
+        """'2024年12月31日' 不是 YYYY-MM-DD → 400."""
+        _, client = self._build_app_and_overrides()
+        r = client.post(
+            "/api/audit-cycles/expenses/scan-anomalies/1",
+            params={"period_end": "2024年12月31日"},
+        )
+        # 校验在 ensure_project_in_firm 之前, 所以应 400
+        assert r.status_code == 400, r.text
+        assert "YYYY-MM-DD" in r.json()["detail"]
+
+    def test_period_end_iso_format_passes_validation(self):
+        """正确 ISO 格式应通过格式校验 (后续步骤可能因 DB 不可用而失败,
+        但不应是 400 格式错误)."""
+        _, client = self._build_app_and_overrides()
+        r = client.post(
+            "/api/audit-cycles/expenses/scan-anomalies/1",
+            params={"period_end": "2024-12-31"},
+        )
+        # 校验通过后会跑到 ensure_project_in_firm, 会因为 db=None 报错,
+        # 但绝不应是 400 (格式问题).
+        assert r.status_code != 400, r.text
+
+    def test_period_end_none_passes_validation(self):
+        """period_end 为空时, 跳过校验 (现有行为)."""
+        _, client = self._build_app_and_overrides()
+        r = client.post(
+            "/api/audit-cycles/expenses/scan-anomalies/1",
+            params={},
+        )
+        assert r.status_code != 400, r.text

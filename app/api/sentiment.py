@@ -143,6 +143,7 @@ from app.services.sentiment.quarterly.trigger import (
 from app.services.sentiment.quarterly.verifier import QuarterlyVerifier
 from app.services.sentiment.quarterly.word_exporter import QuarterlyReportWordExporter
 from app.services.sentiment.scheduler import (
+    ScanRateLimitError,
     get_scheduler,
     scan_now,
     start_scheduler,
@@ -1310,11 +1311,23 @@ async def sched_stop(
 @router.post("/scheduler/scan/now")
 async def sched_scan_now(
     body: Optional[SentimentScanRequest] = None,
-    current_user: User = Depends(get_current_user),
+    # round 28 P0-5: 限 manager+ (与 /scan/now 抓取影响范围一致)
+    current_user: User = Depends(require_role(ROLE_MANAGER)),
     db: AsyncSession = Depends(get_db),
 ):
     pid = body.project_id if body else None
     if pid is not None:
+        # round 28 P0-5: 多租户 IDOR 校验 — 必须先于速率限制/抓取
         await ensure_project_in_firm(db, pid, current_user)
+        # round 28 P0-5: 速率限制 — 同 project 60s 内 1 次
+        from app.services.sentiment.scheduler import _check_and_record_scan
+
+        try:
+            _check_and_record_scan(pid)
+        except ScanRateLimitError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail=f"project {exc.project_id} 60s 内已扫描, last={exc.last_scan_at.isoformat()}",
+            ) from exc
     result = await scan_now(pid)
     return result

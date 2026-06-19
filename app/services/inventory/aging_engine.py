@@ -164,6 +164,16 @@ def _parse_dt(v: Any) -> Optional[datetime]:
         return None
 
 
+def _to_naive(dt: Optional[datetime]) -> Optional[datetime]:
+    """P1-8 (2026-06-19 round 28): 统一 datetime tzinfo — 业务侧统一存 naive UTC,
+    比较时若发现 tz-aware, 仅去 tzinfo 不改值."""
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
+
 def _aging_bucket(days: float, qty: float) -> dict[str, float]:
     if days <= 90:
         return {"le_90": qty}
@@ -318,7 +328,10 @@ class InventoryAgingEngine:
             if qty <= 0:
                 continue
             adj_qty = qty * scale
-            days = max(0.0, (period_end - dt).days)
+            # round 28 P1-8: 统一 naive, 避免 aware/naive 混算 TypeError
+            dt_naive = _to_naive(dt) or dt
+            pe_naive = _to_naive(period_end) or period_end
+            days = max(0.0, (pe_naive - dt_naive).days)
             b = _aging_bucket(days, adj_qty)
             bucket.le_90 += b.get("le_90", 0.0)
             bucket.age_91_180 += b.get("age_91_180", 0.0)
@@ -368,7 +381,10 @@ class InventoryAgingEngine:
                 r.get("ship_date") if isinstance(r, dict) else None
             )
             ref_dt = _parse_dt(confirm) or _parse_dt(ship)
-            if ref_dt is None or ref_dt <= period_end:
+            # round 28 P1-8: 统一 naive, 避免 aware/naive 混算 TypeError
+            ref_dt = _to_naive(ref_dt) if ref_dt is not None else None
+            pe_naive = _to_naive(period_end) or period_end
+            if ref_dt is None or ref_dt <= pe_naive:
                 continue
             qty = float(
                 getattr(r, "quantity", 0) or (r.get("quantity", 0) if isinstance(r, dict) else 0)
