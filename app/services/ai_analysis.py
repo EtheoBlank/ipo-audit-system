@@ -60,8 +60,10 @@ class AIAnalysisService:
                 response.raise_for_status()
                 result = response.json()
                 return result.get("choices", [{}])[0].get("message", {}).get("content", "")
-        except Exception as e:
-            return f"AI分析调用失败: {str(e)}"
+        except Exception as exc:
+            # round37 P1: 原 silent return 现留 logger.exception 留 traceback 便于排查 prompt/网络问题
+            logger.exception("AIAnalysisService._call_minimax 调用失败: %s", exc)
+            return f"AI分析调用失败: {str(exc)}"
 
     async def analyze_risk_level(self, account_balances: List[Dict], industry: str) -> Dict:
         """Analyze risk level based on account balances.
@@ -231,8 +233,8 @@ class AIAnalysisService:
                 return json.loads(json_str)
         except Exception as exc:
             # AI 偶尔吐 markdown 包裹 / 截断 / 非法 JSON, fallback 是有意的
-            # 但留痕便于排查 prompt 模板
-            logger.warning("AIAnalysisService._parse_json 失败 fallback: %s", exc)
+            # 但留痕便于排查 prompt 模板 — round37 P1: warning → exception 保留 traceback
+            logger.exception("AIAnalysisService._parse_json 失败 fallback: %s", exc)
         return {"error": "无法解析AI响应", "raw_response": response[:500]}
 
     def _parse_list_response(self, response: str) -> List[str]:
@@ -246,7 +248,8 @@ class AIAnalysisService:
                 if isinstance(items, list):
                     return items if isinstance(items[0], str) else [str(item) for item in items]
         except Exception as exc:
-            logger.warning("AIAnalysisService._parse_list 失败 fallback: %s", exc)
+            # round37 P1: warning → exception 保留 traceback
+            logger.exception("AIAnalysisService._parse_list 失败 fallback: %s", exc)
         return [response[:500]]
 
     def _parse_list_of_dicts(self, response: str) -> List[Dict]:
@@ -263,5 +266,6 @@ class AIAnalysisService:
                     elif isinstance(items[0], str):
                         return [{"recommendation": item} for item in items]
         except Exception as exc:
-            logger.warning("AIAnalysisService._parse_list_of_dicts 失败 fallback: %s", exc)
+            # round37 P1: warning → exception 保留 traceback
+            logger.exception("AIAnalysisService._parse_list_of_dicts 失败 fallback: %s", exc)
         return []

@@ -160,11 +160,14 @@ def main() -> int:
     ))
 
     # 5. 角色 RBAC: 普通 assistant 调 /api/auth/users 创建应 403
+    # round37 P1 修复: 原 own_token=qc_token := make_token(...) 是 walrus 在 kwarg 内赋值,
+    # Python 3.11 不支持 (SyntaxError). 改先赋值再传.
+    qc_token = make_token(user_id=1004, firm_id=1, role=ROLE_QC_PARTNER)
     results.append(_probe(
         "rbac_create_user",
         "POST /api/auth/users 普通用户应 403",
         "POST", "/api/auth/users",
-        own_token=qc_token := make_token(user_id=1004, firm_id=1, role=ROLE_QC_PARTNER),
+        own_token=qc_token,
         other_token=assistant_token,
         json_body={"username": "probe", "role": "assistant", "firm_id": 1},
         expect_status_own=200, expect_status_other=403,
