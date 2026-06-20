@@ -91,7 +91,16 @@ async def make_user(
     return user
 
 
-def make_token(user_id: int, *, firm_id: Optional[int] = None, role: str = ROLE_ASSISTANT) -> str:
+def make_token(
+    user_id: int,
+    *,
+    firm_id: Optional[int] = None,
+    role: str = ROLE_ASSISTANT,
+    username: str = "probe_user",
+) -> str:
     """签发一个测试用 JWT. 复用项目 ``app.services.auth.jwt`` 签发逻辑."""
-    from app.services.auth.jwt import issue_access_token
-    return issue_access_token(user_id=user_id, firm_id=firm_id, role=role)
+    from app.services.auth.jwt import create_access_token
+    return create_access_token(
+        user_id=user_id, username=username, role=role,
+        firm_id=firm_id,
+    )
