@@ -40,6 +40,13 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 
+# Round 35 P1: NULL member_id 的 WorkPlanItem 用这个 sentinel 标识.
+# 与已有 member.id=0 的合法记录区分 (避免无声吞 unassigned 任务).
+UNASSIGNED_MEMBER_ID = -1
+_UNASSIGNED_NAME = "(未分配)"
+_UNASSIGNED_LEVEL = "—"
+
+
 @dataclass
 class MemberProgressData:
     """人员进度聚合结果。"""
@@ -55,6 +62,8 @@ class MemberProgressData:
     hours_logged_7d: float
     open_blockers: int
     last_report_date: Optional[str]
+    # Round 35 P1: 显式 flag — 调用方能区分"该成员真的没任务" vs "全部任务未分配".
+    is_unassigned: bool = False
 
 
 # 兼容旧名字 — 上面已定义
@@ -98,12 +107,22 @@ class ProgressTracker:
             .group_by(WorkPlanItem.member_id, WorkPlanItem.status)
         )
         # {(member_id, status): count} + {(member_id): total}
+        # Round 35 P1: NULL member_id 之前被 int(...) 当 0, 与合法 member.id=0 撞车,
+        # 且这些任务 "消失" 在 0 桶里. 改成单独 UNASSIGNED_MEMBER_ID=-1 桶 + 后续产出
+        # is_unassigned=True 的伪成员行.
         status_count_by_member: dict[int, dict[str, int]] = {}
         total_by_member: dict[int, int] = {}
+        unassigned_total: int = 0
+        unassigned_status_count: dict[str, int] = {}
         for mid, st, cnt in items_agg_q.all():
-            mid = int(mid) if mid is not None else 0
-            status_count_by_member.setdefault(mid, {})[st] = int(cnt)
-            total_by_member[mid] = total_by_member.get(mid, 0) + int(cnt)
+            cnt = int(cnt)
+            if mid is None:
+                unassigned_total += cnt
+                unassigned_status_count[st] = unassigned_status_count.get(st, 0) + cnt
+                continue
+            mid_int = int(mid)
+            status_count_by_member.setdefault(mid_int, {})[st] = cnt
+            total_by_member[mid_int] = total_by_member.get(mid_int, 0) + cnt
 
         # 4) 拉近 7 天 DailyReport — P1 (2026-06-19): 同理 GROUP BY member_id 一次性聚合
         from datetime import date, timedelta as _td
@@ -165,6 +184,29 @@ class ProgressTracker:
                     hours_logged_7d=round(hours_by_member.get(m.id, 0.0), 1),
                     open_blockers=open_blockers_by_member.get(m.id, 0),
                     last_report_date=last_report_by_member.get(m.id),
+                )
+            )
+        # Round 35 P1: 即使没人分配, 也要把 unassigned 桶暴露出来, 否则这些任务
+        # 在 Dashboard 完全消失, 项目经理看不到 "有 N 个任务没分配".
+        if unassigned_total > 0:
+            done_u = unassigned_status_count.get(TASK_STATUS_DONE, 0)
+            inprog_u = unassigned_status_count.get(TASK_STATUS_IN_PROGRESS, 0)
+            blocked_u = unassigned_status_count.get(TASK_STATUS_BLOCKED, 0)
+            rate_u = (done_u / unassigned_total) if unassigned_total > 0 else 0.0
+            out.append(
+                MemberProgressData(
+                    member_id=UNASSIGNED_MEMBER_ID,
+                    full_name=_UNASSIGNED_NAME,
+                    level=_UNASSIGNED_LEVEL,
+                    total_items=unassigned_total,
+                    completed_items=done_u,
+                    in_progress_items=inprog_u,
+                    blocked_items=blocked_u,
+                    completion_rate=round(rate_u, 3),
+                    hours_logged_7d=0.0,
+                    open_blockers=0,
+                    last_report_date=None,
+                    is_unassigned=True,
                 )
             )
         return out

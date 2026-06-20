@@ -2,8 +2,11 @@
 
 import httpx
 import json
+import logging
 from typing import List, Dict, Optional
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class AIAnalysisEngine:
@@ -71,7 +74,12 @@ class AIAnalysisEngine:
         response = await self._call_ai(prompt)
         try:
             return json.loads(response)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # round 35 P1: 之前静默吞, AI misconfig (返回 HTML / 非 JSON / 截断)
+            # 完全隐藏 — 审计师以为是 AI 真判了. 改成 logger.exception 留痕.
+            logger.exception(
+                "AI analyze_risk_level 响应解析失败 (industry=%s): %s", industry, exc
+            )
             return {
                 "risk_level": "中",
                 "risk_points": ["AI响应解析失败"],
@@ -104,7 +112,12 @@ class AIAnalysisEngine:
         try:
             result = json.loads(response)
             return result if isinstance(result, list) else [result]
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # round 35 P1: 同上, 静默吞让异常检测形同虚设.
+            logger.exception(
+                "AI detect_anomalies 响应解析失败 (account_count=%d): %s",
+                len(account_balances), exc,
+            )
             return []
 
     async def generate_audit_program(
@@ -133,7 +146,12 @@ class AIAnalysisEngine:
         try:
             result = json.loads(response)
             return result if isinstance(result, list) else []
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # round 35 P1: 静默吞 → AI 出错也不知道, 审计程序集永远空.
+            logger.exception(
+                "AI generate_audit_program 响应解析失败 (risk_points=%d): %s",
+                len(risk_points), exc,
+            )
             return []
 
     async def analyze_regulatory_compliance(self, company_info: Dict, industry: str) -> Dict:
@@ -158,7 +176,12 @@ class AIAnalysisEngine:
         response = await self._call_ai(prompt)
         try:
             return json.loads(response)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # round 35 P1: 静默吞, 合规分析永远是空 dict.
+            logger.exception(
+                "AI analyze_regulatory_compliance 响应解析失败 (company=%s industry=%s): %s",
+                company_info.get("name", ""), industry, exc,
+            )
             return {}
 
 

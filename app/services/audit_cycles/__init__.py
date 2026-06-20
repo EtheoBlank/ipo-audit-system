@@ -98,7 +98,9 @@ class ExpensesAnomalyDetector:
         try:
             dt = datetime.strptime(voucher_date, "%Y-%m-%d")
             return dt.weekday() >= 5
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # round 35 P1: 之前静默返 False, 数据脏了都不知道 (e.g. Excel 日期格式错).
+            logger.exception("audit_cycles: is_holiday 解析失败 raw=%r exc=%s", voucher_date, exc)
             return False
 
     @staticmethod
@@ -468,7 +470,12 @@ class LeaseAmortizer:
         records: List[LeaseAmortizationSchedule] = []
         try:
             start_dt = datetime.strptime(contract.commencement_date, "%Y-%m-%d")
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # round 35 P1: 之前静默吞 + 用 now() 假装, 租赁摊销全错位.
+            logger.exception(
+                "audit_cycles: 租赁合同 %s commencement_date 解析失败 raw=%r exc=%s",
+                contract_id, contract.commencement_date, exc,
+            )
             start_dt = datetime.now(timezone.utc).replace(tzinfo=None)
 
         # P0 修复: 月度递推用 compute_periods 静态方法, 跨年边界正确

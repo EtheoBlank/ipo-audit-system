@@ -362,6 +362,9 @@ def _tab_photo(project_id: int):
             if res.get("unmatched_rows"):
                 st.warning("⚠️ 以下行未能匹配到盘点用表，请人工核对编码/名称：")
                 st.dataframe(pd.DataFrame(res["unmatched_rows"], height=400), use_container_width=True)
+        else:
+            # P1 (round 35): 上传失败 — 之前只 if res 没 else, 用户看不到失败信息
+            st.error("OCR 上传失败, 请检查文件格式 (.jpg/.png/.pdf) 或后端日志")
 
 
 # ---- 5. 盘点率统计 ---------------------------------------------------
@@ -378,6 +381,8 @@ def _tab_completion(project_id: int, default_pe: date):
         )
     if st.button("🔄 刷新统计", key="comp_refresh"):
         st.cache_data.clear()
+        # P1 (round 35): 清缓存后必须 rerun, 否则 UI 还是显示旧数据
+        st.rerun()
     res = _api(
         "GET", f"/api/inventory/projects/{project_id}/count-completion",
         params={"materiality": mat, "period_end": pe.isoformat()},

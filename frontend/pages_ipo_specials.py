@@ -11,6 +11,7 @@ import streamlit as st
 from frontend._components import apply_feishu_theme, page_header
 from frontend._http import api_request
 from frontend._components.project_picker import pick_project
+from frontend._components.safe_render import validate_date_input
 
 
 def _api(method: str, endpoint: str, **kwargs):
@@ -57,11 +58,15 @@ def _tab_walkthrough(project_id: int) -> None:
 def _tab_cutoff(project_id: int) -> None:
     st.markdown("### ⏰ 截止性测试 (Phase 17)")
     c1, c2, c3 = st.columns(3)
-    ship = c1.text_input("发货日期", value="2024-12-28", key="ipo_co_ship")
-    confirm = c2.text_input("收入确认日期", value="2025-01-03", key="ipo_co_confirm")
-    period = c3.text_input("期末日期", value="2024-12-31", key="ipo_co_period")
+    # P1 (round 35): 三个日期统一包 validate_date_input, 不通过返回 ("", False)
+    ship, ship_ok = validate_date_input("发货日期", key="ipo_co_ship", default="2024-12-28")
+    confirm, confirm_ok = validate_date_input("收入确认日期", key="ipo_co_confirm", default="2025-01-03")
+    period, period_ok = validate_date_input("期末日期", key="ipo_co_period", default="2024-12-31")
     cutoff_days = st.number_input("Cutoff window (天)", min_value=1, max_value=30, value=5, key="ipo_co_window")
     if st.button("📊 判定", key="ipo_co_judge"):
+        if not (ship_ok and confirm_ok and period_ok):
+            st.warning("日期格式错误, 请修正后再判定 (YYYY-MM-DD)")
+            return
         r = _api(
             "POST",
             "/api/ipo-specials/revenue-cutoff/judge",
@@ -82,6 +87,9 @@ def _tab_cutoff(project_id: int) -> None:
             st.info(f"{badge} (偏差 {r.get('diff_days')} 天)")
             if r.get("adjustment_required"):
                 st.warning("建议生成跨期调整分录")
+        else:
+            # P1 (round 35): 错误处理补全 — 后端 422 / 400 详情暴露
+            st.error("截止性判定失败, 请检查日期合法性或后端日志")
 
 
 def _tab_prospectus(project_id: int) -> None:
@@ -283,6 +291,17 @@ def _tab_feedback(project_id: int) -> None:
             title = st.text_input("标题 (可选)", key="ipo_letter_title")
             ok = st.form_submit_button("提交")
         if ok and ln and issue_d:
+            # P1 (round 35): form 内日期二次校验 — form 外用 is_valid_date_str 纯函数
+            from frontend._components.safe_render import is_valid_date_str
+            if not is_valid_date_str(issue_d):
+                st.error(f"签发日期格式错误: '{issue_d}', 应为 YYYY-MM-DD")
+                return
+            if recv_d and not is_valid_date_str(recv_d):
+                st.error(f"收到日期格式错误: '{recv_d}', 应为 YYYY-MM-DD")
+                return
+            if deadline and not is_valid_date_str(deadline):
+                st.error(f"回复截止格式错误: '{deadline}', 应为 YYYY-MM-DD")
+                return
             payload = {
                 "letter_no": ln,
                 "issuer": issuer,
@@ -298,6 +317,9 @@ def _tab_feedback(project_id: int) -> None:
             if r:
                 st.success(f"已新增函 {r.get('id')}")
                 st.rerun()
+            else:
+                # P1 (round 35): 错误处理补全
+                st.error("新增问询函失败, 请检查后端日志或字段格式")
 
 
 def _tab_checklist(project_id: int) -> None:

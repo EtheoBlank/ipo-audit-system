@@ -17,7 +17,7 @@ from app.services.auth.jwt import (
     create_refresh_token,
     decode_token,
 )
-from app.services.auth.password import hash_password, verify_password
+from app.services.auth.password import hash_password, is_weak_password, verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +174,9 @@ async def change_password(
         raise AuthenticationError("新密码至少 8 位")
     if new_password == old_password:
         raise AuthenticationError("新密码不能与旧密码相同")
+    # Round 35 P1: 弱密码黑名单前置校验 — 杜绝 "Password1" / "12345678" 这种 bypass.
+    if is_weak_password(new_password):
+        raise AuthenticationError("密码过于简单, 属于常见弱密码, 请更换")
     user.password_hash = hash_password(new_password)
     user.password_changed_at = _utcnow_naive()
     # refresh_access_token 检查 iat <= password_changed_at, 自动撤销旧 refresh token.
@@ -190,6 +193,9 @@ async def reset_password(
     """管理员强制重置 (无需旧密码)."""
     if len(new_password) < 8:
         raise AuthenticationError("新密码至少 8 位")
+    # Round 35 P1: 管理员 reset 同样要防弱密码, 不能因为免旧密码就绕过强度检查.
+    if is_weak_password(new_password):
+        raise AuthenticationError("密码过于简单, 属于常见弱密码, 请更换")
     user.password_hash = hash_password(new_password)
     user.password_changed_at = _utcnow_naive()  # P0: 撤销旧 refresh token
     user.is_locked = False

@@ -36,6 +36,7 @@ from app.services.comprehensive.web_search_engine import (
     WebSearchEngine,
 )
 from frontend._components import apply_feishu_theme, page_header
+from frontend._components.project_picker import pick_project_dict
 from frontend._components.safe_render import safe_inline_text
 
 logger = logging.getLogger(__name__)
@@ -307,17 +308,24 @@ def show_comprehensive_workpaper():
 
     # 3) 选项目并跑填充
     st.markdown("### 第 2 步：选择项目并自动填充")
-    project_id = st.number_input("项目ID", min_value=1, value=1, step=1, key="selected_project_id")
+    # P1 (round 35): 替换手填 number_input, 用 pick_project_dict 防手填错
+    proj = pick_project_dict("选择项目", key="compr_proj", fmt="name_only")
+    if proj is None:
+        st.info("请先在『项目管理』中创建项目, 再回到此页面")
+        return
+    project_id = int(proj["id"])
     if st.button("🚀 开始自动填充", type="primary", key="compr_start_fill"):  # round 31 widget key
         with st.spinner("正在调用四路数据源..."):
-            ctx = _build_context(int(project_id))
+            ctx = _build_context(project_id)
             engine = _build_engine()
             try:
                 report = _run_async(engine.fill(schema, ctx))
             except Exception as exc:  # noqa: BLE001
+                # P1 (round 35): 错误处理补全 — detail 暴露
                 st.error(f"填充失败：{exc}")
                 return
         st.session_state["__comprehensive_report__"] = report
+        st.session_state["__comprehensive_project_id__"] = project_id
         st.success(
             f"自动填充完成：{report.filled}/{report.total_fields}，待补全 {report.pending} 项。"
         )

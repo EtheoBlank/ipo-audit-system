@@ -95,7 +95,7 @@ def show_regulations():
     # —————————————————————————————
     with tab_search:
         st.markdown("#### 全文 / 关键词搜索")
-        q = st.text_input("关键词 (空格分隔多个词)", placeholder="例如：收入确认 时点 风险报酬")
+        q = st.text_input("关键词 (空格分隔多个词)", placeholder="例如：收入确认 时点 风险报酬", key="search_q")
         col1, col2, col3 = st.columns(3)
         with col1:
             mode = st.radio("匹配方式", ["and", "or"], horizontal=True)

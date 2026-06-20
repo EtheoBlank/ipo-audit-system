@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 from typing import Any, Optional
 
@@ -72,7 +73,7 @@ def _tab_members() -> None:
     with col_r:
         st.markdown("##### ➕ 新增人员")
         with st.form("add_member", clear_on_submit=True):
-            full_name = st.text_input("姓名 *")
+            full_name = st.text_input("姓名 *", key="add_member_name")
             col1, col2 = st.columns(2)
             with col1:
                 level = st.selectbox(
@@ -88,29 +89,54 @@ def _tab_members() -> None:
                 )
             with col2:
                 status = st.selectbox("状态", ["active", "inactive"], index=0)
-            email = st.text_input("邮箱")
-            phone = st.text_input("电话")
-            specialties = st.text_input('专长 (JSON 数组, 例 ["收入循环","存货盘点"])')
-            joined_at = st.date_input("入职日期", value=None)
-            notes = st.text_area("备注")
+            email = st.text_input("邮箱", key="add_member_email")
+            phone = st.text_input("电话", key="add_member_phone")
+            specialties = st.text_input('专长 (JSON 数组, 例 ["收入循环","存货盘点"])', key="add_member_spec")
+            joined_at = st.date_input("入职日期", value=None, key="add_member_joined")
+            notes = st.text_area("备注", key="add_member_notes")
             submitted = st.form_submit_button("添加")
             if submitted:
                 if not full_name.strip():
                     st.error("请填写姓名")
                 else:
+                    # P1 (round 35): 邮箱 / 电话基本格式校验, 后端若要求更严 (RFC 5322)
+                    # 在此基础上二次校验. 空值允许.
+                    if email.strip() and "@" not in email.strip():
+                        st.error("邮箱格式错误, 应包含 '@'")
+                        return
+                    if phone.strip() and not any(ch.isdigit() for ch in phone.strip()):
+                        st.error("电话应至少包含 1 位数字")
+                        return
+                    # P1 (round 35): specialties 是 JSON 数组, 用户输入非 JSON 后端 422.
+                    # 这里加客户端预解析, 失败给提示不阻塞.
+                    specs_val: Any = None
+                    spec_raw = specialties.strip()
+                    if spec_raw:
+                        try:
+                            parsed = json.loads(spec_raw)
+                            if not isinstance(parsed, list):
+                                st.error("专长必须是 JSON 数组 (例 [\"收入循环\",\"存货盘点\"])")
+                                return
+                            specs_val = parsed
+                        except json.JSONDecodeError as exc:
+                            st.error(f"专长 JSON 解析失败: {exc}. 应为数组, 例 [\"收入循环\",\"存货盘点\"]")
+                            return
                     payload = {
                         "full_name": full_name.strip(),
                         "level": level,
                         "status": status,
                         "email": email.strip() or None,
                         "phone": phone.strip() or None,
-                        "specialties": specialties.strip() or None,
+                        "specialties": specs_val,
                         "joined_at": joined_at.isoformat() if joined_at else None,
                         "notes": notes.strip() or None,
                     }
                     res = api_request("POST", "/api/team-management/members", json=payload)
                     if res:
                         st.success(f"已添加人员 #{res.get('id')} {res.get('full_name')}")
+                    else:
+                        # P1 (round 35): 错误处理补全 — 后端 422 / 401 / 403 详情暴露
+                        st.error("新增人员失败, 请检查字段或权限")
 
 
 # ============================================================
@@ -391,7 +417,7 @@ def _tab_meetings() -> None:
     with col_l:
         st.markdown("##### ➕ 排期会议")
         with st.form("create_meeting", clear_on_submit=True):
-            title = st.text_input("会议标题 *")
+            title = st.text_input("会议标题 *", key="mt_title")
             mtype = st.selectbox(
                 "类型",
                 list(_MEETING_TYPE_LABELS.keys()),
@@ -400,7 +426,7 @@ def _tab_meetings() -> None:
             d = st.date_input("日期", value=date.today())
             t = st.time_input("时间", value=None)
             duration = st.number_input("时长(分钟)", 15, 480, 60, step=15)
-            location = st.text_input("地点")
+            location = st.text_input("地点", key="mt_location")
             agenda = st.text_area("议程")
             if st.form_submit_button("创建"):
                 if title.strip():
@@ -645,7 +671,7 @@ def _tab_recommendations() -> None:
             if not r.get("is_confirmed"):
                 with st.form(f"confirm_{r['id']}", clear_on_submit=True):
                     notes = st.text_area("负责人备注")
-                    cb = st.text_input("确认人 *")
+                    cb = st.text_input("确认人 *", key=f"confirm_cb_{r['id']}")
                     if st.form_submit_button("确认采纳") and cb.strip():
                         res = api_request(
                             "POST",

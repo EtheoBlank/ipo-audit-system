@@ -7,6 +7,9 @@
 bcrypt 限制:
   - 密码最多 72 字节 (bcrypt 协议硬约束). 超过会被截断, 这里手动截断 + 提示.
   - 不支持 NUL 字节 — 拒绝含 NUL 的密码, 避免下游截断绕过校验.
+
+Round 35 P1: 增加弱密码黑名单 (``WEAK_PASSWORDS``) + ``is_weak_password`` 校验函数,
+供 ``app.services.auth.service`` 在 change_password / reset_password 前调用.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import hashlib
 import hmac
 import logging
 import os
-from typing import Optional
+from typing import FrozenSet, Optional
 
 from app.core.config import settings
 
@@ -43,6 +46,40 @@ _BCRYPT_PREFIXES = ("$2a$", "$2b$", "$2y$")
 _FALLBACK_PREFIX = "pbkdf2_sha256$"
 _FALLBACK_ITER = 600_000  # OWASP 2023 推荐 ≥ 600_000
 _BCRYPT_MAX_BYTES = 72    # bcrypt 协议硬约束
+
+
+# ============================================================
+#  Round 35 P1 — 弱密码黑名单 (30 条)
+# ============================================================
+# 选词策略: OWASP Top 25 弱密码 (2023) + 中文拼音常见 + 数字序列 + 行业相关.
+# 存储为不区分大小写的 frozenset (查 O(1)).
+WEAK_PASSWORDS: FrozenSet[str] = frozenset({
+    # 英文类
+    "password", "password1", "password123", "pwd", "pwd123",
+    "12345678", "123456789", "1234567890", "qwerty", "qwerty123",
+    "abc123", "admin", "admin123", "root", "root123",
+    "welcome", "welcome1", "letmein", "monkey", "dragon",
+    "iloveyou", "sunshine", "princess", "football",
+    "baseball", "superman", "batman",
+    # 数字序列
+    "00000000", "11111111", "11223344", "123321",
+    # 中文拼音 / 业务
+    "woaini", "nihao", "woaini1314", "qwer1234",
+})
+
+assert len(WEAK_PASSWORDS) >= 30, (
+    f"WEAK_PASSWORDS 应至少 30 条, 当前 {len(WEAK_PASSWORDS)}"
+)
+
+
+def is_weak_password(password: str) -> bool:
+    """检查密码是否在弱密码黑名单. 不抛, 仅 True/False.
+
+    比较时统一小写 + 去前后空格, 避免 ``Password1 `` 这种 bypass.
+    """
+    if not password:
+        return True  # 空串视为弱 (调用方再判长度)
+    return password.strip().lower() in WEAK_PASSWORDS
 
 
 def _normalize_for_bcrypt(password: str) -> bytes:
