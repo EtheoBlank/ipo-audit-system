@@ -339,13 +339,8 @@ class TestAccountAuditInitializeFirmCheck:
 
 
 class TestAccountAuditScopeOverrideFirmCheck:
-    """P0 IDOR 残留: account_audit.projects/{id}/scope-overrides/{oid} 端点
-    调用 AccountAuditService.remove_scope_override 时不校验 firm_id, 跨所 user
-    可删除别所的 scope override.
-
-    P0 修复方向: 在 remove_scope_override endpoint 加 ensure_project_in_firm.
-
-    当前状态: P0 残留 — 用 pytest.xfail() 标记为 expected failure, 修复后改 strict.
+    """P0 IDOR 已修: account_audit.projects/{id}/scope-overrides/{oid} endpoint
+    在 round 31 加 ensure_project_in_firm, 跨所 user 删别所 scope override 应 403.
     """
 
     async def test_cross_firm_scope_override_403(self, session):
@@ -364,13 +359,7 @@ class TestAccountAuditScopeOverrideFirmCheck:
         _override_user(firm2_user)
         client = TestClient(app)
         resp = client.delete("/api/account-audit/projects/1/scope-overrides/30")
-        # 现状: 200 已删除 (P0 IDOR); 修复后应 403
-        if resp.status_code == 403:
-            return  # P0 已修, 测试通过
-        pytest.xfail(
-            f"P0 IDOR 残留: account_audit scope-overrides/{ov.id} DELETE 跨所无 firm 校验, "
-            f"返 {resp.status_code} (期望 403) — 待 P0 修复后改 assert 即可"
-        )
+        assert resp.status_code == 403, resp.text
 
 
 # ============================================================
@@ -428,12 +417,8 @@ class TestCountPlanFirmCheck:
 
 
 class TestWorkbookTrialBalanceFirmCheck:
-    """P0 IDOR + KeyError 残留: workbooks.trial-balance 端点
-      1) 缺 ensure_project_in_firm, 跨所可读别所科目余额
-      2) 用 balance_result['ending'] 但 TrialBalanceService.check_balance 返回
-         'standalone.ending' (嵌套结构), KeyError → 500
-
-    P0 修复方向: 加 ensure_project_in_firm + 改 'standalone.ending'.
+    """P0 IDOR + KeyError 已修: workbooks.trial-balance 端点在 round 31 加
+    ensure_project_in_firm + 改 standalone.ending 路径, 跨所 user 应 403.
     """
 
     async def test_cross_firm_trial_balance_should_403(self, session):
@@ -455,15 +440,7 @@ class TestWorkbookTrialBalanceFirmCheck:
             "/api/workbooks/trial-balance",
             json={"project_id": 1, "period_end": "2024-12-31"},
         )
-        # 现状: 没 firm 校验 + KeyError 'ending' → 500.
-        # P0 修复后应 403 (先 firm 校验, 永远到不了 KeyError).
-        if resp.status_code == 403:
-            return  # P0 已修
-        pytest.xfail(
-            f"P0 IDOR + KeyError 残留: workbooks.trial-balance 无 firm 校验, "
-            f"且 TrialBalanceService 返回结构错 (KeyError 'ending'). "
-            f"应 403 (firm 校验), 实际 {resp.status_code} — 待 P0 修复"
-        )
+        assert resp.status_code == 403, resp.text
 
 
 # ============================================================

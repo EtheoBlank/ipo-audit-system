@@ -86,7 +86,7 @@ def _tab_me() -> None:
                     if res:
                         st.success("密码已更新, 下次登录请使用新密码")
 
-    if st.button("🚪 登出"):
+    if st.button("🚪 登出", key="auth_tab_profile_logout"):  # round 31 widget key
         _api("POST", "/api/auth/logout")
         st.session_state.pop("auth_token", None)
         st.session_state.pop("auth_user", None)
@@ -217,8 +217,10 @@ def _tab_roles_permissions() -> None:
         if rows:
             df = pd.DataFrame(rows)
             module = st.selectbox(
-                "按模块筛选", [""] + sorted(df["module"].dropna().unique().tolist())
-            )
+                "按模块筛选",
+                [""] + sorted(df["module"].dropna().unique().tolist()),
+                key="auth_perms_module",
+            )  # round 31 widget key
             if module:
                 df = df[df["module"] == module]
             st.dataframe(df, width="stretch")
@@ -242,11 +244,12 @@ def _tab_audit_logs() -> None:
             "import",
             "http",
         ],
+        key="auth_logs_action",  # round 31 widget key
     )
-    resource_type = cols[1].text_input("资源类型")
-    keyword = cols[2].text_input("关键词")
-    start_date = cols[3].text_input("开始日期 YYYY-MM-DD")
-    end_date = cols[4].text_input("结束日期")
+    resource_type = cols[1].text_input("资源类型", key="auth_logs_res_type")  # round 31 widget key
+    keyword = cols[2].text_input("关键词", key="auth_logs_kw")  # round 31 widget key
+    start_date = cols[3].text_input("开始日期 YYYY-MM-DD", key="auth_logs_start")  # round 31 widget key
+    end_date = cols[4].text_input("结束日期", key="auth_logs_end")  # round 31 widget key
 
     params: Dict[str, Any] = {"limit": 200}
     if action:
@@ -289,6 +292,7 @@ def _tab_approvals() -> None:
     status_filter = st.selectbox(
         "状态",
         ["", "pending", "in_progress", "approved", "rejected", "withdrawn"],
+        key="auth_appr_status",  # round 31 widget key
     )
     params: Dict[str, Any] = {"limit": 100}
     if status_filter:
@@ -311,7 +315,7 @@ def _tab_approvals() -> None:
         )
         st.dataframe(df, width="stretch")
 
-        sel_id = st.number_input("审批流 ID", min_value=0, step=1, value=0)
+        sel_id = st.number_input("审批流 ID", min_value=0, step=1, value=0, key="auth_appr_id")  # round 31 widget key
         if sel_id:
             detail = _api("GET", f"/api/auth/approvals/{sel_id}")
             if detail:

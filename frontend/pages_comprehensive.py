@@ -308,7 +308,7 @@ def show_comprehensive_workpaper():
     # 3) 选项目并跑填充
     st.markdown("### 第 2 步：选择项目并自动填充")
     project_id = st.number_input("项目ID", min_value=1, value=1, step=1, key="selected_project_id")
-    if st.button("🚀 开始自动填充", type="primary"):
+    if st.button("🚀 开始自动填充", type="primary", key="compr_start_fill"):  # round 31 widget key
         with st.spinner("正在调用四路数据源..."):
             ctx = _build_context(int(project_id))
             engine = _build_engine()
@@ -331,7 +331,7 @@ def show_comprehensive_workpaper():
     answers = _render_questions(report, key_prefix="qa")
 
     # 5) 提交回答
-    if report.open_questions and st.button("📥 提交所有回答", type="primary"):
+    if report.open_questions and st.button("📥 提交所有回答", type="primary", key="compr_submit_qa"):  # round 31 widget key
         if not any(v.strip() for v in answers.values()):
             st.warning("请至少回答一个问题。")
         else:
@@ -344,7 +344,7 @@ def show_comprehensive_workpaper():
 
     # 6) 导出
     st.markdown("### 第 3 步：导出最终 Excel")
-    if st.button("💾 生成 .xlsx"):
+    if st.button("💾 生成 .xlsx", key="compr_export_xlsx"):  # round 31 widget key
         xlsx_bytes = _export_to_excel(schema, report)
         if xlsx_bytes:
             st.download_button(

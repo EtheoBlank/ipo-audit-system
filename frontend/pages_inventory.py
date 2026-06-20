@@ -145,8 +145,8 @@ def _tab_plan(project_id: int, default_pe: date, industry: str):
         pe = _safe_date_input("盘点基准日", key="plan_pe", default=default_pe)
     with col2:
         ind = st.text_input("行业（不填则用项目行业）", value=industry, key="plan_ind")
-    days_b = st.number_input("基准日前几天开始监盘", value=0, min_value=0, max_value=10)
-    days_a = st.number_input("基准日后几天结束监盘", value=2, min_value=0, max_value=10)
+    days_b = st.number_input("基准日前几天开始监盘", value=0, min_value=0, max_value=10, key="plan_days_b")  # round 31 widget key
+    days_a = st.number_input("基准日后几天结束监盘", value=2, min_value=0, max_value=10, key="plan_days_a")  # round 31 widget key
 
     if st.button("生成/刷新盘点计划骨架", type="primary", key="plan_gen_btn"):
         body = {

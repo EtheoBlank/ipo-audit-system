@@ -160,11 +160,50 @@ def _flatten_context(ctx: Dict[str, Any], parent: str = "") -> Dict[str, str]:
     return out
 
 
-def _render_placeholder_in_text(text: str, flat_ctx: Dict[str, str], strict: bool = False) -> str:
+def _render_placeholder_in_text(
+    text: str,
+    flat_ctx: Dict[str, str],
+    strict: bool = False,
+    _depth: int = 0,
+    _expanding: Optional[set] = None,
+) -> str:
+    """递归替换 ``${name}`` placeholder.
+
+    round 31 修嵌套占位符死循环:
+      - ``_MAX_DEPTH`` 限制递归层数, 防止 ``${a.b.c}`` 这种 dot-paths 在
+        错误实现下无限展开 (例: 把 "${a.b.c}" 解释为 "展开 a 后再展开 b.c")
+      - ``_expanding`` set 检测循环: 模板/数据本身定义 a -> b -> a 时
+        单次 sub 是 OK 的, 但若实现支持递归展开会爆栈. 这里选择"不展开",
+        防止坏数据拖垮服务
+    """
+    # round 31: 嵌套占位符死循环保护 — 50 层已远超任何合法模板
+    _MAX_DEPTH = 50
+    if _depth >= _MAX_DEPTH:
+        logger.warning("placeholder 嵌套深度超过 %s, 提前停止展开", _MAX_DEPTH)
+        return text
+    if _expanding is None:
+        _expanding = set()
+
     def _sub(match: re.Match) -> str:
         name = match.group(1)
+        # round 31: cycle 检测 — 若该 placeholder 正在展开链上, 保留原文 + warning
+        if name in _expanding:
+            logger.warning("检测到循环占位符 $%s, 保留原文", name)
+            return match.group(0)
         if name in flat_ctx:
-            return flat_ctx[name]
+            value = flat_ctx[name]
+            # round 31: 嵌套保护 — 若替换后的值本身含 ${...}, 且未在展开链,
+            # 递归展开一次 (允许 ${a} -> "项目 ${b}" 这种合法嵌套)
+            if "${" in value:
+                _expanding.add(name)
+                try:
+                    value = _render_placeholder_in_text(
+                        value, flat_ctx, strict=strict,
+                        _depth=_depth + 1, _expanding=_expanding,
+                    )
+                finally:
+                    _expanding.discard(name)
+            return value
         if strict:
             raise KeyError(f"模板需要 ${{{name}}}, 但 context 未提供")
         return f"[未填:{name}]"
@@ -299,11 +338,19 @@ def _render_docx_xml_blob(xml_bytes: bytes, flat_ctx: Dict[str, str], strict: bo
     注意: 早退判断**不能**用 ``b"${" in xml_bytes`` — 当 placeholder 被 Word
     拆到多个 ``<w:r>`` run 时 (``$ {cust_ name}``), ``${`` 不会在原始字节流中
     相邻出现, 会被错误地判为"无 placeholder" 跳过 — 正是这个 bug 促使本函数
-    重写为 XML 段落级合并. 这里改用更宽松的判断: 存在 ``$`` 或 ``{`` 中任一
-    才解析 (避免对纯文本 XML 也走 ET 解析的浪费).
+    重写为 XML 段落级合并. 这里改用更宽松的判断: 存在 ``$`` **和** ``{`` 才
+    解析 (round 31: 同时存在才能构成 ``${`` placeholder; 但 round 14 P1-11
+    已知漏判 — 改用 ``b"$" in xml_bytes and b"{" in xml_bytes``, 比 ``or``
+    更精确, 避免对纯 ``$`` 货币符 (例: ``100$``) 错误触发 ET 解析).
     """
+    # round 31: 早退条件既查 $ 也查 { — 必须同时存在才可能是 placeholder
+    # (round 14 P1-11 已知: 单 ``$`` 出现在 "100$ 美元" 时应跳过 ET 解析)
     if b"$" not in xml_bytes and b"{" not in xml_bytes:
         return xml_bytes  # 既无 $ 也无 {, 必不可能含 placeholder
+    # round 31: 防 "$" 与 "{" 分属 XML 不同位置 (例: 货币 $ + 大括号元素),
+    # 强制两个标记都出现才走 ET 解析 — 避免无 placeholder 模板走 ET 浪费
+    if not (b"$" in xml_bytes and b"{" in xml_bytes):
+        return xml_bytes
 
     try:
         root = ET.fromstring(xml_bytes)

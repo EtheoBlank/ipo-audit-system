@@ -180,6 +180,7 @@ def show_knowledge_base():
             "查询内容",
             placeholder="例如：制造业期末存货跌价测试的处理方式；客户函证差异的替代程序",
             height=80,
+            key="kb_search_query",  # round 31 widget key
         )
         c1, c2 = st.columns(2)
         with c1:
@@ -187,7 +188,7 @@ def show_knowledge_base():
         with c2:
             category = st.selectbox("限定分类", [""] + KB_CATEGORIES, key="search_cat")
 
-        if query and st.button("🔍 检索"):
+        if query and st.button("🔍 检索", key="kb_search_btn"):  # round 31 widget key
             payload = {"query": query, "top_k": int(top_k)}
             if category:
                 payload["category"] = category
@@ -228,7 +229,7 @@ def show_knowledge_base():
             return
 
         proj_map = {f"{p['id']} - {p['name']}": p for p in projects}
-        sel = st.selectbox("选择项目", list(proj_map.keys()))
+        sel = st.selectbox("选择项目", list(proj_map.keys()), key="kb_proj_sel")  # round 31 widget key
         project = proj_map[sel]
 
         tab_single, tab_batch = st.tabs(["🎯 单科目", "📦 批量写回底稿"])
@@ -236,8 +237,8 @@ def show_knowledge_base():
         with tab_single:
             c1, c2 = st.columns(2)
             with c1:
-                ac_code = st.text_input("科目编码", placeholder="例如 1122")
-                ac_name = st.text_input("科目名称", placeholder="例如 应收账款")
+                ac_code = st.text_input("科目编码", placeholder="例如 1122", key="kb_ac_code")  # round 31 widget key
+                ac_name = st.text_input("科目名称", placeholder="例如 应收账款", key="kb_ac_name")  # round 31 widget key
             with c2:
                 obj = st.selectbox(
                     "审计目标",
@@ -252,11 +253,12 @@ def show_knowledge_base():
                         "在建工程转固",
                         "公允价值计量",
                     ],
+                    key="kb_audit_obj",  # round 31 widget key
                 )
                 kb_cat = st.selectbox("限定知识库分类", [""] + KB_CATEGORIES, key="ann_cat")
-            risk = st.text_area("风险点描述 (可选)")
+            risk = st.text_area("风险点描述 (可选)", key="kb_risk")  # round 31 widget key
 
-            if st.button("🪄 生成审计说明", type="primary"):
+            if st.button("🪄 生成审计说明", type="primary", key="kb_gen_note"):  # round 31 widget key
                 payload = {
                     "project_id": project["id"],
                     "account_code": ac_code or None,
@@ -302,6 +304,7 @@ def show_knowledge_base():
                 "底稿文件名",
                 placeholder="例如 科目明细表_2024.xlsx",
                 help="从「底稿生成」页拿到的 file_name",
+                key="kb_wb_fname",  # round 31 widget key
             )
             c1, c2 = st.columns(2)
             with c1:

@@ -144,6 +144,9 @@ async def remove_scope_override(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
+    # round 31 修 round 29 xfail 捕到的 P0 IDOR: scope-override DELETE 缺 firm 校验,
+    # 跨所 user 可删别所 scope override → 改 ensure_project_in_firm 先校验 firm_id.
+    await ensure_project_in_firm(db, project_id, current_user)
     ok = await AccountAuditService.remove_scope_override(
         db, project_id=project_id, override_id=override_id
     )

@@ -141,6 +141,11 @@ async def check_trial_balance(
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Check trial balance for a project."""
+    # round 31 修 round 29 xfail 捕到的 P0 IDOR + KeyError:
+    #   1) 缺 ensure_project_in_firm → 跨所可读别所科目余额
+    #   2) 用 balance_result["ending"] 但 TrialBalanceService.check_balance 返回
+    #      嵌套 "standalone.ending", KeyError → 500
+    await ensure_project_in_firm(db, request.project_id, current_user)
     result = await db.execute(
         select(AccountBalance).where(AccountBalance.project_id == request.project_id)
     )
@@ -154,11 +159,12 @@ async def check_trial_balance(
     balance_result = TrialBalanceService.check_balance(df_balances)
     account_summary = TrialBalanceService.get_account_summary(df_balances)
 
+    standalone_ending = balance_result["standalone"]["ending"]
     return TrialBalanceResponse(
         is_balanced=balance_result["is_balanced"],
-        total_debit=balance_result["ending"]["debit"],
-        total_credit=balance_result["ending"]["credit"],
-        difference=balance_result["ending"]["difference"],
+        total_debit=standalone_ending["debit"],
+        total_credit=standalone_ending["credit"],
+        difference=standalone_ending["difference"],
         account_details=account_summary,
     )
 

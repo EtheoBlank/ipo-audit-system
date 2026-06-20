@@ -28,7 +28,7 @@ def _projects_selectbox(label: str = "选择项目") -> Optional[dict[str, Any]]
         st.warning("⚠️ 请先在『项目管理』中创建一个项目。")
         return None
     options = {f"#{p['id']} {p['name']} ({p.get('company_name', '')})": p for p in projects}
-    chosen = st.selectbox(label, list(options.keys()))
+    chosen = st.selectbox(label, list(options.keys()), key="contracts_proj_chosen")  # round 31 widget key
     return options.get(chosen)
 
 
@@ -111,6 +111,7 @@ def show_contracts() -> None:
             "输入方式",
             ["📷 图片 / 扫描 PDF (OCR)", "📝 纯文本 (跳过 OCR)"],
             horizontal=True,
+            key="contracts_input_mode",  # round 31 widget key
         )
 
         if mode.startswith("📷"):
@@ -120,8 +121,8 @@ def show_contracts() -> None:
                 accept_multiple_files=True,
                 key="contracts_image_upload",
             )
-            note = st.text_input("备注", "")
-            if st.button("📤 上传并 OCR", type="primary"):
+            note = st.text_input("备注", "", key="contracts_image_note")  # round 31 widget key
+            if st.button("📤 上传并 OCR", type="primary", key="contracts_upload_ocr"):  # round 31 widget key
                 if not files:
                     st.warning("请先选择文件。")
                 else:
@@ -147,10 +148,10 @@ def show_contracts() -> None:
                 "适用于：① 已经用本地 OCR 工具跑过；② 不想装 paddleocr 等依赖；"
                 "③ 文本量较小、复制粘贴方便。"
             )
-            filename = st.text_input("文件名（自定义）", value=f"contract_{project_id}.txt")
-            text = st.text_area("合同文本", height=240, placeholder="把合同正文粘到这里…")
+            filename = st.text_input("文件名（自定义）", value=f"contract_{project_id}.txt", key="contracts_text_fname")  # round 31 widget key
+            text = st.text_area("合同文本", height=240, placeholder="把合同正文粘到这里…", key="contracts_text_body")  # round 31 widget key
             note = st.text_input("备注", "", key="text_note")
-            if st.button("📤 上传文本", type="primary"):
+            if st.button("📤 上传文本", type="primary", key="contracts_upload_text"):  # round 31 widget key
                 if not text.strip():
                     st.warning("请先粘贴合同文本。")
                 else:
@@ -208,12 +209,12 @@ def show_contracts() -> None:
             st.info("请先上传合同。")
         else:
             options = {f"#{c['id']} {c['filename']}": c for c in rows}
-            chosen_label = st.selectbox("选择合同", list(options.keys()))
+            chosen_label = st.selectbox("选择合同", list(options.keys()), key="contracts_chosen_contract")  # round 31 widget key
             chosen = options[chosen_label]
-            run_kp = st.checkbox("运行 7 字段要点提取", value=True)
-            run_fs = st.checkbox("运行 CAS 14 五步法分析", value=True)
+            run_kp = st.checkbox("运行 7 字段要点提取", value=True, key="contracts_run_kp")  # round 31 widget key
+            run_fs = st.checkbox("运行 CAS 14 五步法分析", value=True, key="contracts_run_fs")  # round 31 widget key
 
-            if st.button("🤖 开始分析", type="primary"):
+            if st.button("🤖 开始分析", type="primary", key="contracts_start_analysis"):  # round 31 widget key
                 payload = {
                     "project_id": project_id,
                     "contract_id": chosen["id"],

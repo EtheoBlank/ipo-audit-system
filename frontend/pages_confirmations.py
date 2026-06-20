@@ -72,6 +72,7 @@ def show_confirmations():
         "选择审计项目",
         options=projects,
         format_func=lambda p: f"#{p['id']} {p['name']} - {p['company_name']} ({p['fiscal_year']})",
+        key="conf_proj",  # round 31 widget key
     )
     if not proj:
         return
@@ -199,6 +200,7 @@ def show_confirmations():
                     f"#{c['id']} {c['case_name']} ({c['period_end']})"
                     + (" 🔒" if c["is_locked"] else "")
                 ),
+                key="conf_case",  # round 31 widget key
             )
             if case and case["is_locked"]:
                 st.warning("⚠️ 案卷已锁定, 无法重新生成。请新建案卷。")
@@ -206,18 +208,18 @@ def show_confirmations():
                 st.markdown("#### 选样规则")
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    bank_threshold = st.number_input("银行阈值 (0=全发)", value=0.0, min_value=0.0)
-                    customer_threshold = st.number_input("客户阈值", value=100000.0, min_value=0.0)
+                    bank_threshold = st.number_input("银行阈值 (0=全发)", value=0.0, min_value=0.0, key="conf_bank_thr")  # round 31 widget key
+                    customer_threshold = st.number_input("客户阈值", value=100000.0, min_value=0.0, key="conf_cust_thr")  # round 31 widget key
                 with col2:
                     supplier_threshold = st.number_input(
-                        "供应商阈值", value=100000.0, min_value=0.0
+                        "供应商阈值", value=100000.0, min_value=0.0, key="conf_supp_thr",  # round 31 widget key
                     )
-                    other_threshold = st.number_input("其他往来阈值", value=50000.0, min_value=0.0)
+                    other_threshold = st.number_input("其他往来阈值", value=50000.0, min_value=0.0, key="conf_other_thr")  # round 31 widget key
                 with col3:
                     sample_ratio = st.slider("阈值以下随机抽样比例", 0.0, 0.5, 0.10, 0.05)
-                    include_zero = st.checkbox("包含零余额", value=False)
+                    include_zero = st.checkbox("包含零余额", value=False, key="conf_inc_zero")  # round 31 widget key
 
-                if st.button("🧮 生成统计表", type="primary"):
+                if st.button("🧮 生成统计表", type="primary", key="conf_gen_stats"):  # round 31 widget key
                     payload = {
                         "case_id": case["id"],
                         "bank_threshold": bank_threshold,
@@ -300,7 +302,7 @@ def show_confirmations():
             col1, col2, col3 = st.columns([1, 1, 2])
             with col1:
                 if not case["is_locked"]:
-                    if st.button("🔒 确定发函 (锁定案卷)", type="primary"):
+                    if st.button("🔒 确定发函 (锁定案卷)", type="primary", key="conf_lock_case"):  # round 31 widget key
                         payload = {
                             "locked_by": _current_user_name(),
                             "lock_reason": "已确认函证对象清单",
@@ -315,7 +317,7 @@ def show_confirmations():
                     st.success("🔒 案卷已锁定")
             with col2:
                 if case["is_locked"]:
-                    if st.button("🔓 解锁", help="仅当无发函时允许"):
+                    if st.button("🔓 解锁", help="仅当无发函时允许", key="conf_unlock_case"):  # round 31 widget key
                         r = api_request("POST", f"/api/confirmations/cases/{case['id']}/unlock")
                         if r:
                             st.success("已解锁")
@@ -430,6 +432,7 @@ def show_confirmations():
                         format_func=lambda it: (
                             f"#{it['id']} {it['party_name']} - {it['book_balance']:,.2f} - {it['status_label']}"
                         ),
+                        key="conf_sent_item",  # round 31 widget key
                     )
                     if sel:
                         letter_id = sel["sent_letter_id"]
@@ -438,7 +441,10 @@ def show_confirmations():
                         st.markdown("---")
 
                         mode = st.radio(
-                            "录入方式", ["📷 上传回函照片 (OCR+AI)", "✍️ 手工录入"], horizontal=True
+                            "录入方式",
+                            ["📷 上传回函照片 (OCR+AI)", "✍️ 手工录入"],
+                            horizontal=True,
+                            key="conf_input_mode",  # round 31 widget key
                         )
 
                         if mode.startswith("📷"):
@@ -451,8 +457,9 @@ def show_confirmations():
                                 "AI 解析后自动回填状态",
                                 value=True,
                                 help="取消则只解析不修改状态, 需人工确认",
+                                key="conf_auto_confirm",  # round 31 widget key
                             )
-                            if uploaded and st.button("🚀 OCR + AI 解析", type="primary"):
+                            if uploaded and st.button("🚀 OCR + AI 解析", type="primary", key="conf_ocr_run"):  # round 31 widget key
                                 files = {
                                     "file": (
                                         uploaded.name,
@@ -641,7 +648,7 @@ def show_confirmations():
                 format_func=lambda c: f"#{c['id']} {c['case_name']} ({c['period_end']})",
                 key="exp_case",
             )
-            if case and st.button("📤 导出工作簿", type="primary"):
+            if case and st.button("📤 导出工作簿", type="primary", key="conf_export_wb"):  # round 31 widget key
                 content = api_request(
                     "GET", f"/api/confirmations/cases/{case['id']}/export", expect_bytes=True
                 )
