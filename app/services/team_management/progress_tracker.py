@@ -330,6 +330,11 @@ class ProgressTracker:
                 delta = (now - raised).total_seconds() / 3600.0
                 ages.append(delta)
             except Exception:  # noqa: BLE001
+                # round 36 P1: 之前静默 continue, 卡点存续时长算错也不知道
+                logger.exception(
+                    "progress_tracker: blocker age 计算失败 blocker_id=%s",
+                    getattr(b, "id", None),
+                )
                 continue
         avg_age = sum(ages) / len(ages) if ages else 0.0
 

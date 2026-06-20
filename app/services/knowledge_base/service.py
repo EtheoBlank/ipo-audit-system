@@ -235,7 +235,8 @@ class KnowledgeBaseService:
                 vectors = await embedder.aembed([query])
                 query_vector = vectors[0] if vectors else None
         except Exception:  # noqa: BLE001
-            logger.warning("Query embedding 失败，退回关键词检索", exc_info=True)
+            # round 36 P1: warning+exc_info 与 logger.exception 等价, 统一
+            logger.exception("Query embedding 失败，退回关键词检索")
             query_vector = None
 
         results = await retrieve(
@@ -263,7 +264,8 @@ class KnowledgeBaseService:
             )
             await db.commit()
         except Exception:  # noqa: BLE001
-            logger.debug("检索日志写入失败", exc_info=True)
+            # round 36 P1: debug+exc_info 与 logger.exception 等价, 统一
+            logger.exception("检索日志写入失败")
 
         return results
 

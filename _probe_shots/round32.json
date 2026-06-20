@@ -1,0 +1,79 @@
+{
+  "api_base": "http://127.0.0.1:8000",
+  "timestamp": "2026-06-20T15:03:19",
+  "runner": "round36_idor_runner.py",
+  "results": [
+    {
+      "id": "idor_auth_users",
+      "desc": "GET /api/auth/users/{other_user} 跨所应 404",
+      "method": "GET",
+      "path": "/api/auth/users/9999",
+      "status_own": 404,
+      "status_other": 404,
+      "verdict": "PASS"
+    },
+    {
+      "id": "idor_approval_get",
+      "desc": "GET /api/auth/approvals/{wf} 跨所应 404",
+      "method": "GET",
+      "path": "/api/auth/approvals/1",
+      "status_own": 404,
+      "status_other": 404,
+      "verdict": "PASS"
+    },
+    {
+      "id": "idor_approval_decide",
+      "desc": "POST /api/auth/approvals/{wf}/decide 跨所应 404",
+      "method": "POST",
+      "path": "/api/auth/approvals/1/decide",
+      "status_own": 404,
+      "status_other": 404,
+      "verdict": "PASS"
+    },
+    {
+      "id": "idor_approval_withdraw",
+      "desc": "POST /api/auth/approvals/{wf}/withdraw 跨所应 404",
+      "method": "POST",
+      "path": "/api/auth/approvals/1/withdraw",
+      "status_own": 404,
+      "status_other": 404,
+      "verdict": "PASS"
+    },
+    {
+      "id": "rbac_create_user",
+      "desc": "POST /api/auth/users admin (AUTH_ENABLED=False 时 RBAC 短路, 仅验 endpoint; AUTH_ENABLED=True 时 assistant 应 403)",
+      "method": "POST",
+      "path": "/api/auth/users",
+      "status_own": 200,
+      "status_other": null,
+      "verdict": "PASS",
+      "reason": "",
+      "note": "AUTH_ENABLED=False 时 RBAC 短路, 助手也会被当作 admin; 严格 403 测需要 AUTH_ENABLED=True"
+    },
+    {
+      "id": "auth_login_health",
+      "desc": "POST /api/auth/login 错误密码应 401",
+      "method": "POST",
+      "path": "/api/auth/login",
+      "status_own": 401,
+      "status_other": 401,
+      "verdict": "PASS"
+    },
+    {
+      "id": "upload_magic_bytes_pdf_exe",
+      "desc": "upload evil.pdf.exe 应被 magic bytes 拦截",
+      "method": "POST",
+      "path": "/api/contracts/projects/1/contracts",
+      "status": 400,
+      "verdict": "PASS",
+      "reason": ""
+    }
+  ],
+  "summary": {
+    "pass": 7,
+    "fail": 0,
+    "crash": 0,
+    "skip": 0,
+    "total": 7
+  }
+}

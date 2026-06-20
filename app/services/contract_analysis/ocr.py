@@ -72,7 +72,8 @@ class ContractOCR:
                 if text and len(text) > 20:
                     return "pdfplumber", text
             except Exception as exc:  # noqa: BLE001
-                logger.info("pdfplumber failed for %s: %s", filename, exc)
+                # round 36 P1: info 留不下 traceback, 改 exception
+                logger.exception("pdfplumber failed for %s: %s", filename, exc)
             # Fall through to OCR if PDF has no text layer
 
         if not cls.is_image(filename) and not cls.is_pdf(filename):
@@ -99,7 +100,8 @@ class ContractOCR:
         except ImportError:
             logger.info("paddleocr not installed, falling back")
         except Exception as exc:  # noqa: BLE001
-            logger.warning("paddleocr failed for %s: %s", filename, exc)
+            # round 36 P1: warning 留不下 traceback, 改 exception
+            logger.exception("paddleocr failed for %s: %s", filename, exc)
 
         # 2) easyocr
         try:
@@ -117,7 +119,8 @@ class ContractOCR:
         except ImportError:
             logger.info("easyocr not installed, falling back")
         except Exception as exc:  # noqa: BLE001
-            logger.warning("easyocr failed for %s: %s", filename, exc)
+            # round 36 P1: warning 留不下 traceback, 改 exception
+            logger.exception("easyocr failed for %s: %s", filename, exc)
 
         # 3) tesseract
         try:
@@ -131,7 +134,8 @@ class ContractOCR:
         except ImportError:
             logger.info("pytesseract not installed, falling back")
         except Exception as exc:  # noqa: BLE001
-            logger.warning("tesseract failed for %s: %s", filename, exc)
+            # round 36 P1: warning 留不下 traceback, 改 exception
+            logger.exception("tesseract failed for %s: %s", filename, exc)
 
         raise OCRError(
             "OCR 失败：未安装任何 OCR 引擎（paddleocr / easyocr / pytesseract）。"

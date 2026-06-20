@@ -223,7 +223,8 @@ class RelatedPartyAIInferer:
             except DeepSeekError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                logger.warning("AI 推断单批失败 (batch start=%s): %s", start, exc)
+                # round 36 P1: warning 留不下 traceback, 改 exception
+                logger.exception("AI 推断单批失败 (batch start=%s): %s", start, exc)
                 continue
 
             for cand in (payload.get("candidates") or [])[:max_candidates]:

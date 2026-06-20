@@ -43,6 +43,11 @@ class ConfirmationExporter:
                 if not isinstance(subjects, list):
                     subjects = [str(subjects)]
             except Exception:
+                # round 36 P1: 之前静默赋空, 函证项一栏空着, 审计师误以为确实没函证项
+                logger.exception(
+                    "confirmation excel_exporter: subject_matters 解析失败 item_id=%s, 退化为空",
+                    getattr(it, "id", None),
+                )
                 subjects = []
             rows.append(
                 {

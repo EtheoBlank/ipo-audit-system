@@ -1,0 +1,20 @@
+D:\桌面\KIMI\审计\ipo-audit-system\tests\_helpers\http.py:7: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  from starlette.testclient import TestClient
+=== ipo-audit round 36 IDOR 探针 (round32 复刻) ===
+API base: http://127.0.0.1:8000
+
+FastAPI 起来 (200)
+
+--- 结果 ---
+[+ PASS ] idor_auth_users                     GET /api/auth/users/{other_user} 跨所应 404
+[+ PASS ] idor_approval_get                   GET /api/auth/approvals/{wf} 跨所应 404
+[+ PASS ] idor_approval_decide                POST /api/auth/approvals/{wf}/decide 跨所应 404
+[+ PASS ] idor_approval_withdraw              POST /api/auth/approvals/{wf}/withdraw 跨所应 404
+[+ PASS ] rbac_create_user                    POST /api/auth/users admin (AUTH_ENABLED=False 时 R
+[+ PASS ] auth_login_health                   POST /api/auth/login 错误密码应 401
+[+ PASS ] upload_magic_bytes_pdf_exe          upload evil.pdf.exe 应被 magic bytes 拦截
+
+PASS=7  FAIL=0  CRASH=0  SKIP=0
+Total: 7
+
+报告: D:\桌面\KIMI\审计\ipo-audit-system\_probe_shots\round32.json

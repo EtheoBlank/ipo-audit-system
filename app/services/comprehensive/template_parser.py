@@ -292,6 +292,10 @@ class TemplateParser:
             try:
                 destinations = list(dn.destinations)  # (sheet, cell_range)
             except Exception:  # noqa: BLE001
+                # round 36 P1: 之前静默 continue — 损坏的 definedName 偷偷掉, 模板预览缺标签
+                logger.exception(
+                    "template_parser: definedName %r destinations 解析失败, 跳过", name
+                )
                 continue
             for sheet_name, cell_range in destinations:
                 if sheet_name == exclude:

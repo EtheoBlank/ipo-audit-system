@@ -160,8 +160,12 @@ class QuarterlyVerifier:
         return "\n".join(out)
 
     def _find_value(
-        self, value, events_text: str, briefings_text: str,
-        *, field_name: Optional[str] = None,
+        self,
+        value: Any,
+        events_text: str,
+        briefings_text: str,
+        *,
+        field_name: Optional[str] = None,
     ):
         """在 events/briefings 文本里找 value 出现.
 
@@ -174,6 +178,10 @@ class QuarterlyVerifier:
             1. verify() 循环透传 ``field_name``, 百分比形必须 subject 上下文匹配
             2. subject 关键词从 field_name 启发 (gross_margin→毛利率/margin, ...)
             3. 纯数值形 (千分位 / 浮点 / 整数) 不强加 subject, 因金额在上下文中天然区分
+
+        Round 36 P0: ``verify()`` 调用本方法时透传 ``field_name=...`` kwarg.
+        旧签名 ``*, field_name=None`` 已支持该 kwarg; 本次只补充中文 docstring
+        说明并强化类型 hint, 不破坏 round 35 百分比碰撞防护逻辑.
         """
         forms: list[tuple[str, bool]] = []  # (form, is_percentage)
         if isinstance(value, (int, float)):

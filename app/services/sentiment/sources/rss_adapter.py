@@ -58,7 +58,8 @@ class RssAdapter(BaseSentimentSourceAdapter):
                 # feedparser 同步, 直接在事件循环里跑 (轻量, 不会卡)
                 parsed = feedparser.parse(feed_url)
             except Exception as exc:  # feedparser 极少抛, 但兜住
-                logger.warning("RSS 解析失败 %s: %s", feed_url, exc)
+                # round 36 P1: warning 留不下 traceback, 改 exception
+                logger.exception("RSS 解析失败 %s: %s", feed_url, exc)
                 continue
 
             for entry in parsed.entries[:50]:  # 每个源限前 50 条

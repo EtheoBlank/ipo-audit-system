@@ -77,6 +77,8 @@ def _extract_docx_text(template_bytes: bytes) -> str:
                 try:
                     content = zf.read(name).decode("utf-8", errors="ignore")
                 except Exception:
+                    # round 36 P1: 之前静默 continue, 损坏的 word xml 偷掉, 模板预览少字
+                    logger.exception("report_template: docx 内 %s 解码失败, 跳过", name)
                     continue
                 # 简化: 去 XML tag 取纯文本
                 stripped = re.sub(r"<[^>]+>", " ", content)
@@ -102,6 +104,8 @@ def _extract_xlsx_text(template_bytes: bytes) -> str:
                 try:
                     content = zf.read(name).decode("utf-8", errors="ignore")
                 except Exception:
+                    # round 36 P1: 之前静默 continue, 损坏的 sheet xml 偷掉, 模板预览少字
+                    logger.exception("report_template: xlsx 内 %s 解码失败, 跳过", name)
                     continue
                 stripped = re.sub(r"<[^>]+>", " ", content)
                 text_chunks.append(stripped)
@@ -361,6 +365,10 @@ def _render_docx_xml_blob(xml_bytes: bytes, flat_ctx: Dict[str, str], strict: bo
             text = _render_placeholder_in_text(text, flat_ctx, strict=strict)
             return text.encode("utf-8")
         except Exception:  # noqa: BLE001
+            # round 36 P1: 之前静默回退原 xml — 模板占位符没替换也不知道
+            logger.exception(
+                "report_template: XML 二次正则回退失败, 返回原 bytes (strict=%s)", strict
+            )
             if strict:
                 raise
             return xml_bytes
