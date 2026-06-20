@@ -188,6 +188,16 @@ class ConfirmationStatsBuilder:
         self, project_id: int, period_end: Optional[Any]
     ) -> list[AccountBalance]:
         q = select(AccountBalance).where(AccountBalance.project_id == project_id)
+        # ALG-08 (round32, 2026-06-20): 拉取必须按 period_end 过滤, 避免跨年求和
+        # (旧版: 不传 period_end → 取所有 AccountBalance, 2023+2024 余额累加成 2 倍).
+        # 老数据 period_end 可能为 NULL → 视为 "无期间标记", 暂返回 (保守, 不漏数据).
+        if period_end is not None:
+            pe_str = _to_iso_date(period_end)
+            if pe_str is not None:
+                q = q.where(
+                    (AccountBalance.period_end.is_(None))
+                    | (AccountBalance.period_end <= pe_str)
+                )
         res = await self.db.execute(q)
         return list(res.scalars().all())
 
@@ -195,6 +205,14 @@ class ConfirmationStatsBuilder:
         self, project_id: int, period_end: Optional[Any]
     ) -> list[ChronologicalAccount]:
         q = select(ChronologicalAccount).where(ChronologicalAccount.project_id == project_id)
+        # ALG-08 (round32, 2026-06-20): 序时账按 period_end 过滤 (同 balances).
+        if period_end is not None:
+            pe_str = _to_iso_date(period_end)
+            if pe_str is not None:
+                q = q.where(
+                    (ChronologicalAccount.period_end.is_(None))
+                    | (ChronologicalAccount.period_end <= pe_str)
+                )
         res = await self.db.execute(q)
         return list(res.scalars().all())
 
@@ -230,44 +248,47 @@ class ConfirmationStatsBuilder:
             )
 
         # 顺序: responses -> photos -> letters -> items
-        # 1) 找到所有 letter ids
-        letter_ids = (
-            (
-                await self.db.execute(
-                    select(ConfirmationLetter.id).where(ConfirmationLetter.case_id == case_id)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        if letter_ids:
-            # 2) 删 responses (会级联删 photos via cascade="all, delete-orphan")
-            response_ids = (
+
+        # P1 (round 32): 用 SAVEPOINT 包住全部 DELETE, 任一步异常整体回滚到清理前状态.
+        async with self.db.begin_nested():
+            # 1) 找到所有 letter ids
+            letter_ids = (
                 (
                     await self.db.execute(
-                        select(ConfirmationResponse.id).where(
-                            ConfirmationResponse.letter_id.in_(letter_ids)
-                        )
+                        select(ConfirmationLetter.id).where(ConfirmationLetter.case_id == case_id)
                     )
                 )
                 .scalars()
                 .all()
             )
-            if response_ids:
-                await self.db.execute(
-                    delete(ConfirmationResponsePhoto).where(
-                        ConfirmationResponsePhoto.response_id.in_(response_ids)
+            if letter_ids:
+                # 2) 删 responses (会级联删 photos via cascade="all, delete-orphan")
+                response_ids = (
+                    (
+                        await self.db.execute(
+                            select(ConfirmationResponse.id).where(
+                                ConfirmationResponse.letter_id.in_(letter_ids)
+                            )
+                        )
                     )
+                    .scalars()
+                    .all()
                 )
+                if response_ids:
+                    await self.db.execute(
+                        delete(ConfirmationResponsePhoto).where(
+                            ConfirmationResponsePhoto.response_id.in_(response_ids)
+                        )
+                    )
+                    await self.db.execute(
+                        delete(ConfirmationResponse).where(ConfirmationResponse.id.in_(response_ids))
+                    )
+                # 3) 删 letters
                 await self.db.execute(
-                    delete(ConfirmationResponse).where(ConfirmationResponse.id.in_(response_ids))
+                    delete(ConfirmationLetter).where(ConfirmationLetter.id.in_(letter_ids))
                 )
-            # 3) 删 letters
-            await self.db.execute(
-                delete(ConfirmationLetter).where(ConfirmationLetter.id.in_(letter_ids))
-            )
-        # 4) 删 items
-        await self.db.execute(delete(ConfirmationItem).where(ConfirmationItem.case_id == case_id))
+            # 4) 删 items
+            await self.db.execute(delete(ConfirmationItem).where(ConfirmationItem.case_id == case_id))
 
     # ---- 聚合 ---------------------------------------------------------
 
@@ -741,3 +762,22 @@ class ConfirmationStatsBuilder:
             if s["code"] == code:
                 return list(s.get("default_subjects", []))
         return []
+
+
+def _to_iso_date(d: Any) -> Optional[str]:
+    """把 datetime/date/字符串归一为 YYYY-MM-DD 比较串.
+
+    ALG-08 (round32, 2026-06-20): 用于 _fetch_balances / _fetch_journals 按 period_end 过滤.
+    """
+    if d is None:
+        return None
+    try:
+        import pandas as pd  # noqa: WPS433
+        ts = pd.to_datetime(d)
+        if pd.isna(ts):
+            return None
+        return ts.strftime("%Y-%m-%d")
+    except Exception:
+        if isinstance(d, str):
+            return d[:10]
+        return None

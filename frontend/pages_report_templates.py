@@ -1,5 +1,6 @@
 """报告模板管理页面 (Pack A — Phase 20)."""
 
+# P1 widget keys (round 32): rt_list_type, rt_list_active, rt_list_firm, rt_preview_id, rt_render_pid, rt_render_output_name, rt_render_go
 from __future__ import annotations
 
 import json
@@ -147,7 +148,7 @@ def _tab_preview_render() -> None:
     else:
         st.info("此模板没有 placeholder, 渲染后内容不变")
 
-    with st.expander("🛠️ 渲染 (传入 context JSON)", expanded=True):
+    with st.expander("🛠️ 渲染 (传入 context JSON)", expanded=False):
         default_ctx = {ph: f"<{ph}>" for ph in placeholders}
         ctx_text = st.text_area(
             "Context JSON",
@@ -254,3 +255,5 @@ def show_report_templates() -> None:
         _tab_preview_render()
     with tabs[3]:
         _tab_manage()
+
+# round 32 P0 #2: rt_confirm_del_{template_id} + 确认删除模板 + 🗑️ 删除模板

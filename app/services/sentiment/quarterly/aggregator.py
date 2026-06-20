@@ -74,6 +74,10 @@ async def lock_references(
     events: list[SentimentEvent],
 ) -> None:
     """把引用的 briefing_id / event_id 写回 report (锁定快照)."""
+    # ALG-04 (round32, 2026-06-20): 报告已锁定后, 引用快照不应被重写
+    # (会破坏审计痕迹). 抛出 ValueError 由调用方捕获处理.
+    if getattr(report, "is_locked", False):
+        raise ValueError("报告已锁定, 不可重新写入引用快照")
     report.referenced_briefing_ids_json = json.dumps([b.id for b in briefings], ensure_ascii=False)
     report.referenced_event_ids_json = json.dumps([e.id for e in events], ensure_ascii=False)
     await db.commit()

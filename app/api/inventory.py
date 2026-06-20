@@ -93,6 +93,7 @@ from app.services.inventory import (
 from app.services.auth import get_current_user, get_current_user_optional
 from app.services.sales_ledger.deepseek_client import DeepSeekClient
 from app.utils.upload_safety import (
+    check_magic_bytes,
     read_upload_capped,
     unique_save_path,
 )
@@ -649,6 +650,12 @@ async def upload_count_photo(
         file,
         allowed_exts={".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".pdf"},
     )
+    # P1 (round 32): magic bytes 校验 — 防 'evil.pdf.exe' / 双扩展名绕过
+    if not check_magic_bytes(content, suffix):
+        raise HTTPException(
+            status_code=400,
+            detail=f"文件内容与扩展名 {suffix} 不符 (疑似伪造)",
+        )
     target = unique_save_path(target_dir, safe_name)
     # P1 性能 (2026-06-19): 写文件用 asyncio.to_thread 释放事件循环
     await asyncio.to_thread(_write_bytes, target, content)
@@ -659,7 +666,11 @@ async def upload_count_photo(
 
     # OCR — 失败时**不允许**静默吞掉，必须 422 让用户重传清晰图
     try:
-        engine, ocr_text = processor.ocr(str(target), safe_name)
+        # P1 (round 32) 性能: OCR (paddleocr / easyocr / pdfplumber) 全部是 CPU 密集,
+        # 在 async 端点内同步调用会阻塞事件循环. 包 to_thread 释放 worker.
+        engine, ocr_text = await asyncio.to_thread(
+            processor.ocr, str(target), safe_name
+        )
     except Exception as exc:  # OCRError or unexpected
         logger.warning("OCR 失败 (photo) project=%s file=%s: %s", project_id, safe_name, exc)
         # 删除已写入的文件，避免 orphan

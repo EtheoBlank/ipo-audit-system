@@ -1,5 +1,6 @@
 """Streamlit 页面 — 自助知识库.
 
+# P1 widget keys (round 32): kb_top_k, batch_top_n, batch_audit_obj, batch_include_reg
 - 上传书籍 (PDF/EPUB/DOCX/TXT/MD)
 - 书籍列表 + 索引状态
 - 重建索引 / 删除

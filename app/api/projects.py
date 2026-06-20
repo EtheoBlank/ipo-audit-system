@@ -36,6 +36,10 @@ from app.services.auth import (
     scope_projects_to_firm,
 )
 from app.services.excel_parser import ExcelParser
+from app.utils.upload_safety import (
+    check_magic_bytes,
+    read_upload_capped,
+)
 
 
 def _write_bytes(path, data: bytes) -> None:
@@ -181,9 +185,16 @@ async def upload_account_balances(
             break
 
     # Parse Excel with adapter
-    # 用 UUID 防止同名并发上传相互覆盖
-    temp_path = settings.UPLOAD_DIR / f"temp_{uuid.uuid4().hex}_{file.filename or 'upload'}"
-    content = await file.read()
+    # P0 安全 (round 32): 路径穿越 + magic bytes + 大小限制
+    # read_upload_capped 内: 流式读 (上限 MAX_UPLOAD_BYTES) + sanitize_filename
+    content, safe_name, suffix = await read_upload_capped(file)
+    if suffix and not check_magic_bytes(content, suffix):
+        raise HTTPException(
+            status_code=400,
+            detail=f"文件内容与扩展名 {suffix} 不符 (疑似伪造)",
+        )
+    # 用 UUID 防止同名并发上传相互覆盖 + 安全文件名防路径穿越
+    temp_path = settings.UPLOAD_DIR / f"temp_{uuid.uuid4().hex}_{safe_name}"
     # P0 性能 (2026-06-19): 同步 write/read_excel 在 async 端点内阻塞事件循环
     # 改 asyncio.to_thread, 释放 worker 接收其他请求
     await asyncio.to_thread(_write_bytes, temp_path, content)

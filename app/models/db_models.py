@@ -164,6 +164,9 @@ class AccountBalance(Base):
     debit_amount: Mapped[float] = mapped_column(Float, default=0)
     credit_amount: Mapped[float] = mapped_column(Float, default=0)
     ending_balance: Mapped[float] = mapped_column(Float, default=0)
+    # ALG-08 (round32, 2026-06-20): 期末余额所属报告期截止日 (YYYY-MM-DD).
+    # 函证统计生成时按 period_end 过滤, 避免跨年求和.
+    period_end: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     # 关联关系
@@ -185,6 +188,9 @@ class ChronologicalAccount(Base):
     credit_amount: Mapped[float] = mapped_column(Float, default=0)
     summary: Mapped[str] = mapped_column(Text, nullable=True)
     auxiliary_accounting: Mapped[str] = mapped_column(String(200), nullable=True)
+    # ALG-08 (round32, 2026-06-20): 凭证所属报告期截止日 (YYYY-MM-DD).
+    # 函证统计按 period_end 过滤, 避免跨年求和.
+    period_end: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     # 关联关系
@@ -1688,6 +1694,15 @@ class SentimentNotification(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     project_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("projects.id"), nullable=True, index=True
+    )
+    # Pack B (round 32, 2026-06-20) IDOR 修复: user_id/firm_id 隔离
+    #   user_id NULL = 该 firm 广播
+    #   user_id IS NOT NULL = 单发; mark_read 必须限定 (id, user_id)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    firm_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("auth_firms.id", ondelete="CASCADE"), nullable=True, index=True
     )
     notification_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)

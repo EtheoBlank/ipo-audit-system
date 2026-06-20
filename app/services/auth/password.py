@@ -1,7 +1,12 @@
-"""Password hashing — bcrypt via passlib.
+"""Password hashing — bcrypt 直连 + pbkdf2 降级.
 
-降级路径: 如果 passlib 由于 bcrypt 版本不兼容报错, 退到 hashlib pbkdf2-sha256
-保证系统永远可登录 (打印一次告警 + 标记 hash 前缀方便后续迁移).
+为什么不用 passlib:
+  passlib 1.7.x 与 bcrypt >= 4.1 不兼容 (bcrypt 4.1 删了 __about__.__version__).
+  这里直接用 bcrypt 库; 失败时降到 pbkdf2-sha256 (OWASP 2023 推荐 600k 轮).
+
+bcrypt 限制:
+  - 密码最多 72 字节 (bcrypt 协议硬约束). 超过会被截断, 这里手动截断 + 提示.
+  - 不支持 NUL 字节 — 拒绝含 NUL 的密码, 避免下游截断绕过校验.
 """
 
 from __future__ import annotations
@@ -17,23 +22,40 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-# 优先使用 passlib (bcrypt) — 行业标准
-_passlib_context = None
+# bcrypt 优先, 失败降级 pbkdf2
+_bcrypt_mod = None
+_bcrypt_error: Optional[str] = None
 try:  # pragma: no cover — 环境差异性 import
-    from passlib.context import CryptContext
+    import bcrypt as _bcrypt
 
-    _passlib_context = CryptContext(
-        schemes=["bcrypt"],
-        deprecated="auto",
-        bcrypt__rounds=settings.BCRYPT_ROUNDS,
-    )
+    # 简单烟雾测试 (passlib 之前在这里栽跟头, 我们自己也测一下)
+    _smoke = _bcrypt.hashpw(b"x", _bcrypt.gensalt(rounds=4))
+    _ = _bcrypt.checkpw(b"x", _smoke)
+    _bcrypt_mod = _bcrypt
 except Exception as exc:  # noqa: BLE001
-    logger.warning("passlib/bcrypt 不可用, 将降级到 pbkdf2-sha256: %s", exc)
-    _passlib_context = None
+    _bcrypt_error = repr(exc)
+    logger.warning("bcrypt 不可用, 将降级到 pbkdf2-sha256: %s", exc)
+    _bcrypt_mod = None
 
 
+# bcrypt 哈希前缀 (识别老 passlib 写入的哈希)
+_BCRYPT_PREFIXES = ("$2a$", "$2b$", "$2y$")
 _FALLBACK_PREFIX = "pbkdf2_sha256$"
 _FALLBACK_ITER = 600_000  # OWASP 2023 推荐 ≥ 600_000
+_BCRYPT_MAX_BYTES = 72    # bcrypt 协议硬约束
+
+
+def _normalize_for_bcrypt(password: str) -> bytes:
+    """bcrypt 入参归一化: encode utf-8 + 截断到 72 字节 + 拒绝 NUL."""
+    if not password:
+        raise ValueError("password 不能为空")
+    raw = password.encode("utf-8")
+    if b"\x00" in raw:
+        # bcrypt 不支持 NUL — 早 reject, 避免下游截断绕过校验
+        raise ValueError("password 不能包含 NUL 字节")
+    if len(raw) > _BCRYPT_MAX_BYTES:
+        raw = raw[:_BCRYPT_MAX_BYTES]
+    return raw
 
 
 def _fallback_hash(password: str) -> str:
@@ -49,33 +71,46 @@ def _fallback_verify(password: str, hashed: str) -> bool:
         expected = bytes.fromhex(hash_hex)
         derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, int(iter_str))
         return hmac.compare_digest(derived, expected)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # P0 (round 32): 之前静默 return False, 任何异常都吞掉, 运维看不到
+        # 现在记日志, 便于排查 "用户密码校验莫名失败"
+        logger.exception("密码校验失败 (fallback pbkdf2): %s", exc)
         return False
 
 
 def hash_password(password: str) -> str:
-    """生成密码哈希. 永不抛 — 降级到 pbkdf2."""
+    """生成密码哈希. 永不抛 — 降级到 pbkdf2. 直连 bcrypt, 跳过 passlib."""
     if not password:
         raise ValueError("password 不能为空")
-    if _passlib_context is not None:
+    if _bcrypt_mod is not None:
         try:
-            return _passlib_context.hash(password)
+            raw = _normalize_for_bcrypt(password)
+            rounds = max(4, min(settings.BCRYPT_ROUNDS, 15))  # bcrypt rounds 边界保护
+            salt = _bcrypt_mod.gensalt(rounds=rounds)
+            return _bcrypt_mod.hashpw(raw, salt).decode("ascii")
         except Exception as exc:  # noqa: BLE001
             logger.exception("bcrypt 哈希失败, 降级到 pbkdf2: %s", exc)
     return _fallback_hash(password)
 
 
 def verify_password(password: str, hashed: Optional[str]) -> bool:
-    """校验密码. 失败 / 哈希格式异常一律 False, 不抛."""
+    """校验密码. 失败 / 哈希格式异常一律 False, 不抛. 支持 bcrypt / pbkdf2 两种格式."""
     if not password or not hashed:
         return False
+    # 1) pbkdf2 格式
     if hashed.startswith(_FALLBACK_PREFIX):
         return _fallback_verify(password, hashed)
-    if _passlib_context is not None:
+    # 2) bcrypt 格式 (本进程写的 + 老 passlib 写的)
+    if any(hashed.startswith(p) for p in _BCRYPT_PREFIXES):
+        if _bcrypt_mod is None:
+            logger.warning("bcrypt 哈希但 bcrypt 模块不可用, 校验失败")
+            return False
         try:
-            return _passlib_context.verify(password, hashed)
+            raw = _normalize_for_bcrypt(password)
+            return _bcrypt_mod.checkpw(raw, hashed.encode("ascii"))
         except Exception as exc:  # noqa: BLE001
             logger.warning("bcrypt 校验异常: %s", exc)
             return False
-    # 既不是 fallback 也没有 passlib, 退化校验
+    # 3) 未知格式
+    logger.warning("未知密码哈希格式 (前 12 字符): %s", hashed[:12])
     return False

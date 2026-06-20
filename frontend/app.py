@@ -17,6 +17,23 @@ from frontend._components import (
     FEISHU_C,
     FEISHU_R,
 )
+from frontend._components.feishu_components import (
+    # Pack A 美学 + UX 扩展
+    kbd,
+    toast,
+    timeline,
+    skeleton,
+    breadcrumb,
+    progress_ring,
+    stat_grid,
+    info_panel,
+    link_card,
+    kv_list,
+    pill_label,
+    greeting_banner,
+    feature_card,
+)
+from frontend._components.golden import PHI, PHI_INV
 
 st.set_page_config(
     page_title="IPO 审计系统",
@@ -27,6 +44,24 @@ st.set_page_config(
 
 # 注入飞书浅色主题 (幂等, 后续 sub-page 再调一次也无副作用)
 apply_feishu_theme()
+
+
+# ── 全局快捷键提示 (首次访问显示一次) ───────────────────
+def _show_first_run_tip() -> None:
+    """首次访问显示引导提示, 之后写入 session_state 不再显示."""
+    if not st.session_state.get("_first_run_tip_shown", False):
+        st.session_state["_first_run_tip_shown"] = True
+        info_panel(
+            title="欢迎使用 IPO 审计系统",
+            body=(
+                "这是一站式 IPO 审计工作台. "
+                f"使用 {kbd('Ctrl+R')} 刷新页面, {kbd('Ctrl+K')} 浏览器搜索 (Streamlit 自带). "
+                "左侧菜单切换功能, 顶部右上角查看通知 / 舆情. "
+                "如遇问题可联系管理员, 或在侧栏「🔐 系统管理」查看日志."
+            ),
+            kind="info",
+            icon="👋",
+        )
 
 
 # P0: 取消缓存, 每次都拉新 (跨用户 / 跨 firm 不能复用缓存)
@@ -131,6 +166,22 @@ def main():
 
     # 全局红点 — 舆情 + 通用通知 (右上角 fixed)
     render_sentiment_global_badge()
+
+    # 首次访问轻量引导 (避免打扰, 只一次)
+    _show_first_run_tip()
+
+    # 顶部欢迎横幅 — 按登录用户身份 + 项目数 + 待办数 个性化
+    user = st.session_state.get("auth_user") or {}
+    try:
+        projects = get_projects() or []
+    except Exception:
+        projects = []
+    greeting_banner(
+        user_name=user.get("full_name") or user.get("username") or "用户",
+        role=user.get("role", "auditor"),
+        project_count=len(projects),
+        pending_count=0,
+    )
 
     # Sidebar
     st.sidebar.title("功能菜单")
@@ -333,64 +384,138 @@ def main():
 
 def show_homepage():
     page_header(icon="🏠", title="系统概览", subtitle="一站式 IPO 审计工作台")
+    breadcrumb(["首页", "系统概览"])
+
+    # 数据加载阶段 — 用骨架占位, 避免空白闪烁
+    placeholder = st.empty()
+    with placeholder.container():
+        skeleton(lines=4, height=20)
 
     projects = get_projects() or []
     active = len([p for p in projects if p.get("status") == "active"])
     api_status = "在线" if check_api_health() else "离线"
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        metric_card(
-            "项目总数", str(len(projects)),
-            delta=f"+{active} 进行中" if active else None,
-            delta_direction="up" if active else "neutral",
-        )
-    with col2:
-        metric_card("进行中项目", str(active), status="primary" if active else "default")
-    with col3:
-        metric_card(
-            "API 状态", api_status,
-            delta=("健康" if api_status == "在线" else "请检查后端"),
-            delta_direction="up" if api_status == "在线" else "down",
-        )
-    with col4:
-        metric_card("系统版本", "v0.2.0", delta="2026-06 更新", delta_direction="up")
+    # 数据加载完毕, 清空骨架
+    placeholder.empty()
 
-    st.markdown("")  # 间距
+    # ── 关键指标 — 4 卡 φ 等宽 (视觉重心) ────────────────
+    stat_grid(
+        [
+            {
+                "label": "项目总数",
+                "value": str(len(projects)),
+                "delta": f"+{active} 进行中" if active else None,
+                "delta_dir": "up" if active else "neutral",
+            },
+            {
+                "label": "进行中项目",
+                "value": str(active),
+                "status": "primary" if active else "default",
+            },
+            {
+                "label": "API 状态",
+                "value": api_status,
+                "delta": "健康" if api_status == "在线" else "请检查后端",
+                "delta_dir": "up" if api_status == "在线" else "down",
+            },
+            {
+                "label": "系统版本",
+                "value": "v0.2.0",
+                "delta": "2026-06 更新",
+                "delta_dir": "up",
+            },
+        ],
+        aspect="equal",
+    )
+
+    feishu_divider()
+
+    # ── 快速操作 — 4 张大入口卡 (φ 等宽) ─────────────────
     st.markdown("### ⚡ 快速操作")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        if st.button("➕ 新建项目", use_container_width=True, type="primary", key="home_new_project"):
+    cols = st.columns([1, 1, 1, 1])  # φ 等宽
+    with cols[0]:
+        if link_card("➕", "新建项目", "创建 IPO 审计项目, 设置年度和被审计单位", "新建项目", "home_new_project", "primary"):
             st.query_params["nav"] = "projects"
             st.rerun()
-    with col2:
-        if st.button("📤 导入数据", use_container_width=True, key="home_import_data"):
+    with cols[1]:
+        if link_card("📤", "导入数据", "上传科目余额表 / 序时账 / 银行对账单", "导入数据", "home_import_data"):
             st.query_params["nav"] = "import"
             st.rerun()
-    with col3:
-        if st.button("📊 生成底稿", use_container_width=True, key="home_gen_workbook"):
+    with cols[2]:
+        if link_card("📊", "生成底稿", "一键生成科目明细 / 利润表 / 资产负债表 / 现金流量表", "生成底稿", "home_gen_workbook"):
             st.query_params["nav"] = "workbook"
             st.rerun()
-    with col4:
-        if st.button("📄 生成报告", use_container_width=True, key="home_gen_report"):
+    with cols[3]:
+        if link_card("📄", "生成报告", "综合报告 / 异常检测 / 仪表盘", "生成报告", "home_gen_report"):
             st.query_params["nav"] = "report"
             st.rerun()
 
     feishu_divider()
-    st.markdown("### 📋 最近项目")
-    if projects:
-        section_card_start("最新项目动态", "📁")
-        df = pd.DataFrame(projects[:5])
-        st.dataframe(
-            df[["name", "company_name", "fiscal_year", "status"]],
-            use_container_width=True, hide_index=True,
+
+    # ── 主区 + 侧栏 — φ 38.2% / 61.8% 分栏 ───────────────
+    col_main, col_side = st.columns([PHI_INV, 1 - PHI_INV])
+
+    with col_main:
+        # 左侧主区: 最近项目
+        st.markdown("### 📋 最近项目")
+        if projects:
+            section_card_start("最新项目动态", "📁")
+            df = pd.DataFrame(projects[:5])
+            try:
+                cols_show = [c for c in ["name", "company_name", "fiscal_year", "status"] if c in df.columns]
+                if cols_show:
+                    st.dataframe(df[cols_show], use_container_width=True, hide_index=True)
+                else:
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+            except Exception:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            section_card_end()
+        else:
+            empty_state(
+                icon="📁",
+                message="暂无项目",
+                hint="点击上方「➕ 新建项目」开始你的第一个 IPO 审计项目",
+            )
+
+    with col_side:
+        # 右侧 φ: 系统状态 + 快捷入口
+        st.markdown("### 🎯 系统状态")
+
+        # 进度环 — 总体健康度
+        ring_placeholder = st.container()
+        with ring_placeholder:
+            health_pct = 100 if api_status == "在线" else 30
+            cols = st.columns([1, 1.618])  # φ 比例
+            with cols[0]:
+                progress_ring(percent=health_pct, size=80, label=f"{health_pct}%")
+            with cols[1]:
+                kv_list([
+                    ("后端", "🟢 在线" if api_status == "在线" else "🔴 离线"),
+                    ("数据库", "🟢 SQLite"),
+                    ("AI", "🟢 就绪"),
+                    ("认证", "🟢 启用" if get_auth_status().get("auth_enabled") else "⚪ 关闭"),
+                ])
+
+        st.markdown("")
+
+        # 推荐功能 — φ feature card
+        st.markdown("### ✨ 推荐功能")
+        feature_card(
+            "🤖", "AI 风险分析",
+            "基于 MiniMax + DeepSeek 双引擎, 自动识别异常交易和潜在风险点",
+            badge="热门",
         )
-        section_card_end()
-    else:
-        empty_state(
-            icon="📁",
-            message="暂无项目",
-            hint="点击上方「➕ 新建项目」开始你的第一个 IPO 审计项目",
+        st.markdown("")
+        feature_card(
+            "📚", "自助知识库",
+            "上传审计实务书籍, AI 自动检索相似案例辅助说明生成",
+            badge="新",
+        )
+        st.markdown("")
+        feature_card(
+            "📡", "舆情跟踪",
+            "多源抓取 + AI 去重, 实时监控被审计单位舆情动态",
+            badge=None,
         )
 
 

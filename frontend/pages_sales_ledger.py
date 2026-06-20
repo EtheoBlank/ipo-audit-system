@@ -288,7 +288,7 @@ def show_sales_ledger() -> None:
             m3.metric("总成本", f"{s.get('total_cost', 0):,.2f}")
             m4.metric("毛利率", f"{s.get('gross_margin', 0) * 100:.2f}%")
 
-            with st.expander("👥 客户毛利率", expanded=True):
+            with st.expander("👥 客户毛利率", expanded=False):
                 st.dataframe(pd.DataFrame(result.get("by_customer", [])), use_container_width=True)
             with st.expander("📦 产品毛利率"):
                 st.dataframe(pd.DataFrame(result.get("by_product", [])), use_container_width=True)

@@ -131,7 +131,7 @@ def _tab_users() -> None:
             "created_at",
         ]
         cols_show = [c for c in cols_show if c in df.columns]
-        st.dataframe(df[cols_show], width="stretch")
+        st.dataframe(df[cols_show], width="stretch", height=400)
     else:
         st.info("无用户")
 
@@ -178,7 +178,7 @@ def _tab_firms() -> None:
     st.markdown("### 🏢 事务所管理")
     rows = _api("GET", "/api/auth/firms") or []
     if rows:
-        st.dataframe(pd.DataFrame(rows), width="stretch")
+        st.dataframe(pd.DataFrame(rows, height=400), width="stretch")
     with st.expander("➕ 新建事务所", expanded=False):
         with st.form("new_firm"):
             name = st.text_input("事务所名称*")
@@ -210,7 +210,7 @@ def _tab_roles_permissions() -> None:
         st.markdown("**角色清单 (内置 + 自定义)**")
         rows = _api("GET", "/api/auth/roles") or []
         if rows:
-            st.dataframe(pd.DataFrame(rows), width="stretch")
+            st.dataframe(pd.DataFrame(rows, height=400), width="stretch")
     with c2:
         st.markdown("**权限清单**")
         rows = _api("GET", "/api/auth/permissions") or []
@@ -223,7 +223,7 @@ def _tab_roles_permissions() -> None:
             )  # round 31 widget key
             if module:
                 df = df[df["module"] == module]
-            st.dataframe(df, width="stretch")
+            st.dataframe(df, width="stretch", height=400)
 
 
 def _tab_audit_logs() -> None:
@@ -313,7 +313,7 @@ def _tab_approvals() -> None:
                 for r in rows
             ]
         )
-        st.dataframe(df, width="stretch")
+        st.dataframe(df, width="stretch", height=400)
 
         sel_id = st.number_input("审批流 ID", min_value=0, step=1, value=0, key="auth_appr_id")  # round 31 widget key
         if sel_id:

@@ -1,5 +1,6 @@
 """舆情跟踪前端页面 — v0.2 新增.
 
+# P1 widget keys (round 32): senti_ev_sev, senti_ev_rs, senti_ev_df, senti_br_date, senti_br_force, senti_br_gen, senti_scan_now, senti_sched_start, senti_src_id
 5 个 Tab:
     1. 舆情总览 (overview)
     2. 事件库 (events)
@@ -133,13 +134,13 @@ def _tab_overview(project_id: int) -> None:
     briefings = api_request("GET", f"/api/sentiment/briefings?project_id={project_id}")
     reports = api_request("GET", f"/api/sentiment/reports?project_id={project_id}")
 
-    c1, c2, c3 = st.columns(3)
+    # round 32 P0: st.columns(3) → (4). 旧 c4.metric + 函数双重渲染;
+    # 单独留第 4 列给未读徽章, 函数只渲染一次. 详见 round 19.
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("今日事件", len(events_today or []))
     c2.metric("累计简报", len(briefings or []))
     c3.metric("季度报告", len(reports or []))
-    # P1 修复 (2026-06-19): 旧 c4.metric("_render_unread_badge()") 在 metric 内调函数
-    # 函数本身 st.markdown + expander + 按钮 → 双重渲染 (metric 一次, 函数一次)
-    # 现在 c4 单独放红点徽章, 不再嵌套 metric
+    # round 32 P0: 第 4 列放未读徽章, 不再 c4.metric(函数) 双重渲染
     with c4:
         _render_unread_badge()
 

@@ -230,18 +230,22 @@ class SentimentScraperService:
         all_items = all_items[:max_events]
 
         # 入库
+        # P0 (round 32) 性能: 批量入库替代 N+1
+        # 之前每条都跑 _persist_event (3 次 DB round-trip): content_hash 去重 +
+        # source_code 查 source_id + INSERT. 200 条事件 = 600 次 round-trip.
+        # 现在: 1) 预拉所有 SentimentSource → dict
+        #      2) content_hash 一次性 WHERE IN (...) 查重
+        #      3) 剩下的 add_all + flush 一次 INSERT
+        # 200 条事件从 600 round-trips → 3 round-trips.
         added = 0
-        for item in all_items:
+        if all_items:
             try:
-                ev = await self._persist_event(db, item)
-                if ev is not None:
-                    added += 1
+                added = await self._bulk_persist_events(db, all_items)
             except IntegrityError:
-                # content_hash 冲突 (并发), 跳过
                 await db.rollback()
-                continue
+                logger.warning("scrape_project: 批量入库 IntegrityError, 项目=%s", project.id)
             except Exception as exc:
-                logger.warning("入库失败 %s: %s", item.title, exc)
+                logger.warning("scrape_project: 批量入库失败 项目=%s: %s", project.id, exc)
                 await db.rollback()
 
         if added > 0:
@@ -393,37 +397,129 @@ class SentimentScraperService:
             return None
         return ev
 
+    async def _bulk_persist_events(
+        self,
+        db: AsyncSession,
+        items: list,
+    ) -> int:
+        """P0 (round 32): 批量入库 SentimentEvent — 替代 N+1.
+
+        流程:
+          1) 一次 SELECT 拉所有 SentimentSource → dict[code → id]
+          2) 一次 SELECT WHERE content_hash IN (hashes) → 已有 hash 集合
+          3) 构造 SentimentEvent 列表, 过滤已存在的, db.add_all + flush
+          4) 兜底: flush 阶段若仍撞 IntegrityError (并发), 全 rollback + 退回逐条
+
+        Returns: 实际新增条数.
+        """
+        # 1) 预拉 source 字典 (1 round-trip)
+        src_res = await db.execute(select(SentimentSource))
+        src_map: dict[str, int] = {s.code: s.id for s in src_res.scalars().all()}
+
+        # 2) 一次性查重 (1 round-trip)
+        hashes = [it.content_hash for it in items if it.content_hash]
+        existing_hashes: set[str] = set()
+        if hashes:
+            # 避免 IN 子句过长, 分批
+            CHUNK = 500
+            for i in range(0, len(hashes), CHUNK):
+                batch = hashes[i : i + CHUNK]
+                r = await db.execute(
+                    select(SentimentEvent.content_hash).where(
+                        SentimentEvent.content_hash.in_(batch)
+                    )
+                )
+                existing_hashes.update(r.scalars().all())
+
+        # 3) 构造新事件
+        new_events: list[SentimentEvent] = []
+        for it in items:
+            if it.content_hash and it.content_hash in existing_hashes:
+                continue
+            source_id = src_map.get(it.source_code or "") if it.source_code else None
+            new_events.append(
+                SentimentEvent(
+                    project_id=it.project_id,
+                    source_id=source_id,
+                    source_code=it.source_code,
+                    event_kind=it.event_kind,
+                    severity=it.severity,
+                    title=it.title,
+                    url=it.url,
+                    publisher=it.publisher,
+                    publish_date=it.publish_date,
+                    content_text=it.content_text,
+                    content_hash=it.content_hash,
+                    matched_alias=it.matched_alias,
+                    raw_payload=it.raw_payload,
+                )
+            )
+        if not new_events:
+            return 0
+
+        # 4) 批量 INSERT (1 round-trip)
+        db.add_all(new_events)
+        try:
+            await db.flush()
+        except IntegrityError:
+            # 兜底: 并发场景下 hash 冲突无法在 SELECT 时发现
+            # 全 rollback 后退回逐条 (保证数据不丢)
+            await db.rollback()
+            logger.warning(
+                "_bulk_persist_events: flush 撞 IntegrityError, 退回逐条 fallback"
+            )
+            fallback_added = 0
+            for it in items:
+                try:
+                    ev = await self._persist_event(db, it)
+                    if ev is not None:
+                        fallback_added += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("入库 fallback 失败 %s: %s", it.title, exc)
+                    await db.rollback()
+            return fallback_added
+        return len(new_events)
+
     # ---- 全量扫描 -------------------------------------------------------
 
     async def run_daily_scan(self) -> dict:
         """调度入口: 扫描所有 active 项目. 返回汇总 dict.
 
         使用独立的 AsyncSessionLocal() — 不能复用 request-scoped session.
+
+        P0 (round 32): 项目循环内用独立 session, 单项目失败不影响其他项目,
+        同时避免 1 个慢项目拖长事务锁住所有数据.
         """
         summary = {"projects_scanned": 0, "events_added": 0, "errors": []}
         async with AsyncSessionLocal() as db:
             res = await db.execute(select(Project).where(Project.status == "active"))
             projects = res.scalars().all()
-            # 收集所有项目的 subjects (一次查完)
-            for p in projects:
-                try:
-                    sub_res = await db.execute(
+            project_ids = [p.id for p in projects]
+        for project_id in project_ids:
+            try:
+                async with AsyncSessionLocal() as session:
+                    p = (
+                        await session.execute(
+                            select(Project).where(Project.id == project_id)
+                        )
+                    ).scalar_one_or_none()
+                    if p is None:
+                        continue
+                    sub_res = await session.execute(
                         select(SentimentSubject).where(
                             SentimentSubject.project_id == p.id,
                             SentimentSubject.is_active == True,  # noqa: E712
                         )
                     )
                     subjects = sub_res.scalars().all()
-                    # 若没有 subject, 用公司名 + 股票简称 + 实控人 + 股票代码合成一个
                     if not subjects:
                         subjects = self._synthesize_subjects(p)
-
-                    added, _ = await self.scrape_project(db, p, subjects)
+                    added, _ = await self.scrape_project(session, p, subjects)
                     summary["projects_scanned"] += 1
                     summary["events_added"] += added
-                except Exception as exc:
-                    logger.exception("扫描项目 %s 失败: %s", p.id, exc)
-                    summary["errors"].append({"project_id": p.id, "error": str(exc)})
+            except Exception as exc:
+                logger.exception("扫描项目 %s 失败: %s", project_id, exc)
+                summary["errors"].append({"project_id": project_id, "error": str(exc)})
         return summary
 
     def _synthesize_subjects(self, project: Project) -> list[SentimentSubject]:

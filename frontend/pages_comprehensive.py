@@ -125,7 +125,7 @@ def _render_schema_summary(schema: TemplateSchema) -> None:
         by_source[prefix] = by_source.get(prefix, 0) + 1
     df = pd.DataFrame([{"来源类型": k, "字段数": v} for k, v in by_source.items()])
     st.markdown("##### 字段来源分布")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
 
 def _render_fill_report(report: FillReport) -> None:
@@ -148,7 +148,7 @@ def _render_fill_report(report: FillReport) -> None:
         }
         for r in report.results
     ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows, height=400), use_container_width=True, hide_index=True)
 
 
 def _render_questions(report: FillReport, key_prefix: str) -> dict[str, str]:

@@ -50,6 +50,7 @@ from app.models.db.auth import (
     ROLE_QC_PARTNER,
     RolePermission,
     ROLE_ADMIN,
+    ROLE_PARTNER,
     User,
 )
 from app.services.auth import (
@@ -377,9 +378,23 @@ async def get_user(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """按 ID 查单个用户 — Pack B P0 IDOR 修复 (2026-06-20):
+       - 跨 firm 一律 404 (admin 除外)
+       - 普通用户不能读同 firm 但他人 (返回 403) — 防止 IDOR 枚举
+       - qc_partner 可读同 firm 任意用户
+    """
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # 跨 firm: 一律 404 (信息隐藏, admin 除外)
+    if current_user.role != ROLE_ADMIN and user.firm_id != current_user.firm_id:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    # 同 firm 但本人不可读他人 — 防 IDOR 枚举
+    if (
+        current_user.role not in (ROLE_ADMIN, ROLE_QC_PARTNER, ROLE_PARTNER)
+        and user.id != current_user.id
+    ):
+        raise HTTPException(status_code=403, detail="无权查看其他用户信息")
     return UserResponse.model_validate(user)
 
 
@@ -747,6 +762,7 @@ async def create_approval(
             db,
             initiator=current_user,
             project_id=payload.project_id,
+            firm_id=current_user.firm_id,  # round 32 P0 IDOR: firm_id 落库
             resource_type=payload.resource_type,
             resource_id=payload.resource_id,
             title=payload.title,
@@ -820,9 +836,10 @@ async def get_approval(
     wf = await ApprovalEngine.get_workflow(db, workflow_id)
     if wf is None:
         raise HTTPException(status_code=404, detail="审批流不存在")
-    # P0 IDOR 修复 (2026-06-19): 非 admin 不能跨所读审批流
+    # P0 IDOR 修复 (round 32, 2026-06-20): 非 admin 不能跨所读审批流
+    # 防枚举: 一律返回 404, 不告诉调用方"存在但无权"
     if current_user.role != ROLE_ADMIN and wf.firm_id and wf.firm_id != current_user.firm_id:
-        raise HTTPException(status_code=403, detail="无权访问其他事务所的审批流")
+        raise HTTPException(status_code=404, detail="审批流不存在")
     return ApprovalWorkflowResponse.model_validate(wf)
 
 
@@ -833,12 +850,13 @@ async def decide_approval(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # P0 IDOR 修复 (2026-06-19): decide 前先校验 firm, 防止跨所代签
+    # P0 IDOR 修复 (round 32): decide 前先校验 firm, 防止跨所代签
+    # 防枚举: 跨 firm 一律 404
     pre_wf = await ApprovalEngine.get_workflow(db, workflow_id)
     if pre_wf is None:
         raise HTTPException(status_code=404, detail="审批流不存在")
     if current_user.role != ROLE_ADMIN and pre_wf.firm_id and pre_wf.firm_id != current_user.firm_id:
-        raise HTTPException(status_code=403, detail="无权操作其他事务所的审批流")
+        raise HTTPException(status_code=404, detail="审批流不存在")
     try:
         wf = await ApprovalEngine.decide(
             db,
@@ -876,12 +894,13 @@ async def withdraw_approval(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # P0 IDOR 修复 (2026-06-19): withdraw 前先校验 firm, 防跨所撤回
+    # P0 IDOR 修复 (round 32): withdraw 前先校验 firm, 防跨所撤回
+    # 防枚举: 跨 firm 一律 404
     pre_wf = await ApprovalEngine.get_workflow(db, workflow_id)
     if pre_wf is None:
         raise HTTPException(status_code=404, detail="审批流不存在")
     if current_user.role != ROLE_ADMIN and pre_wf.firm_id and pre_wf.firm_id != current_user.firm_id:
-        raise HTTPException(status_code=403, detail="无权操作其他事务所的审批流")
+        raise HTTPException(status_code=404, detail="审批流不存在")
     expected_version = payload.expected_version if payload else None
     try:
         wf = await ApprovalEngine.withdraw(

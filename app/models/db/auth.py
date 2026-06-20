@@ -252,6 +252,11 @@ class ApprovalWorkflow(Base):
     project_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("projects.id"), nullable=True, index=True
     )
+    # P0 IDOR 修复 (round 32, 2026-06-20): firm_id 用于多租户隔离,
+    # 创建审批流时从 project.firm_id 继承; 跨 firm 一律 404.
+    firm_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("auth_firms.id", ondelete="CASCADE"), nullable=True, index=True
+    )
 
     resource_type: Mapped[str] = mapped_column(
         String(80), nullable=False

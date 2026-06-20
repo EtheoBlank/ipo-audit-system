@@ -130,7 +130,7 @@ from app.services.sentiment.briefing.generator import BriefingGenerator
 from app.services.sentiment.briefing.verifier import BriefingVerifier
 from app.services.sentiment.briefing.word_exporter import BriefingWordExporter
 from app.services.sentiment.dedup import compute_content_hash
-from app.services.sentiment.notifier import mark_all_read, mark_read
+from app.services.sentiment.notifier import mark_all_read, mark_read, mark_read_broadcast
 from app.services.sentiment.quarterly.aggregator import aggregate_window, lock_references
 from app.services.sentiment.quarterly.financial_input import (
     FinancialInput,
@@ -324,17 +324,39 @@ async def read_one(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # P0 IDOR 修复 (2026-06-19): 先加载通知, 校验所属项目在当前 user.firm 内
-    from app.models.db_models import SentimentNotification as _SN, Project as _Proj
+    # P0 IDOR 修复 (2026-06-20 round 32): 必须传 user_id, 按 (id, user_id) 限定
+    # 广播通知 (user_id IS NULL) 走 mark_read_broadcast, 需校验 firm
+    from app.models.db_models import SentimentNotification as _SN
 
     n = (
         await db.execute(select(_SN).where(_SN.id == notification_id))
     ).scalar_one_or_none()
     if n is None:
         raise HTTPException(status_code=404, detail="通知不存在")
-    if n.project_id is not None:
-        await ensure_project_in_firm(db, n.project_id, current_user)
-    ok = await mark_read(db, notification_id)
+    # 1) firm 边界 (admin 跳过)
+    if current_user.role != ROLE_ADMIN:
+        if n.firm_id is not None and n.firm_id != current_user.firm_id:
+            raise HTTPException(status_code=404, detail="通知不存在")
+        if n.project_id is not None:
+            await ensure_project_in_firm(db, n.project_id, current_user)
+    # 2) 区分单发 / 广播
+    if n.user_id is None:
+        # 广播: 必须 firm 匹配
+        #  - 显式 firm_id: 直接比
+        #  - 隐式 (firm_id=None 但 project_id 关联): 用 project 的 firm
+        target_firm_id = n.firm_id
+        if target_firm_id is None and n.project_id is not None:
+            proj = (
+                await db.execute(select(Project).where(Project.id == n.project_id))
+            ).scalar_one_or_none()
+            if proj is not None:
+                target_firm_id = proj.firm_id
+        if target_firm_id is not None and target_firm_id != current_user.firm_id:
+            raise HTTPException(status_code=403, detail="无权访问此通知")
+        ok = await mark_read_broadcast(db, notification_id, current_user.firm_id)
+    else:
+        # 单发: 必须 user_id 匹配, 否则别人看不到/不能标
+        ok = await mark_read(db, notification_id, current_user.id)
     if not ok and not n.is_read:
         raise HTTPException(status_code=404, detail="通知不存在或已读")
     await db.commit()

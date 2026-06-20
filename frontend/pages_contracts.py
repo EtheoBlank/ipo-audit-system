@@ -203,12 +203,13 @@ def show_contracts() -> None:
 
     # --- Tab 3: 五步法 ------------------------------------------------
     with tab_analyse:
-        st.subheader("CAS 14 五步法分析")
-        rows = api_request("GET", f"/api/contracts/projects/{project_id}/contracts") or []
-        if not rows:
-            st.info("请先上传合同。")
-        else:
-            options = {f"#{c['id']} {c['filename']}": c for c in rows}
+        with st.expander("📐 CAS 14 五步法分析", expanded=False):
+            st.subheader("CAS 14 五步法分析")
+            rows = api_request("GET", f"/api/contracts/projects/{project_id}/contracts") or []
+            if not rows:
+                st.info("请先上传合同。")
+            else:
+                options = {f"#{c['id']} {c['filename']}": c for c in rows}
             chosen_label = st.selectbox("选择合同", list(options.keys()), key="contracts_chosen_contract")  # round 31 widget key
             chosen = options[chosen_label]
             run_kp = st.checkbox("运行 7 字段要点提取", value=True, key="contracts_run_kp")  # round 31 widget key
@@ -242,7 +243,7 @@ def show_contracts() -> None:
                     st.error("⚠️ 风险点：" + "、".join(flags))
                 else:
                     st.success("未发现明显风险点")
-                with st.expander("🔑 7 字段要点提取", expanded=True):
+                with st.expander("🔑 7 字段要点提取", expanded=False):
                     _render_key_points(result.get("key_points") or {})
                 with st.expander("📐 CAS 14 五步法分析", expanded=True):
                     _render_five_step(result.get("five_step_analysis") or {})

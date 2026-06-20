@@ -37,14 +37,17 @@ def fetch_projects():
     return api_request("GET", "/api/projects/") or []
 
 
+@st.cache_data
 def fetch_cases(project_id: int):
     return api_request("GET", f"/api/confirmations/cases?project_id={project_id}") or []
 
 
+@st.cache_data
 def fetch_case_items(case_id: int):
     return api_request("GET", f"/api/confirmations/cases/{case_id}/items") or []
 
 
+@st.cache_data
 def fetch_case_summary(case_id: int):
     return api_request("GET", f"/api/confirmations/cases/{case_id}/summary") or {}
 
@@ -118,11 +121,11 @@ def show_confirmations():
                     for s in subjects
                 ]
             )
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
             with st.expander("📄 银行询证函官方模板字段 (26 项)", expanded=False):
                 bank_fields = catalogue.get("bank_template_fields", [])
-                st.dataframe(pd.DataFrame(bank_fields), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(bank_fields, height=400), use_container_width=True, hide_index=True)
 
             with st.expander("📄 客户/供应商函证默认函证项", expanded=False):
                 for s in subjects:
@@ -157,7 +160,7 @@ def show_confirmations():
                             "生成时间": c["generated_at"][:19] if c.get("generated_at") else "",
                         }
                     )
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(rows, height=400), use_container_width=True, hide_index=True)
             else:
                 st.info("该项目下尚无案卷")
 
@@ -250,7 +253,7 @@ def show_confirmations():
                                     for k, v in r["by_party_type"].items()
                                 ]
                             )
-                            st.dataframe(tdf, use_container_width=True, hide_index=True)
+                            st.dataframe(tdf, use_container_width=True, hide_index=True, height=400)
 
                 # 现有 items
                 items = fetch_case_items(case["id"])
@@ -271,7 +274,7 @@ def show_confirmations():
                         }
                         for it in items
                     ]
-                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(rows, height=400), use_container_width=True, hide_index=True)
 
     # ============================================================
     # Tab 4: 确定发函
@@ -478,7 +481,7 @@ def show_confirmations():
                                     st.success(r.get("message", "OK"))
                                     parsed = r.get("parsed_data") or {}
                                     if parsed:
-                                        with st.expander("AI 解析结果", expanded=True):
+                                        with st.expander("AI 解析结果", expanded=False):
                                             st.json(parsed)
                                     st.rerun()
                         else:
@@ -594,7 +597,7 @@ def show_confirmations():
                     if summary.get("by_party_type"):
                         st.markdown("#### 按函证方类型")
                         df = pd.DataFrame(summary["by_party_type"])
-                        st.dataframe(df, use_container_width=True, hide_index=True)
+                        st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
                     # 状态分布
                     col1, col2 = st.columns(2)
@@ -607,7 +610,7 @@ def show_confirmations():
                                     for k, v in summary["status_summary"].items()
                                 ]
                             )
-                            st.dataframe(df, use_container_width=True, hide_index=True)
+                            st.dataframe(df, use_container_width=True, hide_index=True, height=400)
                     with col2:
                         st.markdown("#### 回函状态分布")
                         if summary.get("response_status_summary"):
@@ -617,18 +620,18 @@ def show_confirmations():
                                     for k, v in summary["response_status_summary"].items()
                                 ]
                             )
-                            st.dataframe(df, use_container_width=True, hide_index=True)
+                            st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
                     # 催办
                     if summary.get("no_reply_items"):
                         st.markdown("#### ⏰ 未回函催办")
                         df = pd.DataFrame(summary["no_reply_items"])
-                        st.dataframe(df, use_container_width=True, hide_index=True)
+                        st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
                     if summary.get("pending_items"):
                         st.markdown("#### ⏳ 待回函")
                         df = pd.DataFrame(summary["pending_items"])
-                        st.dataframe(df, use_container_width=True, hide_index=True)
+                        st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
     # ============================================================
     # Tab 7: 导出

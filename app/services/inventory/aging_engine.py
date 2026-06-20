@@ -268,7 +268,10 @@ class InventoryAgingEngine:
             qty = float(m.get("inbound_qty") or 0)
             if qty <= 0:
                 continue
-            dt = _parse_dt(m.get("inbound_date")) or period_end
+            # ALG-01 (round32, 2026-06-20): inbound_date 缺失时不再 fallback 到
+            # period_end (库龄会被低估为 0 天), 而是 fallback 到 (period_end - 365d),
+            # 与 opening_qty 兜底一致, 避免行级库龄失真.
+            dt = _parse_dt(m.get("inbound_date")) or (period_end - pd.Timedelta(days=365))
             batches.append((dt, qty))
 
         batches.sort(key=lambda x: x[0])  # FIFO: 最早入库的先出

@@ -55,7 +55,7 @@ def _sanitize_markdown(md: Optional[str]) -> Optional[str]:
 
 @dataclass
 class AuditNoteContext:
-    """生成一条审计说明需要的上下文。"""
+    """生成一条审计说明需要的上下文."""
 
     project_id: int
     account_code: Optional[str] = None
@@ -65,6 +65,9 @@ class AuditNoteContext:
     risk_description: Optional[str] = None
     audit_objective: Optional[str] = None  # 例如"收入截止性"、"存货跌价"
     extra_facts: Optional[dict] = None  # 任意额外字段
+    # P0 IDOR 修复 (round 32, 2026-06-20): 显式 firm_id, 用于 KB 检索多所隔离.
+    # 调用方传了 → 直接用; 没传 → 从 project 反查.
+    firm_id: Optional[int] = None
 
 
 @dataclass
@@ -100,9 +103,27 @@ class AuditNoteGenerator:
         kb_top_k: int = 4,
         kb_category: Optional[str] = None,
         include_regulations: bool = True,
+        firm_id: Optional[int] = None,  # P0 IDOR (round 32): 显式传值覆盖 ctx/project 反查
     ) -> AuditNoteResult:
         """生成审计说明 — 主入口。"""
         query_text = self._build_query(ctx)
+
+        # P0 IDOR (round 32, 2026-06-20): 显式 firm_id 优先; 否则从 ctx 拿;
+        # 都没有 → 从 project 反查. 防跨 firm 检索知识库泄密.
+        if firm_id is None:
+            firm_id = ctx.firm_id
+        if firm_id is None and ctx.project_id:
+            try:
+                from app.models.db_models import Project
+                from sqlalchemy import select as _select
+                proj = (
+                    await db.execute(
+                        _select(Project.firm_id).where(Project.id == ctx.project_id)
+                    )
+                ).scalar_one_or_none()
+                firm_id = proj
+            except Exception:  # noqa: BLE001
+                logger.exception("project -> firm_id 反查失败, KB 检索跳过 firm 过滤")
 
         # 1) 知识库检索
         try:
@@ -112,6 +133,7 @@ class AuditNoteGenerator:
                 top_k=kb_top_k,
                 category=kb_category,
                 project_id=ctx.project_id,
+                firm_id=firm_id,  # P0 IDOR: 强制传 firm_id, 防跨所泄 KB
                 context=(
                     f"account_code={ctx.account_code or ''};objective={ctx.audit_objective or ''}"
                 ),

@@ -1,5 +1,6 @@
 """Streamlit 页面 — 法律法规库.
 
+# P1 widget keys (round 32): reg_scrape_selected, reg_scrape_max_pages, reg_scrape_async, reg_scrape_go, reg_search_q, reg_search_mode, reg_search_src, reg_search_limit, reg_search_go
 - 抓取触发 (按来源 / 全部)
 - 来源统计
 - 列表查询 + 全文搜索
@@ -180,7 +181,7 @@ def _render_regulation(item: dict, key_prefix: str = ""):
         st.caption(meta)
         if item.get("summary"):
             # P0 安全: 抓取内容转义后再渲染, 防 javascript: 链接注入
-            from frontend._components.safe_render import safe_inline_text
+            from frontend._components.safe_render import safe_inline_text, validate_date_input
             st.markdown(f"**摘要**：{safe_inline_text(item.get('summary', ''), max_len=300)}")
         if item.get("full_text"):
             st.markdown("**正文摘录**")

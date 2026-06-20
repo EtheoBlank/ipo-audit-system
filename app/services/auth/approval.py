@@ -88,6 +88,7 @@ class ApprovalEngine:
         title: str,
         description: Optional[str] = None,
         project_id: Optional[int] = None,
+        firm_id: Optional[int] = None,
         steps: Optional[List[StepSpec]] = None,
     ) -> ApprovalWorkflow:
         steps = steps or DEFAULT_FIVE_LEVEL_FLOW
@@ -98,8 +99,14 @@ class ApprovalEngine:
         if nos != list(range(1, len(steps) + 1)):
             raise InvalidApprovalAction("step_no 必须从 1 开始连续")
 
+        # round 32 P0 IDOR: firm_id 落库. 优先用调用方传的 firm_id, 否则从
+        # initiator 继承, 最后兜底 project 关联查询.
+        if firm_id is None and initiator is not None:
+            firm_id = initiator.firm_id
+
         wf = ApprovalWorkflow(
             project_id=project_id,
+            firm_id=firm_id,
             resource_type=resource_type,
             resource_id=resource_id,
             title=title,

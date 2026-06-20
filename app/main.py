@@ -119,8 +119,9 @@ async def lifespan(app: FastAPI):
     settings.ensure_dirs()
 
     # Pack A — 生产护栏: JWT_SECRET 不能用 dev 默认值
-    if settings.AUTH_ENABLED and not settings.DEBUG:
-        # P0 第 2 轮修复 — 用 == 严格比较 (不再 startswith 假阳), + 长度校验
+    # P0 (round 32, 2026-06-20): AUTH_ENABLED=true 即便 DEBUG=True 也要校验
+    # 空串/默认值 — 因为生产部署若 DEBUG=True 也会被这个洞拖死
+    if settings.AUTH_ENABLED:
         _DEV_JWT_DEFAULTS = {
             "ipo-audit-dev-only-change-in-prod-please-use-secrets-token-urlsafe-32",
             "please-generate-a-random-secret-with-secrets-token-urlsafe-48-bytes",
@@ -128,12 +129,12 @@ async def lifespan(app: FastAPI):
         }
         if settings.JWT_SECRET in _DEV_JWT_DEFAULTS or len(settings.JWT_SECRET or "") < 32:
             logger.error(
-                "❌ 生产模式 (DEBUG=False) + AUTH_ENABLED=true, 但 JWT_SECRET "
-                "仍是 dev 默认值或长度不足 32 字节。请在 .env 设置强随机串后再启动: "
+                "❌ AUTH_ENABLED=true 但 JWT_SECRET 为空/默认值/长度不足 32 字节. "
+                "请在 .env 设置强随机串: "
                 'python -c "import secrets; print(secrets.token_urlsafe(48))"'
             )
             raise RuntimeError(
-                "JWT_SECRET must be set to a strong random string (>=32 bytes) in production"
+                "JWT_SECRET must be set to a strong random string (>=32 bytes) when AUTH_ENABLED=true"
             )
         # 启动自检: encode → decode roundtrip
         try:

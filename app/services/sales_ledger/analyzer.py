@@ -23,6 +23,76 @@ from app.services.sales_ledger.deepseek_client import DeepSeekClient, DeepSeekEr
 logger = logging.getLogger(__name__)
 
 
+def _compute_margin(
+    revenue: float,
+    cost: float,
+    returns: float = 0.0,
+    discounts: float = 0.0,
+    rebates: float = 0.0,
+    direct_fees: float = 0.0,
+    *,
+    kind: str = "gross",
+    include_direct_fees: bool = False,
+    denominator: str = "net",
+) -> float:
+    """统一毛利率 / 净利率计算 — 取代散落在 analyzer 5 处的不同口径.
+
+    Args:
+        revenue: 含税/不含税收入 (口径统一在调用方决定)
+        cost: 销售成本
+        returns: 销售退回
+        discounts: 商业折扣
+        rebates: 销售折让
+        direct_fees: 直接费用 (运杂费 / 报关费 / 其他直接费)
+        kind:
+            - "gross"  毛利率 = (net_revenue - cost - [direct]) / [net|gross] revenue
+            - "net"    净利率 = (net_revenue - cost - direct) / [net|gross] revenue
+            - "operating" (revenue - cost - direct) / revenue (无扣减项, 旧逻辑)
+        include_direct_fees: 是否把 direct_fees 计入 cost (扣减项).
+        denominator: 分母口径.
+            - "net"   net_revenue (扣 return/discount/rebate), 净后比率
+            - "gross" gross revenue (含 return/discount/rebate), 旧版习惯口径
+            当 net_revenue <= 0 时自动回退到 gross revenue (避免除零).
+
+    Returns:
+        0.0 ~ 1.0 比率 (可负, 表示亏损); revenue 为 0 时返回 0.0.
+
+    ALG-09 (round32, 2026-06-20): 5 处 margin 定义不一致, 集中在 _summary / _pivot /
+    _pivot_month / _pivot_customer_product_month / _return_discount_impact
+    现统一通过本函数计算, 避免同一数据集下 5 个值对不上.
+    """
+    if revenue is None or float(revenue) == 0:
+        return 0.0
+    rev = float(revenue)
+    net_rev = rev - float(returns or 0) - float(discounts or 0) - float(rebates or 0)
+    cost_v = float(cost or 0)
+    direct_v = float(direct_fees or 0)
+
+    # 计算 profit
+    if kind == "gross":
+        if include_direct_fees:
+            profit = net_rev - cost_v - direct_v
+        else:
+            profit = net_rev - cost_v
+    elif kind == "net":
+        profit = net_rev - cost_v - direct_v
+    elif kind == "operating":
+        # 旧版 _summary 口径: net_rev - cost - direct (即 net kind 等价)
+        profit = net_rev - cost_v - direct_v
+    else:
+        raise ValueError(f"_compute_margin: kind={kind!r} 不支持 (gross/net/operating)")
+
+    # 选择分母
+    if denominator == "net" and net_rev > 0:
+        denom = net_rev
+    else:
+        denom = rev
+
+    if denom <= 0:
+        return 0.0
+    return profit / denom
+
+
 INDUSTRY_SYSTEM = """你是行业研究助理。根据用户给定的公司行业，给出该行业上市公司常见的关键财务指标
 参考区间（毛利率区间、前五大客户集中度、月度收入波动幅度等）。
 
@@ -296,7 +366,20 @@ class RevenueAnalyzer:
             "total_cost": round(cost, 2),
             "total_direct_fee": round(direct, 2),
             "gross_profit": round(profit, 2),
-            "gross_margin": round(profit / revenue, 4) if revenue else 0.0,
+            # ALG-09 (round32, 2026-06-20): 改用统一 _compute_margin
+            # 旧版口径: profit (net_revenue - cost - direct) / revenue (gross),
+            # 即 "net profit / gross revenue". 用 kind=net + denominator=gross.
+            "gross_margin": round(
+                _compute_margin(
+                    revenue, cost,
+                    returns=returns, discounts=discounts, rebates=rebates,
+                    direct_fees=direct,
+                    kind="net",
+                    include_direct_fees=True,
+                    denominator="gross",
+                ),
+                4,
+            ),
         }
 
     def _pivot(self, dim: str, name_col: Optional[str] = None) -> list[dict[str, Any]]:
@@ -340,8 +423,21 @@ class RevenueAnalyzer:
             grouped["profit"] = grouped["net_revenue"] - grouped["cost"] - grouped["direct_fee"]
         else:
             grouped["profit"] = grouped["revenue"] - grouped["cost"] - grouped["direct_fee"]
+        # ALG-09 (round32, 2026-06-20): 改用统一 _compute_margin
+        # 原口径: profit (net_revenue - cost - direct_fee) / revenue (gross)
+        # 用 kind=net + denominator=gross 保持旧行为, 但去除 5 处实现分裂.
         grouped["gross_margin"] = grouped.apply(
-            lambda r: (r["profit"] / r["revenue"]) if r["revenue"] else 0.0,
+            lambda r: _compute_margin(
+                revenue=r["revenue"],
+                cost=r["cost"],
+                returns=r.get("return_amount", 0.0) or 0.0,
+                discounts=r.get("discount_amount", 0.0) or 0.0,
+                rebates=r.get("rebate_amount", 0.0) or 0.0,
+                direct_fees=r["direct_fee"],
+                kind="net",
+                include_direct_fees=True,
+                denominator="gross",
+            ),
             axis=1,
         )
         grouped["revenue_pct"] = grouped["revenue"] / grouped["revenue"].sum()
@@ -371,8 +467,18 @@ class RevenueAnalyzer:
         )
         grouped = grouped.merge(direct, on="month", how="left")
         grouped["profit"] = grouped["revenue"] - grouped["cost"] - grouped["direct_fee"]
+        # ALG-09 (round32, 2026-06-20): 改用统一 _compute_margin
+        # 原口径: profit (revenue - cost - direct_fee) / revenue (无 return/rebate 扣减),
+        # 用 kind=operating + denominator=gross 保持旧行为.
         grouped["gross_margin"] = grouped.apply(
-            lambda r: (r["profit"] / r["revenue"]) if r["revenue"] else 0.0,
+            lambda r: _compute_margin(
+                revenue=r["revenue"],
+                cost=r["cost"],
+                direct_fees=r["direct_fee"],
+                kind="operating",
+                include_direct_fees=False,
+                denominator="gross",
+            ),
             axis=1,
         )
         return grouped.round(4).to_dict(orient="records")
@@ -391,8 +497,16 @@ class RevenueAnalyzer:
             )
             .reset_index()
         )
+        # ALG-09 (round32, 2026-06-20): 改用统一 _compute_margin (kind=gross, 不含 direct_fees)
+        # 原: (revenue - cost) / revenue — 这是"不含 direct_fees 的毛利率", 与其他 4 处不同.
         grouped["gross_margin"] = grouped.apply(
-            lambda r: ((r["revenue"] - r["cost"]) / r["revenue"]) if r["revenue"] else 0.0,
+            lambda r: _compute_margin(
+                revenue=r["revenue"],
+                cost=r["cost"],
+                direct_fees=0.0,
+                kind="gross",
+                include_direct_fees=False,
+            ),
             axis=1,
         )
         return grouped.round(4).to_dict(orient="records")
@@ -586,8 +700,18 @@ class RevenueAnalyzer:
             - grouped["rebate_amount"]
         )
         grouped["gross_profit"] = grouped["net_revenue"] - grouped["cost"]
+        # ALG-09 (round32, 2026-06-20): 改用统一 _compute_margin (kind=gross, 不含 direct_fees)
         grouped["gross_margin"] = grouped.apply(
-            lambda r: (r["gross_profit"] / r["net_revenue"]) if r["net_revenue"] else 0.0,
+            lambda r: _compute_margin(
+                revenue=r["revenue"],
+                cost=r["cost"],
+                returns=r["return_amount"],
+                discounts=r["discount_amount"],
+                rebates=r["rebate_amount"],
+                direct_fees=0.0,
+                kind="gross",
+                include_direct_fees=False,
+            ),
             axis=1,
         )
         grouped["adjustment_ratio"] = grouped.apply(

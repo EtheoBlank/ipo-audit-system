@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
@@ -97,6 +98,11 @@ def _synthetic_admin() -> User:
         is_active=True,
         is_locked=False,
         password_hash="!",
+        # P0 (round 32, 2026-06-20): 必须显式传非空值, 否则 UserResponse.model_validate
+        # 会因为 failed_login_count/created_at/updated_at 是 None 而 500.
+        failed_login_count=0,
+        created_at=datetime(1970, 1, 1),
+        updated_at=datetime(1970, 1, 1),
     )
     return user
 

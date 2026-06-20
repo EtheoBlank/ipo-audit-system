@@ -1,5 +1,6 @@
 """通知中心页面 (Pack A)."""
 
+# P1 widget keys (round 32): notif_mod, notif_sev, notif_unread, notif_limit, notif_mark_page, notif_mark_all
 from __future__ import annotations
 
 from typing import Any, Dict

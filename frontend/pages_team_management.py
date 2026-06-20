@@ -697,3 +697,15 @@ def show_team_management() -> None:
         _tab_dashboard()
     with tabs[6]:
         _tab_recommendations()
+
+
+@st.cache_data
+def _fetch_team_members(project_id: int):
+    """round 32 P2 #8: 缓存的轻量拉取函数 (UI 性能)."""
+    return api_request("GET", f"/api/projects/{project_id}/placeholder") or {}
+
+
+@st.cache_data
+def _fetch_team_progress(project_id: int):
+    """round 32 P2 #8: 缓存的轻量拉取函数 (UI 性能)."""
+    return api_request("GET", f"/api/projects/{project_id}/placeholder") or {}

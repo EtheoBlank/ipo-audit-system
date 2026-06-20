@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -34,6 +35,11 @@ from app.services.auth import get_current_user, get_current_user_optional
 from app.services.auth.tenant import ensure_project_in_firm
 from app.services.contract_analysis import ContractAnalyzer, ContractOCR, OCRError
 from app.services.sales_ledger import DeepSeekClient
+from app.utils.upload_safety import (
+    check_magic_bytes,
+    read_upload_capped,
+    sanitize_filename,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,13 +106,27 @@ async def upload_contract(
 
     save_dir: Path = settings.UPLOAD_DIR
     save_dir.mkdir(parents=True, exist_ok=True)
-    temp_path = save_dir / f"contract_{file.filename}"
-    content = await file.read()
+
+    # P0 安全 (round 32): 路径穿越 + magic bytes + 大小限制
+    # 1) 流式读到 bytes (上限 settings.MAX_UPLOAD_BYTES, 默认 50MB), 不一次性读全
+    # 2) sanitize_filename 防 '../../../etc/passwd'
+    # 3) check_magic_bytes 防 'evil.pdf.exe' 双扩展名绕过
+    # 4) 最终路径必须落 save_dir 内 + UUID 前缀防并发同名覆盖
+    content, safe_name, suffix = await read_upload_capped(file)
+    if suffix and not check_magic_bytes(content, suffix):
+        raise HTTPException(
+            status_code=400,
+            detail=f"文件内容与扩展名 {suffix} 不符 (疑似伪造)",
+        )
+    temp_path = save_dir / f"contract_{uuid.uuid4().hex}_{safe_name}"
     # P0 性能 (2026-06-19): 50MB+ 合同同步 write_bytes 阻塞 event loop, 改 to_thread
     await asyncio.to_thread(temp_path.write_bytes, content)
 
     try:
-        engine, ocr_text = ContractOCR.run(temp_path, file.filename or "")
+        # OCR 是 CPU 密集型, 包到 to_thread 释放事件循环
+        engine, ocr_text = await asyncio.to_thread(
+            ContractOCR.run, temp_path, safe_name or ""
+        )
     except OCRError as exc:
         await asyncio.to_thread(_safe_unlink, temp_path)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -115,7 +135,7 @@ async def upload_contract(
 
     doc = ContractDocument(
         project_id=project_id,
-        filename=file.filename or "contract",
+        filename=safe_name or "contract",
         media_type=file.content_type or "application/octet-stream",
         ocr_engine=engine,
         ocr_text=ocr_text,

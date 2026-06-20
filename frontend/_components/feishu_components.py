@@ -27,6 +27,21 @@
 
     feishu_divider()
         — 装饰性分隔线 (HR)
+
+Pack A 美学扩展 (φ 黄金分割驱动):
+    kbd(keys)              — 键盘按键徽章 (Ctrl+K 等)
+    toast(text, kind)      — 操作反馈条 (success/error/info/warning)
+    timeline(events)       — 审计时间线 (垂直步骤条)
+    skeleton(lines)        — 加载骨架屏
+    breadcrumb(items)      — 面包屑导航
+    progress_ring(percent) — 圆形进度环 (SVG)
+    stat_grid(items)       — φ 网格统计卡 (左大右小 / 等宽 / 递增)
+    info_panel(title, body, kind)
+                            — 信息面板 (默认/成功/警告/错误)
+    link_card(icon, title, desc, action_label, key)
+                            — 可点击卡片 (大尺寸入口)
+    kv_list(items)         — 键值对列表 (左键右值)
+    pill_label(text, kind) — 圆角标签 (可选可关闭)
 """
 from __future__ import annotations
 
@@ -38,6 +53,15 @@ import pandas as pd
 import streamlit as st
 
 from frontend._components.feishu_theme import FEISHU_C, FEISHU_R
+from frontend._components.golden import (
+    PHI,
+    PHI_INV,
+    GOLDEN_FONT_SCALE,
+    GOLDEN_SPACE_PX,
+    GOLDEN_TIME_MS,
+    golden_columns_st,
+    golden_grid_columns,
+)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -277,6 +301,310 @@ def feishu_divider() -> None:
     st.markdown("<hr/>", unsafe_allow_html=True)
 
 
+# ──────────────────────────────────────────────────────────────
+# Pack A — 美学 + UX 扩展组件 (φ 黄金分割驱动)
+# ──────────────────────────────────────────────────────────────
+
+
+def kbd(keys):
+    """键盘按键徽章 — 返回 HTML, 用于提示快捷键.
+
+    用法:
+        st.markdown(f"按 {kbd('Ctrl+K')} 打开搜索", unsafe_allow_html=True)
+        st.markdown(f"按 {kbd(['Ctrl', 'Shift', 'P'])} 命令面板", unsafe_allow_html=True)
+    """
+    if isinstance(keys, str):
+        keys = [keys]
+    parts = "".join(
+        f'<kbd class="feishu-kbd">{html.escape(k)}</kbd>' for k in keys
+    )
+    return f'<span class="feishu-kbd-group">{parts}</span>'
+
+
+def toast(text: str, kind: str = "info", icon=None) -> None:
+    """操作反馈条 — 一次性 toast 风格的横条 (success/error/info/warning)."""
+    icons = {"success": "✅", "error": "❌", "warning": "⚠️", "info": "ℹ️"}
+    if icon is None:
+        icon = icons.get(kind, "ℹ️")
+    st.markdown(
+        f"""
+        <div class="feishu-toast feishu-toast-{kind} feishu-fade-in">
+            <span class="feishu-toast-icon">{icon}</span>
+            <span class="feishu-toast-text">{html.escape(text)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def timeline(events: list) -> None:
+    """审计时间线 — 垂直步骤条.
+
+    events: [{"time": "2026-06-20 10:00", "title": "...", "desc": "...",
+              "status": "success|warning|error|primary"}, ...]
+    """
+    if not events:
+        empty_state(icon="📜", message="暂无时间线事件")
+        return
+    rows = []
+    for ev in events:
+        status = ev.get("status", "muted")
+        time_str = html.escape(str(ev.get("time", "")))
+        title = html.escape(str(ev.get("title", "")))
+        desc = html.escape(str(ev.get("desc", "")))
+        rows.append(
+            f"""
+            <div class="feishu-timeline-item">
+                <div class="feishu-timeline-dot {status}"></div>
+                <div class="feishu-timeline-content">
+                    <div class="feishu-timeline-time">{time_str}</div>
+                    <div class="feishu-timeline-title">{title}</div>
+                    {f'<div class="feishu-timeline-desc">{desc}</div>' if desc else ''}
+                </div>
+            </div>
+            """
+        )
+    st.markdown(
+        f'<div class="feishu-timeline">{"".join(rows)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def skeleton(lines: int = 3, height: int = 16) -> None:
+    """加载骨架屏 — 用 CSS 动画显示灰色横条 (流式加载占位)."""
+    widths = [95, 80, 88, 65, 92][:lines]
+    bars = "".join(
+        f'<div class="feishu-skeleton-bar" '
+        f'style="width:{w}%;height:{height}px;animation-delay:{i * 80}ms"></div>'
+        for i, w in enumerate(widths)
+    )
+    st.markdown(
+        f'<div class="feishu-skeleton">{bars}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def breadcrumb(items) -> None:
+    """面包屑导航 — 项目路径式. items: ["首页", "项目", "ACME 2025"]"""
+    if not items:
+        return
+    parts = []
+    for i, label in enumerate(items):
+        is_last = i == len(items) - 1
+        if is_last:
+            parts.append(f'<span class="feishu-crumb current">{html.escape(label)}</span>')
+        else:
+            sep = '<span class="feishu-crumb-sep">/</span>'
+            parts.append(
+                f'<span class="feishu-crumb">{html.escape(label)}</span>{sep}'
+            )
+    st.markdown(
+        f'<div class="feishu-breadcrumb">{"".join(parts)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def progress_ring(percent: float, size: int = 64, label=None) -> None:
+    """圆形进度环 — SVG. percent: 0-100, label: 中心文字 (默认 "{percent}%")."""
+    pct = max(0.0, min(100.0, float(percent)))
+    r = (size - 8) / 2
+    cx = cy = size / 2
+    circumference = 2 * 3.141592653589793 * r
+    offset = circumference * (1 - pct / 100.0)
+    color = FEISHU_C.primary
+    if pct >= 100:
+        color = FEISHU_C.success
+    elif pct < 30:
+        color = FEISHU_C.warning
+    text = html.escape(label or f"{pct:.0f}%")
+    svg = f"""
+    <div class="feishu-ring-wrap">
+      <svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">
+        <circle cx="{cx}" cy="{cy}" r="{r}" fill="none"
+                stroke="{FEISHU_C.border_light}" stroke-width="4"/>
+        <circle cx="{cx}" cy="{cy}" r="{r}" fill="none"
+                stroke="{color}" stroke-width="4"
+                stroke-dasharray="{circumference}"
+                stroke-dashoffset="{offset}"
+                stroke-linecap="round"
+                transform="rotate(-90 {cx} {cy})"/>
+        <text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="central"
+              font-size="{int(size * 0.28)}" font-weight="700"
+              fill="{FEISHU_C.text_primary}">{text}</text>
+      </svg>
+    </div>
+    """
+    st.markdown(svg, unsafe_allow_html=True)
+
+
+def stat_grid(items: list, aspect: str = "phi") -> None:
+    """φ 网格统计卡 — 按 φ 比例分配列宽.
+
+    items: [{"label","value","delta","delta_dir","status"}, ...]
+    aspect: "phi" / "phi_inv" / "equal"
+    """
+    if not items:
+        return
+    widths = golden_grid_columns(len(items), aspect)
+    cols = st.columns(widths)
+    for col, item in zip(cols, items):
+        with col:
+            metric_card(
+                label=item.get("label", ""),
+                value=item.get("value", ""),
+                delta=item.get("delta"),
+                delta_direction=item.get("delta_dir", "neutral"),
+                status=item.get("status", "default"),
+            )
+
+
+def info_panel(title: str, body: str, kind: str = "info", icon=None) -> None:
+    """信息面板 — 大块说明区域 (操作引导 / 帮助 / 警告)."""
+    icons = {"info": "ℹ️", "success": "✅", "warning": "⚠️", "error": "❌"}
+    if icon is None:
+        icon = icons.get(kind, "ℹ️")
+    st.markdown(
+        f"""
+        <div class="feishu-info-panel feishu-info-{kind} feishu-fade-in">
+            <div class="feishu-info-head">
+                <span class="feishu-info-icon">{icon}</span>
+                <span class="feishu-info-title">{html.escape(title)}</span>
+            </div>
+            <div class="feishu-info-body">{html.escape(body)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def link_card(
+    icon: str,
+    title: str,
+    desc: str,
+    action_label: str = "进入",
+    key: Optional[str] = None,
+    button_kind: str = "secondary",
+) -> bool:
+    """可点击大卡片 — 图标 + 标题 + 描述 + 按钮.
+
+    返回按钮是否被点击. 用法:
+        clicked = link_card("📁", "项目管理", "创建 / 查询 IPO 项目", "新建项目", "home_new_project")
+        if clicked:
+            ...
+    """
+    st.markdown(
+        f"""
+        <div class="feishu-link-card feishu-fade-in">
+            <div class="feishu-link-icon">{icon}</div>
+            <div class="feishu-link-title">{html.escape(title)}</div>
+            <div class="feishu-link-desc">{html.escape(desc)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    return st.button(
+        action_label,
+        key=key,
+        use_container_width=True,
+        type="primary" if button_kind == "primary" else "secondary",
+    )
+
+
+def kv_list(items) -> None:
+    """键值对列表 — 左键右值 (元数据展示). items: [(k, v), ...]"""
+    if not items:
+        return
+    rows = "".join(
+        f"""
+        <div class="feishu-kv-row">
+            <span class="feishu-kv-key">{html.escape(str(k))}</span>
+            <span class="feishu-kv-val">{html.escape(str(v))}</span>
+        </div>
+        """
+        for k, v in items
+    )
+    st.markdown(f'<div class="feishu-kv-list">{rows}</div>', unsafe_allow_html=True)
+
+
+def pill_label(text: str, kind: str = "default", icon=None) -> str:
+    """圆角标签 — 返回 HTML, 适合作为分类标签."""
+    icon_html = f'<span>{icon}</span>' if icon else ""
+    return (
+        f'<span class="feishu-pill feishu-pill-{kind}">'
+        f'{icon_html}<span>{html.escape(text)}</span></span>'
+    )
+
+
+def greeting_banner(
+    user_name: str = "用户",
+    role: str = "auditor",
+    project_count: int = 0,
+    pending_count: int = 0,
+) -> None:
+    """欢迎横幅 — 首页顶部, 个性化问候 + 状态速览."""
+    from datetime import datetime
+
+    hour = datetime.now().hour
+    if hour < 6:
+        greet = "夜深了, 注意休息"
+    elif hour < 12:
+        greet = "早上好"
+    elif hour < 18:
+        greet = "下午好"
+    else:
+        greet = "晚上好"
+
+    role_zh = {
+        "admin": "管理员",
+        "partner": "合伙人",
+        "manager": "项目经理",
+        "assistant": "审计助理",
+        "qc_partner": "质控合伙人",
+        "signing_partner": "签字合伙人",
+        "auditor": "审计师",
+    }.get(role, role)
+
+    body = (
+        f"{greet}, <b>{html.escape(user_name)}</b> "
+        f"<span class='feishu-greet-role'>({html.escape(role_zh)})</span>"
+    )
+    if project_count or pending_count:
+        body += (
+            "  ·  📁 " + str(project_count) + " 个项目"
+            + ("  ·  ⏳ " + str(pending_count) + " 项待办" if pending_count else "")
+        )
+
+    st.markdown(
+        f"""
+        <div class="feishu-greeting feishu-fade-in">
+            <div class="feishu-greeting-text">{body}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def feature_card(icon: str, title: str, desc: str, badge=None) -> None:
+    """功能介绍卡片 — 静态展示 (无按钮), 用于「功能矩阵 / 关于页」."""
+    badge_html = (
+        f'<span class="feishu-pill feishu-pill-primary">{html.escape(badge)}</span>'
+        if badge else ""
+    )
+    st.markdown(
+        f"""
+        <div class="feishu-feature-card feishu-fade-in">
+            <div class="feishu-feature-head">
+                <span class="feishu-feature-icon">{icon}</span>
+                <span class="feishu-feature-title">{html.escape(title)}</span>
+                {badge_html}
+            </div>
+            <div class="feishu-feature-desc">{html.escape(desc)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 __all__ = [
     "page_header",
     "metric_card",
@@ -289,4 +617,18 @@ __all__ = [
     "data_table",
     "render_top_badges",
     "feishu_divider",
+    # Pack A 美学 + UX 扩展
+    "kbd",
+    "toast",
+    "timeline",
+    "skeleton",
+    "breadcrumb",
+    "progress_ring",
+    "stat_grid",
+    "info_panel",
+    "link_card",
+    "kv_list",
+    "pill_label",
+    "greeting_banner",
+    "feature_card",
 ]

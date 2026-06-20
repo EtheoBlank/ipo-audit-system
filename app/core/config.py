@@ -112,7 +112,9 @@ class Settings(BaseSettings):
     # 总开关: false 时跳过认证 (兼容现网无认证旧调用), true 时所有写端点必须 Bearer 令牌
     AUTH_ENABLED: bool = False
     # JWT 配置 — 生产部署必须把 JWT_SECRET 改成 >=32 字节随机串
-    JWT_SECRET: str = "ipo-audit-dev-only-change-in-prod-please-use-secrets-token-urlsafe-32"
+    # P0 (round 32, 2026-06-20): 默认值改为空串, 强制生产环境显式注入;
+    # lifespan 启动时检测到 AUTH_ENABLED=true 且 JWT_SECRET 为空 → 抛错拒启.
+    JWT_SECRET: str = ""
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_EXPIRE_MINUTES: int = 60
     JWT_REFRESH_EXPIRE_DAYS: int = 7

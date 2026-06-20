@@ -388,7 +388,11 @@ class CapitalOccupationService:
         if rp is None:
             return {"max_amount": 0, "max_date": None, "ending_balance": 0}
 
-        like = f"%{rp.name}%"
+        # P1 (round 32): 转义 LIKE 通配符, 防 name 含 % 或 _ 误匹配.
+        # 例如关联方名 "100%" 不转义会被 ilike 当通配符, 错误匹配所有 "100X" 摘要.
+        from app.services.auth.audit_log import _escape_like
+
+        like = f"%{_escape_like(rp.name)}%"
         rows = list(
             (
                 await db.execute(
@@ -398,8 +402,8 @@ class CapitalOccupationService:
                         ChronologicalAccount.voucher_date >= period_start,
                         ChronologicalAccount.voucher_date <= period_end,
                         or_(
-                            ChronologicalAccount.summary.ilike(like),
-                            ChronologicalAccount.auxiliary_accounting.ilike(like),
+                            ChronologicalAccount.summary.ilike(like, escape="\\"),
+                            ChronologicalAccount.auxiliary_accounting.ilike(like, escape="\\"),
                         ),
                     )
                     .order_by(ChronologicalAccount.voucher_date)

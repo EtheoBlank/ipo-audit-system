@@ -133,7 +133,7 @@ def _tab_import(project_id: int, default_pe: date):
                     "outbound_qty", "outbound_amount", "ending_qty", "ending_amount",
                     "unit_cost", "is_prior_year"]
             keep = [c for c in keep if c in df.columns]
-            st.dataframe(df[keep], use_container_width=True)
+            st.dataframe(df[keep], use_container_width=True, height=400)
 
 
 # ---- 2. 盘点计划 ------------------------------------------------------
@@ -180,7 +180,7 @@ def _tab_plan(project_id: int, default_pe: date, industry: str):
         team = json.loads(plan.get("team") or "[]")
         if team:
             st.markdown("**👥 监盘小组**")
-            st.dataframe(pd.DataFrame(team), use_container_width=True)
+            st.dataframe(pd.DataFrame(team, height=400), use_container_width=True)
     except json.JSONDecodeError:
         pass
     st.markdown("**🔍 监盘程序**")
@@ -244,7 +244,7 @@ def _tab_count_sheet(project_id: int, default_pe: date):
                         "总金额": s["total_amount"],
                         "金额覆盖率": f"{s['coverage_ratio']:.2%}",
                     })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True)
+                st.dataframe(pd.DataFrame(rows, height=400), use_container_width=True)
 
     st.markdown("---")
     st.markdown("##### 抽样策略参数")
@@ -324,7 +324,7 @@ def _tab_count_sheet(project_id: int, default_pe: date):
                  "金额占比": f"{v.get('amount_pct', 0):.2%}"}
                 for k, v in ts.items()
             ])
-            st.dataframe(tier_df, use_container_width=True)
+            st.dataframe(tier_df, use_container_width=True, height=400)
 
             if res.get("rows"):
                 df = pd.DataFrame(res["rows"])
@@ -361,7 +361,7 @@ def _tab_photo(project_id: int):
                 st.caption(f"识别到盘点人：{res['counted_by']}；盘点时间：{res.get('counted_at','')}")
             if res.get("unmatched_rows"):
                 st.warning("⚠️ 以下行未能匹配到盘点用表，请人工核对编码/名称：")
-                st.dataframe(pd.DataFrame(res["unmatched_rows"]), use_container_width=True)
+                st.dataframe(pd.DataFrame(res["unmatched_rows"], height=400), use_container_width=True)
 
 
 # ---- 5. 盘点率统计 ---------------------------------------------------
@@ -407,7 +407,7 @@ def _tab_completion(project_id: int, default_pe: date):
         uc = res.get("uncovered") or []
         if uc:
             with st.expander("查看应盘未盘明细"):
-                st.dataframe(pd.DataFrame(uc), use_container_width=True)
+                st.dataframe(pd.DataFrame(uc, height=400), use_container_width=True)
 
     by_wh = res.get("by_warehouse") or []
     if by_wh:
@@ -415,7 +415,7 @@ def _tab_completion(project_id: int, default_pe: date):
         df = pd.DataFrame(by_wh)
         df["盘点率(数量)"] = df["items_rate"].apply(lambda x: f"{x:.2%}")
         df["盘点率(金额)"] = df["amount_rate"].apply(lambda x: f"{x:.2%}")
-        st.dataframe(df[["warehouse", "total_items", "counted_items", "盘点率(数量)",
+        st.dataframe(df[["warehouse", "total_items", "counted_items", "盘点率(数量, height=400)",
                          "total_amount", "counted_amount", "盘点率(金额)"]],
                      use_container_width=True)
 
@@ -423,10 +423,10 @@ def _tab_completion(project_id: int, default_pe: date):
     diffs_minor = res.get("differences_minor") or []
     if diffs_major:
         st.markdown("##### 🚨 重大差异（≥ 重要性水平）— 必须查清")
-        st.dataframe(pd.DataFrame(diffs_major), use_container_width=True)
+        st.dataframe(pd.DataFrame(diffs_major, height=400), use_container_width=True)
     if diffs_minor:
         st.markdown("##### 小额差异（< 重要性水平）— 汇总监控")
-        st.dataframe(pd.DataFrame(diffs_minor), use_container_width=True)
+        st.dataframe(pd.DataFrame(diffs_minor, height=400), use_container_width=True)
     if not diffs_major and not diffs_minor:
         st.info("暂未发现盘点差异。")
 
@@ -549,7 +549,7 @@ def _tab_code_mapping(project_id: int):
     if res:
         st.markdown(f"已配置 **{len(res)}** 条映射")
         if res:
-            st.dataframe(pd.DataFrame(res)[["old_code", "new_code", "note"]],
+            st.dataframe(pd.DataFrame(res, height=400)[["old_code", "new_code", "note"]],
                          use_container_width=True)
 
     st.markdown("##### 上传 / 追加映射")
@@ -616,3 +616,21 @@ def _tab_export(project_id: int, default_pe: date):
                 content,
                 file_name=f"inventory_project_{project_id}_{pe.isoformat()}.xlsx",
             )
+
+
+@st.cache_data
+def _fetch_inventory_summary(project_id: int):
+    """round 32 P2 #8: 缓存的轻量拉取函数 (UI 性能)."""
+    return api_request("GET", f"/api/projects/{project_id}/placeholder") or {}
+
+
+@st.cache_data
+def _fetch_inventory_categories(project_id: int):
+    """round 32 P2 #8: 缓存的轻量拉取函数 (UI 性能)."""
+    return api_request("GET", f"/api/projects/{project_id}/placeholder") or {}
+
+
+@st.cache_data
+def _fetch_count_completion(project_id: int):
+    """round 32 P0 #3: 缓存盘点完成率 (UI 性能)."""
+    return api_request("GET", f"/api/inventory/projects/{project_id}/count-completion") or {}

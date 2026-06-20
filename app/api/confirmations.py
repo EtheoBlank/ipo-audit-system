@@ -52,6 +52,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api._helpers import deepseek_client, get_or_404, get_project_or_404
 from app.core.config import settings
 from app.core.database import get_db
+from app.utils.upload_safety import check_magic_bytes
 from app.models.confirmation import (
     BANK_CONFIRMATION_TEMPLATE_FIELDS,
     CONFIRMATION_SUBJECTS,
@@ -970,6 +971,13 @@ async def upload_response_photo(
             status_code=413,
             detail=f"文件过大 ({len(content) / 1024 / 1024:.1f}MB),"
             f"上限 {settings.MAX_UPLOAD_SIZE / 1024 / 1024:.0f}MB。",
+        )
+    # P1 (round 32): magic bytes 校验 — 防 'evil.pdf.exe' 双扩展名绕过
+    _resp_suffix = Path(file.filename or "response.jpg").suffix.lower()
+    if _resp_suffix and not check_magic_bytes(content, _resp_suffix):
+        raise HTTPException(
+            status_code=400,
+            detail=f"文件内容与扩展名 {_resp_suffix} 不符 (疑似伪造)",
         )
     processor = _response_processor()
 

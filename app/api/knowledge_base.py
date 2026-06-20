@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.utils.upload_safety import check_magic_bytes
 from app.models.db_models import KnowledgeBook
 from app.models.db.auth import User
 from app.services.auth import get_current_user, get_current_user_optional
@@ -177,6 +178,16 @@ async def upload_book(
                 detail=f"文件过大 (>{settings.KB_MAX_BOOK_SIZE // (1024 * 1024)}MB)",
             )
     content_bytes = b"".join(chunks)
+    # P1 (round 32): magic bytes 校验 — 防 'evil.pdf.exe' 双扩展名绕过
+    if suffix and not check_magic_bytes(content_bytes, f".{suffix}"):
+        try:
+            target.unlink(missing_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("清理 magic-bytes 校验失败的文件失败 (target=%s): %s", target, exc)
+        raise HTTPException(
+            status_code=400,
+            detail=f"文件内容与扩展名 .{suffix} 不符 (疑似伪造)",
+        )
     await asyncio.to_thread(_sync_write, target, content_bytes)
 
     book = KnowledgeBook(

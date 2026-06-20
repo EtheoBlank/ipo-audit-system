@@ -88,6 +88,11 @@ async def save_financial_input(
     Returns:
         (ok, error_message). ok=True 表示保存成功; False 表示未通过校验.
     """
+    # ALG-05 (round32, 2026-06-20): 报告已锁定后, 财务输入不应被重写
+    # (会破坏审计痕迹 / 与引用快照逻辑一致).
+    if getattr(report, "is_locked", False):
+        return False, "报告已锁定, 不可重写财务输入"
+
     if not verified_by:
         return False, "必须填写 verified_by (审计师签名)"
 
