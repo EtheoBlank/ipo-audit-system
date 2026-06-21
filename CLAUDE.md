@@ -269,14 +269,17 @@ POST /api/related-parties/detector/run
 - 日志使用 `logging.getLogger(__name__)`，启动时由 `app.core.logging.setup_logging()` 统一配置
 - 日期时间使用 `datetime.now(timezone.utc)` 替代已弃用的 `datetime.utcnow()`
 
-## 多端同步流程 (GitHub ↔ Hugging Face Space)
+## 多端同步流程 (GitHub ↔ Hugging Face Space ↔ Vercel)
 
-仓库有两个 remote，**推送必须走 `scripts/sync.sh`**，不要裸 `git push`：
+仓库有三个部署目标，**主推送走 `scripts/sync.sh`**，GitHub → Vercel 是自动的：
 
-| remote | 仓库 | 分支策略 | 写入方式 |
-|--------|------|---------|---------|
-| `origin` | https://github.com/EtheoBlank/ipo-audit-system | master 为稳定主线，feature 分支走 PR | 本地 `sync.sh push-github` |
-| `hf` | https://huggingface.co/spaces/EtheoZheng/EtheoBlank | `main` 是 Space 部署分支（推送即公开 rebuild） | 本地 `sync.sh push-hf` 或 GitHub Action `Sync to HF Space` |
+| 目标 | 仓库 / URL | 分支策略 | 写入方式 | 谁触发 |
+|------|------------|---------|---------|--------|
+| **GitHub** (`origin`) | https://github.com/EtheoBlank/ipo-audit-system | master 为稳定主线，feature 分支走 PR | 本地 `sync.sh push-github` | 你 push |
+| **HF Space** (`hf`) | https://huggingface.co/spaces/EtheoZheng/EtheoBlank | `main` 是 Space 部署分支（推送即公开 rebuild） | 本地 `sync.sh push-hf` 或 Action `Sync to HF Space` | 你 push 或手动 Action |
+| **Vercel** (无 git remote) | https://<your-project>.vercel.app (FastAPI 后端 + 后续 Next.js) | 监听 GitHub `master` 自动 build | **Vercel GitHub Integration 自动** | `push origin master` → Vercel 1 分钟内 build+deploy |
+
+> ✅ **日常开发只需要 `git push origin master`**: Vercel 自动 build；要不要顺手同步 HF 由你决定 (HF 仍承载 Streamlit Web UI)。
 
 ### 推荐工作流（PR 合到 master 之后）
 
@@ -288,13 +291,45 @@ bash scripts/sync.sh push-github          # 等价于 git push origin feat/xxx
 
 # 2. GitHub 网页开 PR, CI 全绿后合并到 master
 
-# 3. 本地同步 master, 然后推 HF Space
+# 3. 本地同步 master
 git checkout master && git pull
+
+# 4. (可选) 同步 HF Space — Streamlit UI 走这里
 bash scripts/sync.sh status               # 看 origin/master vs hf/main 谁领先
 bash scripts/sync.sh push-hf             # 默认 fast-forward, 安全
 # 如果 status 显示 ❌ 分叉 (origin/master 与 hf/main 无共同祖先):
 bash scripts/sync.sh push-hf --force-with-lease
+
+# 5. Vercel 自动接管 — 不需要任何操作
+#    推 master 30s 后, Vercel dashboard 应出现新 deployment
+#    5-10s 后 https://<your-project>.vercel.app/docs 可访问
 ```
+
+### Vercel 部署的 GitHub 集成 (自动)
+
+**无需 Action**: Vercel ↔ GitHub Integration 是双向绑定的, 在 Vercel Dashboard "Import Project" 时一次性勾选 "GitHub" 即可. 之后:
+
+- `git push origin master` → Vercel 自动 build → 1-3 分钟后 production deployment 完成
+- `git push origin feat/xxx` → Vercel 自动生成 Preview Deployment (独立 URL, 不影响生产)
+- PR → 评论区自动出现 Vercel bot 链接 (Preview URL + commit 信息)
+
+**回滚**: Vercel Dashboard → Deployments → 选上一个 commit → "Promote to Production" (秒级, 不重 build).
+
+### 兜底方案: 手动 vercel deploy (Vercel Integration 失效时)
+
+```bash
+# 一次性登录
+vercel login                    # 浏览器走 OAuth, token 存 ~/.vercel
+
+# 一次性 link 项目 (idempotent)
+vercel link --yes               # 把当前目录 link 到 Vercel project
+
+# 手动部署
+vercel deploy --prod            # 等价于 Vercel GitHub Integration 的 production build
+vercel deploy                   # 默认 preview deployment (非 master 分支)
+```
+
+或者用 GitHub Action `.github/workflows/deploy-vercel.yml` 作为兜底 — 在 Vercel Integration 失效时 (例如 GitHub App 权限被 revoke) 仍能 deploy.
 
 ### 不想本地推 HF？用 GitHub Action
 
@@ -306,9 +341,10 @@ bash scripts/sync.sh push-hf --force-with-lease
 
 ### 安全护栏（三个强制约束）
 
-1. **绝不提交 `.env`**: `sync.sh` 和 `sync-hf.yml` 都会扫描 `.env` 文件 + `sk-` 字面量；CI 也会跑同样的检查
-2. **HF Token 永远在 GitHub Secret**: 不要贴在 issue / commit message / 文档里
+1. **绝不提交 `.env`**: `sync.sh` / `deploy-vercel.yml` 都会扫描 `.env` 文件 + `sk-` 字面量；CI 也会跑同样的检查
+2. **HF Token / Vercel Token 永远在 GitHub Secret**: 不要贴在 issue / commit message / 文档里
 3. **HF Space 公开 rebuild 必须人工确认**: workflow 的 `confirm_rebuild` input 是 last-line 防御，别取消
+4. **Vercel 环境变量**: `DATABASE_URL` / `BLOB_READ_WRITE_TOKEN` / `JWT_SECRET` 必须在 Vercel Dashboard 配, 永远不要 commit 到仓库
 
 ### 一次性初始化（老 `git_push.sh` 的用途）
 
@@ -325,3 +361,12 @@ git push hf <previous-commit-sha>:main --force-with-lease
 ```
 
 或用 GitHub Action 的 `force_with_lease` 选项重推旧 commit。
+
+### Vercel 一旦出错怎么回滚
+
+```bash
+# Vercel Dashboard → Deployments → 找上一个能跑的 commit → Promote to Production
+# (秒级回滚, 不需要重新 build)
+```
+
+或 CLI: `vercel rollback` (回滚到上一个 production deployment).

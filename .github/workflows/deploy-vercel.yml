@@ -1,0 +1,121 @@
+name: Deploy to Vercel (fallback)
+
+# 此 workflow 是 Vercel GitHub Integration 失效时的兜底.
+# 日常部署由 Vercel 自动监听 master 完成 — 不需要这个 workflow 也能跑.
+# 触发条件:
+#   * manual_dispatch: 任何人手动 Run workflow (适合 Integration 异常时)
+#   * workflow_dispatch with confirm=true: 防止误触
+#
+# 注意: Vercel 官方推荐用 GitHub Integration (Settings → Git → Connect),
+# 这个 Action 路线 token 容易过期, 仅作 fallback.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_redeploy:
+        description: "确认手动部署到 Vercel (默认是 production)"
+        required: true
+        type: boolean
+        default: false
+      target:
+        description: "production (默认) | preview"
+        required: false
+        type: choice
+        options:
+          - production
+          - preview
+        default: production
+
+concurrency:
+  group: deploy-vercel-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  safety-checks:
+    name: 🛡️ 安全检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 检查 .env 是否被提交
+        run: |
+          if git log --all --full-history --oneline -- .env 2>/dev/null | grep -q .; then
+            echo "❌ 历史 commit 里出现过 .env — 必须先清历史"
+            git log --all --full-history --oneline -- .env | head -5
+            exit 1
+          fi
+          echo "✅ .env 历史干净"
+
+      - name: 扫描 API key 字面量
+        run: |
+          KEY_PATTERN='(sk-[a-f0-9]{20,}|ark-[a-f0-9-]{20,})'
+          if grep -RIn --include='*.py' --include='*.md' --include='*.toml' \
+              -E "$KEY_PATTERN" . 2>/dev/null \
+              | grep -v 'node_modules/' \
+              | grep -v 'scripts/sync.sh' \
+              | grep -v 'CLAUDE\.md' \
+              | grep -q .; then
+            echo "❌ 检测到疑似真实 API key, 中止"
+            grep -RIn --include='*.py' --include='*.md' --include='*.toml' \
+                -E "$KEY_PATTERN" . 2>/dev/null \
+              | grep -v 'node_modules/' | grep -v 'scripts/sync.sh' \
+              | grep -v 'CLAUDE\.md' | head -5
+            exit 1
+          fi
+          echo "✅ 无 API key 字面量"
+
+  deploy:
+    name: 🚀 Vercel Deploy
+    needs: safety-checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 确认触发
+        env:
+          CONFIRM: ${{ github.event.inputs.confirm_redeploy }}
+        run: |
+          if [ "$CONFIRM" != "true" ]; then
+            echo "❌ 必须勾选 confirm_redeploy=true 才能跑"
+            exit 1
+          fi
+          echo "✅ 已确认部署"
+
+      - name: 安装 Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: 拉取 secrets 验证
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo "❌ 缺少 Vercel secrets, 请在 GitHub Repo Settings → Secrets 配置:"
+            echo "   - VERCEL_TOKEN     (https://vercel.com/account/tokens)"
+            echo "   - VERCEL_ORG_ID    (Vercel team ID, Settings → General)"
+            echo "   - VERCEL_PROJECT_ID (Project Settings → General)"
+            exit 1
+          fi
+
+      - name: 部署到 Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          TARGET: ${{ github.event.inputs.target }}
+        run: |
+          if [ "$TARGET" = "preview" ]; then
+            vercel deploy --yes
+          else
+            vercel deploy --prod --yes
+          fi
+
+      - name: 输出部署信息
+        if: success()
+        run: |
+          echo "✅ Vercel 部署完成"
+          echo "   Dashboard: https://vercel.com/dashboard"
+          echo "   Logs: 见上方 Action 输出"

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "name": "ipo-audit-system",
+  "framework": null,
+  "buildCommand": "echo 'No build step — Vercel uses api/index.py directly'",
+  "outputDirectory": "public",
+  "installCommand": "pip install -r requirements-vercel.txt",
+  "rewrites": [
+    { "source": "/health", "destination": "/api/index" },
+    { "source": "/(.*)", "destination": "/api/index" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+      ]
+    }
+  ],
+  "functions": {
+    "api/index.py": {
+      "runtime": "python3.11",
+      "maxDuration": 60,
+      "memory": 1024
+    },
+    "api/cron/sentiment-scan.py": {
+      "runtime": "python3.11",
+      "maxDuration": 300,
+      "memory": 1024
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/sentiment-scan",
+      "schedule": "30 8 * * 1-6"
+    }
+  ]
+}

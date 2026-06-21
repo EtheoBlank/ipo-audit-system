@@ -445,6 +445,107 @@ docker stop ipo-audit-test && docker rm ipo-audit-test
 
 ---
 
+## ▲ 部署到 Vercel (serverless)
+
+> **🌐 推荐**: 长期 demo / 个人项目 → Vercel 自动从 GitHub 部署, 免运维
+> **📦 Streamlit 暂未迁移**: Vercel 上目前**只跑 FastAPI 后端** (`https://<your-project>.vercel.app/docs`),
+>    Streamlit 前端继续保留在 Hugging Face Space (`https://etheozheng-etheoblank.hf.space`).
+>    Next.js 前端在路线图上 (见 [🗺️ 路线图](#🗺️-路线图))。
+
+### 架构差异 (HF vs Vercel)
+
+| 维度 | Hugging Face (现役 Web UI) | Vercel (现役 API 后端) |
+|------|----------------------------|-------------------------|
+| 运行时 | Docker 单容器双进程 | Python serverless 函数 |
+| 入口 | `streamlit run frontend/app.py` + `uvicorn app.main:app` | `api/index.py` re-export FastAPI ASGI |
+| 数据库 | SQLite (持久卷 `/data`) | Postgres (Neon 免费层推荐) |
+| 文件存储 | 本地盘 `/data/*` | Vercel Blob (`STORAGE_BACKEND=vercel_blob`) |
+| 调度器 | APScheduler in-process | Vercel Cron (`vercel.json` → `crons`) |
+| 冷启动 | ~7s (HF 镜像) | ~1-3s (serverless) |
+| WebSocket | ✅ (Streamlit 需要) | ❌ (仅 HTTP) |
+| 睡眠机制 | 48h 不访问会 sleep | 5min 不访问 cold start |
+
+### 一次性配置 (10 分钟)
+
+1. **创建 Neon Postgres** → <https://neon.tech> → New Project → 复制 connection string
+   - 必须是 `postgresql+asyncpg://...` 格式 (SQLAlchemy 异步驱动)
+   - 末尾加 `?ssl=require`
+
+2. **创建 Vercel Blob Store** → <https://vercel.com/dashboard> → Storage → Create Database → **Blob**
+   - 复制 `BLOB_READ_WRITE_TOKEN`
+
+3. **导入 GitHub 仓库到 Vercel** → <https://vercel.com/new>
+   - Import `EtheoBlank/ipo-audit-system` (或你 fork 的仓库)
+   - Framework Preset: **Other** (不要选 Next.js)
+   - Root Directory: `./` (仓库根)
+
+4. **配置环境变量** (Project → Settings → Environment Variables):
+
+   | Name | Value | 说明 |
+   |------|-------|------|
+   | `DATABASE_URL` | `postgresql+asyncpg://user:pass@ep-xxx.neon.tech/db?ssl=require` | 必填, Neon 连接串 |
+   | `BLOB_READ_WRITE_TOKEN` | `vercel_blob_rw_xxx` | Vercel Blob 写 token |
+   | `STORAGE_BACKEND` | `vercel_blob` | 启用 Blob 存储 |
+   | `DEBUG` | `false` | 生产必须关 |
+   | `AUTH_ENABLED` | `true` | 启用 JWT 认证 (推荐) |
+   | `JWT_SECRET` | (用 `python -c "import secrets; print(secrets.token_urlsafe(48))"` 生成) | >=32 字节随机串 |
+   | `AUTH_BOOTSTRAP_ADMIN_PASSWORD` | (强密码, 不要用默认) | 首次登录后立即改 |
+   | `DEEPSEEK_API_KEY` | `sk-...` | 销售清单 / 合同 / OCR AI |
+   | `MINIMAX_API_KEY` | (可选) `eyJ...` | 风险分析 AI |
+   | `CORS_ORIGINS` | `https://your-app.vercel.app,http://localhost:3000` | 你的前端域名 |
+   | `KB_EMBEDDING_PROVIDER` | `tfidf` (默认) / `minimax` / `deepseek` | 知识库嵌入方式 |
+
+5. **Deploy** → Vercel 自动 build → 5-10 秒后 <https://your-project.vercel.app/docs> 可访问
+
+### GitHub 推送 → 自动部署
+
+Vercel 默认监听 GitHub `master` 分支:
+- `git push origin master` → Vercel 自动 build + deploy
+- PR → 自动生成 Preview Deployment (独立 URL)
+- Vercel dashboard 显示每次部署的 commit / 日志 / 性能
+
+**不再需要手动 `vercel deploy`** — 这是 Vercel 自带的 GitHub Integration。
+
+### 路由说明
+
+所有路径都被 Vercel rewrite 到 `api/index.py` (FastAPI ASGI):
+
+| URL | 后端响应 |
+|-----|---------|
+| `GET /` | FastAPI root (`{"APP_NAME": ...}`) |
+| `GET /docs` | Swagger UI |
+| `GET /health` | 后端健康检查 |
+| `GET /api/*` | 业务 API 路由 |
+| `GET /api/files/{key:path}` | LocalStorage 文件代理 (Vercel Blob 时不命中, 由 Blob URL 直读) |
+| `POST /api/cron/sentiment-scan` | Vercel Cron 专用 (Vercel 自动加 `Authorization: Bearer $CRON_SECRET`) |
+
+### Vercel 部署已知限制
+
+| 限制 | 影响 | 应对 |
+|------|------|------|
+| **Streamlit 不能跑** | Vercel 是 serverless, 无 WebSocket | HF Space 继续作为 Web UI (免费) |
+| **函数包 250MB 上限** | paddleocr/selenium 不能进 | 留作 `[ocr]` / `[scraper]` optional, 走外部 API |
+| **函数超时 60s 默认** | 长任务 (如综合底稿生成) 可能超时 | `vercel.json` 已设 `maxDuration: 60`, 综合底稿走异步队列 (TODO) |
+| **冷启动延迟 1-3s** | 首次访问慢 | Pro plan 可开 warm pool; 日常使用可接受 |
+| **/tmp 跨调用不持久** | 不写 Blob 的文件会丢 | `STORAGE_BACKEND=vercel_blob` 强制走 Blob |
+
+### 部署相关文件
+
+| 文件 | 作用 |
+|---|---|
+| `vercel.json` | Vercel 配置 — Python runtime + rewrites + cron schedule |
+| `api/index.py` | Vercel serverless 入口 — re-export FastAPI app |
+| `api/cron/sentiment-scan.py` | Vercel Cron 调用的舆情扫描 endpoint |
+| `requirements-vercel.txt` | Vercel 用的精简依赖清单 (无 paddleocr/selenium) |
+| `app/services/storage/__init__.py` | 存储后端抽象 (LocalStorage + VercelBlobStorage) |
+| `.github/workflows/deploy-vercel.yml` | GitHub Action 兜底 (Vercel Integration 失效时用) |
+
+### 回滚方案
+
+Vercel Dashboard → Deployments → 选上一个能跑的 commit → **Promote to Production** (秒级回滚, 不需要重新 build)。
+
+---
+
 ## 🛠️ 技术栈
 
 | 层 | 选型 | 为什么 |
