@@ -23,18 +23,15 @@ short_description: 自动化 IPO 审计底稿生成与数据分析工具 · Fast
 
 [![Python](https://img.shields.io/badge/Python-3.10%20|%203.11%20|%203.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Streamlit](https://img.shields.io/badge/Frontend-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Vercel](https://img.shields.io/badge/%E2%96%B2-Vercel-000?logo=vercel&logoColor=white)](https://ipo-audit-system-lovat.vercel.app/)
+[![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?logo=fastapi&logoColor=white)](https://ipo-audit-system-lovat.vercel.app/docs)
 [![SQLAlchemy](https://img.shields.io/badge/ORM-SQLAlchemy%202.0-D71F00?logo=sqlalchemy&logoColor=white)](https://www.sqlalchemy.org/)
 [![DeepSeek](https://img.shields.io/badge/AI-DeepSeek-4D6BFE?logo=openai&logoColor=white)](https://platform.deepseek.com/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000)](https://github.com/astral-sh/ruff)
-[![Vercel](https://img.shields.io/badge/%E2%96%B2%20Live%20API-Vercel-000?logo=vercel&logoColor=white)](https://ipo-audit-system-lovat.vercel.app/docs)
-[![Streamlit Web](https://img.shields.io/badge/%F0%9F%A4%97%20Streamlit%20Web-HF%20Space-orange?logo=huggingface&logoColor=white)](https://etheozheng-etheoblank.hf.space)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/EtheoBlank/ipo-audit-system/pulls)
 
-[🚀 **Vercel API** — https://ipo-audit-system-lovat.vercel.app/docs](https://ipo-audit-system-lovat.vercel.app/docs) ·
-[🤗 **Streamlit Web** — etheozheng-etheoblank.hf.space](https://etheozheng-etheoblank.hf.space) ·
+**[🚀 https://ipo-audit-system-lovat.vercel.app/](https://ipo-audit-system-lovat.vercel.app/)** · 
 [📖 使用教程](docs/usage.md) ·
 [🚀 30 秒快速开始](#-30-秒快速开始) ·
 [🧩 模块全景](#-模块全景13-大模块) ·
