@@ -24,17 +24,6 @@
       "runtime": "python3.11",
       "maxDuration": 60,
       "memory": 1024
-    },
-    "api/cron/sentiment-scan.py": {
-      "runtime": "python3.11",
-      "maxDuration": 300,
-      "memory": 1024
     }
-  },
-  "crons": [
-    {
-      "path": "/api/cron/sentiment-scan",
-      "schedule": "30 8 * * 1-6"
-    }
-  ]
+  }
 }
