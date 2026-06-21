@@ -88,3 +88,10 @@ target-version = "py310"
 [tool.mypy]
 python_version = "3.10"
 strict = true
+
+# Vercel deployment entrypoint — 强制 Vercel 用 api/index.py (re-export
+# FastAPI ASGI app) 而不是自动检测到的 app/main.py. 后者会触发整个
+# FastAPI app 启动链路 (lifespan, init_db, scheduler), serverless 上
+# 无意义且容易炸 import.
+[tool.vercel]
+entrypoint = "api.index:app"

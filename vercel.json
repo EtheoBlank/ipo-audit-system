@@ -1,12 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "name": "ipo-audit-system",
-  "framework": null,
-  "buildCommand": "echo 'No build step — Vercel uses api/index.py directly'",
+  "buildCommand": "echo 'No build step — Vercel detects FastAPI via api/index.py'",
   "outputDirectory": "public",
   "installCommand": "pip install -r requirements-vercel.txt",
   "rewrites": [
-    { "source": "/health", "destination": "/api/index" },
     { "source": "/(.*)", "destination": "/api/index" }
   ],
   "headers": [
@@ -18,12 +15,5 @@
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
       ]
     }
-  ],
-  "functions": {
-    "api/index.py": {
-      "runtime": "python3.11",
-      "maxDuration": 60,
-      "memory": 1024
-    }
-  }
+  ]
 }

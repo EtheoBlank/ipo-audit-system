@@ -3,58 +3,60 @@
 # 注意:
 #   * pyproject.toml 里的全部依赖被 pyproject 解析为可编辑模式, uv sync 会把 .[dev] 等
 #     重型 extras 拉进来 (paddleocr 4GB+, selenium + chromium 数百 MB), 超过 Vercel
-#     250MB 函数包大小上限. Vercel 用的是 pip 而非 uv, 走 requirements-vercel.txt.
+#     245MB 函数包大小上限. Vercel 用的是 pip 而非 uv, 走 requirements-vercel.txt.
 #   * 重型依赖 (paddleocr / selenium) 必须继续作为 optional, 本地装 [ocr] / [scraper]
 #     extra 即可, 不进 Vercel 包. 如果 serverless 里需要 OCR, 改成调用外部 API (PaddleOCR
 #     在线版 / 阿里云 OCR / 自建 OCR worker).
 #   * 与 pyproject.toml dependencies 字段保持同步: 升级时两边都要改.
+#   * Vercel 函数包 245MB 限制 — 这里刻意裁掉一些"非 boot 必需"的依赖:
+#       - psycopg2-binary (-10MB, Vercel 用 asyncpg 即可, 同步驱动不需要)
+#       - feedparser (-2MB, 舆情模块 lazy import; cold start 失败不致命)
+#       - tenacity (-1MB, 重试装饰器, 仅舆情用)
 
-# Web 框架
+# Web 框架 (boot 必需)
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 python-multipart>=0.0.6
 
-# 校验 / 配置
+# 校验 / 配置 (boot 必需)
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
 
-# DB — Vercel 必须用托管 DB (Neon/Supabase/Turso), 不要用 aiosqlite
-# 但保留 SQLAlchemy 异步接口; 把 aiosqlite 仅作为本地 dev 用, 默认 DATABASE_URL 改成 postgres
+# DB (boot 必需)
 sqlalchemy[asyncio]>=2.0.25
 asyncpg>=0.29.0
-psycopg2-binary>=2.9.9
+# aiosqlite: 即便 Vercel 推荐 Postgres, app.core.database 默认 URL 仍指向
+# sqlite+aiosqlite. 没这个包 import 阶段就 ModuleNotFoundError.
+# (生产推荐在 Vercel env 配 DATABASE_URL=postgresql+asyncpg://... 跳过 SQLite)
+aiosqlite>=0.19.0
 
-# 鉴权 (Pack A)
+# 鉴权 (Pack A, auth API 启动就 import)
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 
-# 数据处理
+# 数据处理 (audit 模块, 不是所有 endpoint 都用; 之后可以进一步 lazy)
 pandas>=2.1.0
 openpyxl>=3.1.2
 tabulate>=0.9.0
 
-# 文档解析 (KB 模块)
+# 文档解析 (KB 模块, 仅 /api/knowledge_base/* 用)
 pdfplumber>=0.10.0
 python-docx>=1.1.0
 ebooklib>=0.18
 lxml>=4.9.3
 beautifulsoup4>=4.12.2
 
-# 报告生成
+# 报告生成 (Word/PDF 导出)
 reportlab>=4.0.0
 
-# HTTP 客户端
+# HTTP 客户端 (AI 模块和 RSS 都用)
 httpx>=0.26.0
 
 # YAML (综合底稿规则库)
 pyyaml>=6.0.1
 
-# APScheduler — Vercel 默认禁 (ENABLE_SCHEDULER=false), 但保留依赖, 方便本地/独立服务器启用
+# APScheduler — Vercel serverless 调度器必关, 但保留依赖免得 import 炸
 apscheduler>=3.10.4
-
-# RSS + 重试 (舆情跟踪)
-feedparser>=6.0.11
-tenacity>=8.2.3
 
 # Vercel Blob 客户端 (文件上传外部化)
 # 注意: vercel-blob 客户端依赖 fetch (Python 3.12+ 内置), 3.11 需手动安装

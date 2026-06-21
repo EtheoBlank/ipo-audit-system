@@ -163,3 +163,4 @@ unused_imports.json
 unused_vars.json
 svc_modules.txt
 frontend/_components/golden.py
+.vercel

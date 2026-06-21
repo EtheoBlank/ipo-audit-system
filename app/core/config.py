@@ -151,6 +151,10 @@ class Settings(BaseSettings):
 
         Call this explicitly at startup instead of relying on module-level
         side effects so that importing the config never touches the filesystem.
+
+        Vercel serverless 注意: 函数容器内除 /tmp 外只读, ``mkdir(./uploads)`` 会
+        抛 ``OSError: [Errno 30] Read-only file system``. 这里包 try/except,
+        只读 fs 上跳过创建 (Vercel 生产推荐用 Vercel Blob 而不是本地盘).
         """
         for d in (
             self.UPLOAD_DIR,
@@ -161,8 +165,14 @@ class Settings(BaseSettings):
             self.REPORT_TEMPLATE_DIR,
             self.REPORT_OUTPUT_DIR,
         ):
-            d.mkdir(parents=True, exist_ok=True)
-            logger.debug("Ensured directory exists: %s", d)
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                logger.debug("Ensured directory exists: %s", d)
+            except OSError as exc:
+                # Vercel 等只读 fs: warning 不 raise, 让 lifespan 继续走完
+                logger.warning(
+                    "ensure_dirs() 跳过 %s (filesystem 只读?): %s", d, exc
+                )
 
 
 @lru_cache
