@@ -17,6 +17,8 @@
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 python-multipart>=0.0.6
+# Jinja2 — app/web/routes.py 用 Jinja2Templates 渲染 HTML dashboard
+jinja2>=3.1.0
 
 # 校验 / 配置 (boot 必需)
 pydantic>=2.5.0
