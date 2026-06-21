@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}知识库 — {{ app_name }}{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-gray-900 mb-2">📚 知识库</h1>
+<p class="text-sm text-gray-600 mb-6">上传实务书籍 (PDF / EPUB / DOCX / TXT), AI 生成审计说明时按关键词检索相似案例</p>
+
+<form method="GET" class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+  <div class="flex gap-2">
+    <input type="text" name="q" value="{{ query }}" placeholder="搜索关键词, 例: 应收账款 减值"
+           class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+    <button type="submit" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
+      🔍 检索
+    </button>
+  </div>
+</form>
+
+{% if results %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+  <h2 class="text-sm font-semibold mb-3 text-gray-700">检索结果 ({{ results|length }})</h2>
+  <ul class="space-y-3">
+    {% for r in results %}
+    <li class="border-l-4 border-blue-500 pl-4 py-2">
+      <div class="text-sm font-medium text-gray-900">{{ r.title or r.book_title or '—' }}</div>
+      <div class="text-xs text-gray-600 mt-1">{{ r.snippet or r.content or '' }}</div>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
+  <div class="text-6xl mb-4">📚</div>
+  <h3 class="text-lg font-semibold text-gray-900 mb-2">知识库检索</h3>
+  <p class="text-gray-600 mb-6">输入关键词检索已上传的实务书籍片段</p>
+  <p class="text-xs text-gray-500">完整上传 / 检索功能开发中, 当前为 UI 演示</p>
+</div>
+{% endif %}
+{% endblock %}

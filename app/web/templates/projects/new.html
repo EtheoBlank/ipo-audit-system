@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}新建项目 — {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <a href="/projects" class="text-sm text-blue-600 hover:underline">← 返回项目列表</a>
+</div>
+
+<h1 class="text-2xl font-bold text-gray-900 mb-6">+ 新建审计项目</h1>
+
+{% if error %}
+<div class="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">
+  ❌ {{ error }}
+</div>
+{% endif %}
+
+<form method="POST" action="/projects/new" class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 max-w-2xl">
+  <div class="space-y-4">
+    <div>
+      <label class="block text-sm font-medium text-gray-700 mb-1">项目名 <span class="text-red-500">*</span></label>
+      <input type="text" name="name" required value="{{ form.name or '' }}"
+             class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+             placeholder="例: XX 公司 2024 年 IPO 审计">
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-gray-700 mb-1">被审计单位</label>
+      <input type="text" name="company_name" value="{{ form.company_name or '' }}"
+             class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+             placeholder="例: 杭州 ABC 科技股份有限公司">
+    </div>
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">行业</label>
+        <select name="industry" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+          <option value="">请选择</option>
+          <option value="制造业">制造业</option>
+          <option value="信息技术">信息技术</option>
+          <option value="医药生物">医药生物</option>
+          <option value="金融业">金融业</option>
+          <option value="房地产">房地产</option>
+          <option value="商贸服务">商贸服务</option>
+          <option value="其他">其他</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">会计年度</label>
+        <input type="text" name="fiscal_year" value="{{ form.fiscal_year or '2024' }}"
+               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+               placeholder="2024">
+      </div>
+    </div>
+  </div>
+  <div class="mt-6 flex gap-3">
+    <button type="submit" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
+      创建项目
+    </button>
+    <a href="/projects" class="px-6 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition font-medium">
+      取消
+    </a>
+  </div>
+</form>
+{% endblock %}

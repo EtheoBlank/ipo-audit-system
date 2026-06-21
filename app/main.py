@@ -266,6 +266,10 @@ def create_app() -> FastAPI:
     # Pack D — IPO 专属
     app.include_router(ipo_specials_api.router)
 
+    # Web UI — FastAPI + Jinja2 server-rendered HTML (替代原 Streamlit 前端)
+    from app.web import web_router
+    app.include_router(web_router)
+
     # Health check endpoint
     @app.get("/health", tags=["系统"])
     async def health_check():

@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}首页 — {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-3xl font-bold text-gray-900 mb-2">🏛️ {{ app_name }}</h1>
+  <p class="text-gray-600">一站式 IPO 审计平台 — 13 大模块 · 60+ API · 全异步全栈</p>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+  <a href="/projects" class="block bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md hover:border-blue-300 transition">
+    <div class="text-3xl font-bold text-blue-600">{{ project_count }}</div>
+    <div class="text-sm text-gray-600 mt-1">审计项目</div>
+    <div class="text-xs text-gray-400 mt-2">点击查看 / 创建 →</div>
+  </a>
+  <a href="/projects" class="block bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md hover:border-blue-300 transition">
+    <div class="text-3xl font-bold text-emerald-600">{{ account_count }}</div>
+    <div class="text-sm text-gray-600 mt-1">科目余额记录</div>
+    <div class="text-xs text-gray-400 mt-2">来自 {{ project_count }} 个项目</div>
+  </a>
+  <a href="/knowledge-base" class="block bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md hover:border-blue-300 transition">
+    <div class="text-3xl font-bold text-amber-600">📚</div>
+    <div class="text-sm text-gray-600 mt-1">知识库检索</div>
+    <div class="text-xs text-gray-400 mt-2">PDF / EPUB / DOCX 全文 →</div>
+  </a>
+</div>
+
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+  <h2 class="text-lg font-semibold mb-4">⚡ 快速开始</h2>
+  <ol class="space-y-3 text-sm text-gray-700">
+    <li class="flex gap-3">
+      <span class="flex-shrink-0 w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold">1</span>
+      <span><a href="/projects/new" class="text-blue-600 hover:underline font-medium">新建审计项目</a> — 录入被审计单位基本信息</span>
+    </li>
+    <li class="flex gap-3">
+      <span class="flex-shrink-0 w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold">2</span>
+      <span><a href="/projects" class="text-blue-600 hover:underline font-medium">导入科目余额表</a> — 上传金蝶/用友/SAP 导出的 Excel</span>
+    </li>
+    <li class="flex gap-3">
+      <span class="flex-shrink-0 w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold">3</span>
+      <span><a href="/projects" class="text-blue-600 hover:underline font-medium">生成试算平衡表</a> — 自动验证报表勾稽关系</span>
+    </li>
+    <li class="flex gap-3">
+      <span class="flex-shrink-0 w-6 h-6 bg-gray-400 text-white rounded-full flex items-center justify-center text-xs font-bold">📖</span>
+      <span>开发者?看 <a href="/docs" target="_blank" class="text-blue-600 hover:underline font-medium">Swagger API 文档 (240 个 endpoints) ↗</a></span>
+    </li>
+  </ol>
+</div>
+{% endblock %}
