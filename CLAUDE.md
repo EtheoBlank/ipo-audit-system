@@ -276,8 +276,8 @@ POST /api/related-parties/detector/run
 | 目标 | 仓库 / URL | 分支策略 | 写入方式 | 谁触发 |
 |------|------------|---------|---------|--------|
 | **GitHub** (`origin`) | https://github.com/EtheoBlank/ipo-audit-system | master 为稳定主线，feature 分支走 PR | 本地 `sync.sh push-github` | 你 push |
-| **HF Space** (`hf`) | https://huggingface.co/spaces/EtheoZheng/EtheoBlank | `main` 是 Space 部署分支（推送即公开 rebuild） | 本地 `sync.sh push-hf` 或 Action `Sync to HF Space` | 你 push 或手动 Action |
-| **Vercel** (无 git remote) | https://<your-project>.vercel.app (FastAPI 后端 + 后续 Next.js) | 监听 GitHub `master` 自动 build | **Vercel GitHub Integration 自动** | `push origin master` → Vercel 1 分钟内 build+deploy |
+| **Vercel** (无 git remote) | **https://ipo-audit-system-lovat.vercel.app** (FastAPI 后端 `/docs` Swagger + `/api/*`) | 监听 GitHub `master` 自动 build | **Vercel GitHub Integration 自动** | `push origin master` → Vercel 1 分钟内 build+deploy |
+| **HF Space** (`hf`) | https://etheozheng-etheoblank.hf.space (Streamlit Web UI) | `main` 是 Space 部署分支（推送即公开 rebuild） | 本地 `sync.sh push-hf` 或 Action `Sync to HF Space` | 你 push 或手动 Action |
 
 > ✅ **日常开发只需要 `git push origin master`**: Vercel 自动 build；要不要顺手同步 HF 由你决定 (HF 仍承载 Streamlit Web UI)。
 

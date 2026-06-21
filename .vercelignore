@@ -1,0 +1,49 @@
+# Vercel deployment ignore — vercel deploy 上传时排除
+# (与 .gitignore 类似, 但 Vercel 默认只读 gitignore, 显式写一份更稳)
+.git
+.gitignore
+.vercel
+.venv
+.venv/*
+__pycache__
+*.pyc
+*.pyo
+.claude
+.ruff_cache
+.pytest_cache
+.hypothesis
+
+# 环境配置 — 严禁上传 (Vercel 用 Project Settings 配)
+.env
+.env.*
+.env.local
+.env.production
+
+# 大文件 / 数据
+*.db
+*.sqlite
+*.sqlite3
+ipo_audit.db
+uploads/*
+outputs/*
+templates/*
+
+# Probe / dead code analysis artifacts
+dead.json
+funcs.json
+if_false.json
+unused_imports.json
+unused_vars.json
+svc_modules.txt
+frontend/_components/golden.py
+
+# 测试 / 文档
+tests/
+docs/
+
+# 部署产物
+.deployment
+.vercelignore
+vercel.json
+README.md
+CLAUDE.md

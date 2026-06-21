@@ -29,10 +29,12 @@ short_description: 自动化 IPO 审计底稿生成与数据分析工具 · Fast
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000)](https://github.com/astral-sh/ruff)
-[![Hugging Face Space](https://img.shields.io/badge/%F0%9F%A4%97%20Live%20Demo-HF%20Space-orange?logo=huggingface&logoColor=white)](https://huggingface.co/spaces/EtheoZheng/EtheoBlank)
+[![Vercel](https://img.shields.io/badge/%E2%96%B2%20Live%20API-Vercel-000?logo=vercel&logoColor=white)](https://ipo-audit-system-lovat.vercel.app/docs)
+[![Streamlit Web](https://img.shields.io/badge/%F0%9F%A4%97%20Streamlit%20Web-HF%20Space-orange?logo=huggingface&logoColor=white)](https://etheozheng-etheoblank.hf.space)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/EtheoBlank/ipo-audit-system/pulls)
 
-[🤗 在线体验](https://huggingface.co/spaces/EtheoZheng/EtheoBlank) ·
+[🚀 **Vercel API** — https://ipo-audit-system-lovat.vercel.app/docs](https://ipo-audit-system-lovat.vercel.app/docs) ·
+[🤗 **Streamlit Web** — etheozheng-etheoblank.hf.space](https://etheozheng-etheoblank.hf.space) ·
 [📖 使用教程](docs/usage.md) ·
 [🚀 30 秒快速开始](#-30-秒快速开始) ·
 [🧩 模块全景](#-模块全景13-大模块) ·
@@ -114,7 +116,7 @@ uv run streamlit run frontend/app.py
 - 📕 **API 文档(ReDoc)**: <http://localhost:8000/redoc>
 - ❤️ **健康检查**: <http://localhost:8000/health>
 
-> 💡 **不想本地装?** 直接打开 [**🌐 在线体验**](https://etheozheng-etheoblank.hf.space) 试用已部署到 Hugging Face Space 的版本(功能完全相同,首次冷启 ~30s)。
+> 💡 **不想本地装?** 两个在线入口 — **API** 走 Vercel (`/docs` Swagger UI), **Web UI** 走 Hugging Face Space (Streamlit)。
 
 > 完整使用教程含截图位 + 故障排查 FAQ,请看 [docs/usage.md](docs/usage.md)
 
