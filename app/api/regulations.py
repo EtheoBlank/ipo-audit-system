@@ -28,6 +28,7 @@ from app.services.regulation_scraper import (
     RegulationScraperService,
     item_to_dict,
 )
+from app.utils.like_helpers import escape_like
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/regulations", tags=["法律法规"])
@@ -209,10 +210,7 @@ async def list_regulations(
         conditions.append(Regulation.publish_date <= publish_before)
     if keyword:
         # 转义 LIKE 通配符 % _ \, 防止用户输入破坏搜索意图
-        escaped = (
-            keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        )
-        like = f"%{escaped}%"
+        like = f"%{escape_like(keyword)}%"
         conditions.append(
             or_(
                 Regulation.title.like(like, escape="\\"),
@@ -289,17 +287,13 @@ async def search_regulations(
     if not keywords:
         return {"keywords": [], "count": 0, "results": []}
 
-    # 转义 LIKE 通配符 % _ \
-    def _escape_like(s: str) -> str:
-        return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
     field_matches = [
         or_(
-            Regulation.title.like(f"%{_escape_like(kw)}%", escape="\\"),
-            Regulation.full_text.like(f"%{_escape_like(kw)}%", escape="\\"),
-            Regulation.keywords.like(f"%{_escape_like(kw)}%", escape="\\"),
-            Regulation.document_no.like(f"%{_escape_like(kw)}%", escape="\\"),
-            Regulation.summary.like(f"%{_escape_like(kw)}%", escape="\\"),
+            Regulation.title.like(f"%{escape_like(kw)}%", escape="\\"),
+            Regulation.full_text.like(f"%{escape_like(kw)}%", escape="\\"),
+            Regulation.keywords.like(f"%{escape_like(kw)}%", escape="\\"),
+            Regulation.document_no.like(f"%{escape_like(kw)}%", escape="\\"),
+            Regulation.summary.like(f"%{escape_like(kw)}%", escape="\\"),
         )
         for kw in keywords
     ]

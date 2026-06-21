@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -126,8 +127,6 @@ def unique_save_path(base_dir: Path, safe_name: str) -> Path:
     Returns ``base_dir / "<ts>_<uuid8>_<safe_name>"``.  Caller must have
     already created ``base_dir``.
     """
-    from datetime import datetime
-
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     uniq = uuid.uuid4().hex[:8]
     target = base_dir / f"{ts}_{uniq}_{safe_name}"

@@ -15,7 +15,7 @@ from app.api._helpers import get_project_or_404
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.db_models import Project, AccountBalance
+from app.models.db_models import AccountBalance
 from app.models.db.auth import User
 from app.models.audit import (
     WorkbookGenerateRequest,

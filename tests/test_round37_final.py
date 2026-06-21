@@ -1,9 +1,9 @@
 """Round 37 P1 收尾 — silent except 修复 + walrus SyntaxError 修复 验证.
 
 覆盖:
-  - app/services/report_generator.py: import + 4 个类可实例化 (本文件无 except, smoke 即可)
+  - app/services/report_generator.py: import + 3 个类可实例化 (本文件无 except, smoke 即可)
   - app/services/excel_parser.py: import + 4 个 parse_* 方法可调用 (本文件无 except, smoke 即可)
-  - app/services/ai_analysis.py: 4 处 except 现在 logger.exception 留 traceback
+  - app/services/ai_analysis.py: _call_minimax 1 处 except 现在 logger.exception 留 traceback
   - _probe/round32_repro.py: 之前 walrus in kwarg SyntaxError, 修复后可 ast.parse
 
 不依赖 DB / 网络 / 真实 API — 全部 in-process.
@@ -25,7 +25,7 @@ import pytest
 
 
 class TestReportGeneratorSmoke:
-    """app/services/report_generator.py — 4 类 + 综合集成 smoke."""
+    """app/services/report_generator.py — 3 类 (ReportScheduler 已删) + 综合集成 smoke."""
 
     def test_report_generator_importable(self):
         from app.services import report_generator  # noqa: F401
@@ -33,17 +33,12 @@ class TestReportGeneratorSmoke:
         assert hasattr(mod, "ComprehensiveReportGenerator")
         assert hasattr(mod, "InteractiveReportGenerator")
         assert hasattr(mod, "PDFReportGenerator")
-        assert hasattr(mod, "ReportScheduler")
+        # ReportScheduler 已删除 (dead code, 0 引用)
 
-    def test_comprehensive_and_scheduler_constructible(self):
-        from app.services.report_generator import (
-            ComprehensiveReportGenerator,
-            ReportScheduler,
-        )
+    def test_comprehensive_constructible(self):
+        from app.services.report_generator import ComprehensiveReportGenerator
         gen = ComprehensiveReportGenerator()
         assert gen.report_date  # 非空字符串
-        sch = ReportScheduler()
-        assert sch.scheduled_reports == []
 
     def test_pdf_report_generator_callable(self):
         from app.services.report_generator import PDFReportGenerator
@@ -125,58 +120,18 @@ class TestExcelParserSmoke:
 
 
 # ============================================================
-# AI 分析服务 — 4 处 except 现在 logger.exception 留 traceback
+# AI 分析服务 — _call_minimax except 现在 logger.exception 留 traceback
+# (4 个 _parse_* 已迁出至 ai_analysis_engine.py, 此处不再覆盖)
 # ============================================================
 
 
 class TestAIAnalysisSilentExcepts:
-    """app/services/ai_analysis.py — 4 个 except 路径全部走 logger.exception."""
+    """app/services/ai_analysis.py — _call_minimax except 路径走 logger.exception."""
 
     def test_ai_analysis_importable(self):
         from app.services import ai_analysis  # noqa: F401
         assert hasattr(ai_analysis, "AIAnalysisService")
         assert hasattr(ai_analysis, "logger")
-
-    def test_parse_json_fallback_logs_exception_with_traceback(self, caplog):
-        """_parse_json_response: 解析失败应 logger.exception, 留 exc_info."""
-        from app.services.ai_analysis import AIAnalysisService
-
-        svc = AIAnalysisService(api_key="test-key")
-        with caplog.at_level(logging.ERROR, logger="app.services.ai_analysis"):
-            # 字符串含 { 和 } 但内容是非法 JSON → 走 try 块 → json.loads 抛
-            # 这种情况下 start_idx > 0 and end_idx > start_idx, 真的会进入 try
-            result = svc._parse_json_response('"prefix": {not valid json}')
-        # 验证 fallback 行为
-        assert "error" in result
-        # 验证 logger.exception 留了 traceback (exc_info 必有)
-        matching = [r for r in caplog.records if "AIAnalysisService._parse_json 失败" in r.message]
-        assert len(matching) >= 1, f"expected exception log, got {[r.message for r in caplog.records]}"
-        assert all(r.exc_info is not None for r in matching), "logger.exception 必须带 exc_info"
-
-    def test_parse_list_fallback_logs_exception_with_traceback(self, caplog):
-        """_parse_list_response: 解析失败应 logger.exception, 留 exc_info."""
-        from app.services.ai_analysis import AIAnalysisService
-
-        svc = AIAnalysisService(api_key="test-key")
-        with caplog.at_level(logging.ERROR, logger="app.services.ai_analysis"):
-            # 字符串含 [ 和 ] 但内容是非法 JSON → 走 try → json.loads 抛
-            result = svc._parse_list_response('"prefix": [not valid json]')
-        assert isinstance(result, list)
-        matching = [r for r in caplog.records if "AIAnalysisService._parse_list 失败" in r.message]
-        assert len(matching) >= 1, f"got {[r.message for r in caplog.records]}"
-        assert all(r.exc_info is not None for r in matching)
-
-    def test_parse_list_of_dicts_fallback_logs_exception_with_traceback(self, caplog):
-        """_parse_list_of_dicts: 解析失败应 logger.exception, 留 exc_info."""
-        from app.services.ai_analysis import AIAnalysisService
-
-        svc = AIAnalysisService(api_key="test-key")
-        with caplog.at_level(logging.ERROR, logger="app.services.ai_analysis"):
-            result = svc._parse_list_of_dicts('"prefix": [not valid json]')
-        assert isinstance(result, list)
-        matching = [r for r in caplog.records if "AIAnalysisService._parse_list_of_dicts 失败" in r.message]
-        assert len(matching) >= 1, f"got {[r.message for r in caplog.records]}"
-        assert all(r.exc_info is not None for r in matching)
 
     def test_call_minimax_logs_exception_on_httpx_error(self, caplog):
         """_call_minimax: httpx 抛错时现在 logger.exception 留痕 (原来纯 silent return)."""

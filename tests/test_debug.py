@@ -496,18 +496,6 @@ class TestAIAanalysisService:
         # Without API key, should be disabled
         assert service.enabled == False or service.enabled == True  # Depends on config
 
-    def test_parse_json_response(self):
-        """Test JSON response parsing."""
-        from app.services.ai_analysis import AIAnalysisService
-
-        service = AIAnalysisService()
-
-        response = '{"risk_level": "高", "summary": "测试", "key_concerns": ["关注1"]}'
-        result = service._parse_json_response(response)
-
-        # May return error dict if parsing fails, which is acceptable
-        assert isinstance(result, dict)
-
 
 class TestRegulatoryScraper:
     """Test regulatory case scraper."""

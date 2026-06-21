@@ -618,15 +618,6 @@ class TestAuditLogArchive:
         cnt_main = (await session.execute(select(func.count(AuditLog.id)))).scalar_one()
         assert cnt_main == 1
 
-        # 归档表有 3 条
-        cnt_arch = (
-            await session.execute(
-                select(func.count()).select_from(
-                    __import__("sqlalchemy").text("audit_logs_archive")
-                )
-            )
-        ).scalar_one() if False else None  # 走另一条路径
-
         # 直接 raw SQL 验证
         from sqlalchemy import text
 

@@ -3,7 +3,7 @@
 import httpx
 import json
 import logging
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,41 @@ class AIAnalysisEngine:
         except Exception as e:
             return json.dumps({"error": str(e)})
 
+    async def _ai_json_call(
+        self,
+        prompt: str,
+        default: Any,
+        *,
+        method: str,
+        context: str,
+        coerce_list: bool = False,
+    ) -> Any:
+        """调 AI + 解析 JSON 响应 + 失败兜底。
+
+        4 个公开方法 (analyze_risk_level / detect_anomalies /
+        generate_audit_program / analyze_regulatory_compliance) 共用这个 helper,
+        行为完全等价: 解析失败 logger.exception + 返回 default。
+
+        Args:
+            prompt: 拼接好的用户 prompt。
+            default: 解析失败时返回的兜底 (dict / list / 任意)。
+            method: 公开方法名, 用于日志前缀 (例 ``"analyze_risk_level"``)。
+            context: 上下文信息 (行业/条数等), 附加到日志便于排查。
+            coerce_list: True 时若 AI 返回 dict (单对象) 强制包成 [dict];
+                False 时若 AI 返回非 list 直接返回 default。
+        """
+        response = await self._call_ai(prompt)
+        try:
+            result = json.loads(response)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("AI %s 响应解析失败 (%s): %s", method, context, exc)
+            return default
+        if coerce_list:
+            return result if isinstance(result, list) else [result]
+        if isinstance(default, list) and not isinstance(result, list):
+            return default
+        return result
+
     async def analyze_risk_level(self, financial_data: Dict, industry: str) -> Dict:
         """分析风险等级."""
         prompt = f"""
@@ -71,20 +106,16 @@ class AIAnalysisEngine:
 返回JSON格式：
 {{"risk_level": "高/中/低", "risk_points": [...], "recommendations": [...]}}
 """
-        response = await self._call_ai(prompt)
-        try:
-            return json.loads(response)
-        except Exception as exc:  # noqa: BLE001
-            # round 35 P1: 之前静默吞, AI misconfig (返回 HTML / 非 JSON / 截断)
-            # 完全隐藏 — 审计师以为是 AI 真判了. 改成 logger.exception 留痕.
-            logger.exception(
-                "AI analyze_risk_level 响应解析失败 (industry=%s): %s", industry, exc
-            )
-            return {
+        return await self._ai_json_call(
+            prompt,
+            {
                 "risk_level": "中",
                 "risk_points": ["AI响应解析失败"],
                 "recommendations": ["请检查API配置"],
-            }
+            },
+            method="analyze_risk_level",
+            context=f"industry={industry}",
+        )
 
     async def detect_anomalies(
         self, account_balances: List[Dict], chronological_accounts: List[Dict]
@@ -108,17 +139,13 @@ class AIAnalysisEngine:
 返回JSON数组格式：
 [{{"account_code": "...", "anomaly_type": "...", "description": "...", "severity": "高/中/低"}}]
 """
-        response = await self._call_ai(prompt)
-        try:
-            result = json.loads(response)
-            return result if isinstance(result, list) else [result]
-        except Exception as exc:  # noqa: BLE001
-            # round 35 P1: 同上, 静默吞让异常检测形同虚设.
-            logger.exception(
-                "AI detect_anomalies 响应解析失败 (account_count=%d): %s",
-                len(account_balances), exc,
-            )
-            return []
+        return await self._ai_json_call(
+            prompt,
+            [],
+            method="detect_anomalies",
+            context=f"account_count={len(account_balances)}",
+            coerce_list=True,
+        )
 
     async def generate_audit_program(
         self, risk_points: List[Dict], regulatory_cases: List[Dict]
@@ -142,17 +169,12 @@ class AIAnalysisEngine:
 返回JSON数组格式：
 [{{"program_name": "...", "steps": [...], "evidence": [...], "expected_findings": [...]}}]
 """
-        response = await self._call_ai(prompt)
-        try:
-            result = json.loads(response)
-            return result if isinstance(result, list) else []
-        except Exception as exc:  # noqa: BLE001
-            # round 35 P1: 静默吞 → AI 出错也不知道, 审计程序集永远空.
-            logger.exception(
-                "AI generate_audit_program 响应解析失败 (risk_points=%d): %s",
-                len(risk_points), exc,
-            )
-            return []
+        return await self._ai_json_call(
+            prompt,
+            [],
+            method="generate_audit_program",
+            context=f"risk_points={len(risk_points)}",
+        )
 
     async def analyze_regulatory_compliance(self, company_info: Dict, industry: str) -> Dict:
         """分析监管合规性."""
@@ -173,16 +195,12 @@ class AIAnalysisEngine:
 返回JSON格式：
 {{"common_issues": [...], "focus_areas": [...], "compliance_suggestions": [...]}}
 """
-        response = await self._call_ai(prompt)
-        try:
-            return json.loads(response)
-        except Exception as exc:  # noqa: BLE001
-            # round 35 P1: 静默吞, 合规分析永远是空 dict.
-            logger.exception(
-                "AI analyze_regulatory_compliance 响应解析失败 (company=%s industry=%s): %s",
-                company_info.get("name", ""), industry, exc,
-            )
-            return {}
+        return await self._ai_json_call(
+            prompt,
+            {},
+            method="analyze_regulatory_compliance",
+            context=f"company={company_info.get('name', '')} industry={industry}",
+        )
 
 
 class RiskIdentifier:

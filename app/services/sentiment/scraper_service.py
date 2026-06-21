@@ -45,56 +45,51 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# 信源注册表 — code → (provider_type, display_name, is_paid, api_key_ref, factory)
+# 信源注册表 — code → (provider_type, display_name, api_key_ref, adapter_cls)
+# is_paid 由 api_key_ref 是否非空派生, 避免双源真相.
+# adapter_cls 直接存类本身 (类本就 callable), 替代 lambda: AdapterClass 多余包装.
 _PROVIDER_REGISTRY: dict[str, dict] = {
     "rss": {
         "provider_type": "free_rss",
         "display_name": "RSS 订阅",
-        "is_paid": False,
         "api_key_ref": None,
-        "factory": lambda: RssAdapter,
+        "adapter_cls": RssAdapter,
     },
     "cninfo_announce": {
         "provider_type": "free_scrape",
         "display_name": "巨潮公告",
-        "is_paid": False,
         "api_key_ref": None,
-        "factory": lambda: CninfoAnnounceAdapter,
+        "adapter_cls": CninfoAnnounceAdapter,
     },
     "regulator": {
         "provider_type": "free_scrape",
         "display_name": "监管/交易所披露",
-        "is_paid": False,
         "api_key_ref": None,
-        "factory": lambda: RegulatorAdapter,
+        "adapter_cls": RegulatorAdapter,
     },
     "tavily": {
         "provider_type": "paid_api",
         "display_name": "Tavily 搜索",
-        "is_paid": True,
         "api_key_ref": "TAVILY_API_KEY",
-        "factory": lambda: TavilyAdapter,
+        "adapter_cls": TavilyAdapter,
     },
     "bocha": {
         "provider_type": "paid_api",
         "display_name": "博查搜索",
-        "is_paid": True,
         "api_key_ref": "BOCHA_API_KEY",
-        "factory": lambda: BochaAdapter,
+        "adapter_cls": BochaAdapter,
     },
     "serpapi": {
         "provider_type": "paid_api",
         "display_name": "SerpAPI",
-        "is_paid": True,
         "api_key_ref": "SERPAPI_API_KEY",
-        "factory": lambda: SerpAPIAdapter,
+        "adapter_cls": SerpAPIAdapter,
     },
     "manual": {
         "provider_type": "manual",
         "display_name": "手工录入",
-        "is_paid": False,
         "api_key_ref": None,
-        "factory": lambda: ManualAdapter,
+        "adapter_cls": ManualAdapter,
     },
 }
 
@@ -131,7 +126,7 @@ class SentimentScraperService:
                     code=code,
                     provider_type=meta["provider_type"],
                     display_name=meta["display_name"],
-                    is_paid=meta["is_paid"],
+                    is_paid=meta["api_key_ref"] is not None,
                     api_key_ref=meta["api_key_ref"],
                     is_enabled=True,
                 )
@@ -187,17 +182,18 @@ class SentimentScraperService:
                     source_status[code] = "unknown_source"
                     continue
                 # 付费源无 key → skip
-                if meta["is_paid"]:
-                    key = getattr(settings, meta["api_key_ref"], "") if meta["api_key_ref"] else ""
+                api_key_ref = meta["api_key_ref"]
+                if api_key_ref:
+                    key = getattr(settings, api_key_ref, "")
                     if not key:
                         source_status[code] = "skipped"
                         skipped_paid_codes.append(code)
                         logger.debug("信源 %s 无 API key, 跳过", code)
                         continue
-                    adapter_cls = meta["factory"]()
+                    adapter_cls = meta["adapter_cls"]
                     adapter = adapter_cls(http, api_key=key)
                 else:
-                    adapter_cls = meta["factory"]()
+                    adapter_cls = meta["adapter_cls"]
                     adapter = adapter_cls(http)
                 task = asyncio.create_task(
                     self._run_one_source(adapter, project, subjects, date_from, date_to)

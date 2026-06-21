@@ -100,7 +100,7 @@ def seeded_user(engine):
             await s.commit()
             return u
 
-    return asyncio.get_event_loop().run_until_complete(_seed()) if False else _seed
+    return _seed
 
 
 # 简化: 用 sync 写一个 seed_user coroutine helper

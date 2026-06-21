@@ -1,8 +1,8 @@
 """Database configuration and session management."""
 
 import logging
-from typing import Iterable
 
+from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.core.config import settings
@@ -43,16 +43,9 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 async def get_db() -> AsyncSession:
-    """Get database session — auto-rollback on exception so a failing route
-    doesn't leak half-applied writes into the next request."""
+    """Get database session — AsyncSession.__aexit__ auto-rollbacks uncommitted tx."""
     async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        except Exception:
-            await session.rollback()
-            raise
-        finally:
-            await session.close()
+        yield session
 
 
 # ============================================================
@@ -104,9 +97,7 @@ def _ensure_column(sync_conn, table_name: str, col) -> None:
       - 解决方案: callable default 时, DROP NOT NULL (老行补 NULL, 应用层仍强制非空),
         这与 Alembic 早期阶段的 batch_alter_table 思路一致.
     """
-    from sqlalchemy import inspect as _sa_inspect
-
-    inspector = _sa_inspect(sync_conn)
+    inspector = inspect(sync_conn)
     try:
         existing = {c["name"] for c in inspector.get_columns(table_name)}
     except Exception:  # noqa: BLE001 — 表不在时 sqlite 抛
@@ -150,9 +141,7 @@ def _ensure_column(sync_conn, table_name: str, col) -> None:
 
 def _sync_auto_migrate_all_columns(sync_conn) -> None:
     """同步版通用 auto-migrate — 通过 conn.run_sync() 在 async 里调用."""
-    from sqlalchemy import inspect as _sa_inspect
-
-    inspector = _sa_inspect(sync_conn)
+    inspector = inspect(sync_conn)
     try:
         existing_tables = set(inspector.get_table_names())
     except Exception as exc:  # noqa: BLE001
@@ -165,34 +154,6 @@ def _sync_auto_migrate_all_columns(sync_conn) -> None:
             continue
         for col in table.columns:
             _ensure_column(sync_conn, table_name, col)
-
-
-def _sync_auto_migrate_team_members(sync_conn) -> None:
-    """Round 28 加了 is_active / deactivated_at / deactivated_by, 但生产 DB 缺这三列.
-    显式 ALTER 一遍作为兜底 (通用 inspector 已覆盖, 这里保 0 误伤)."""
-    from sqlalchemy import inspect as _sa_inspect
-
-    table = "team_members"
-    inspector = _sa_inspect(sync_conn)
-    try:
-        existing = {c["name"] for c in inspector.get_columns(table)}
-    except Exception:  # noqa: BLE001
-        return
-    adds = [
-        ('"is_active"', "BOOLEAN NOT NULL DEFAULT 1"),
-        ('"deactivated_at"', "DATETIME"),
-        ('"deactivated_by"', "INTEGER"),
-    ]
-    for col_ddl, _suffix in adds:
-        col_name = col_ddl.split('"')[1]
-        if col_name in existing:
-            continue
-        sql = f'ALTER TABLE {table} ADD COLUMN {col_ddl}'
-        try:
-            sync_conn.exec_driver_sql(sql)
-            logger.warning("schema drift: team_members ADD COLUMN %s", col_name)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("team_members ADD COLUMN %s skipped: %s", col_name, exc)
 
 
 async def init_db() -> None:
@@ -208,8 +169,7 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         # 1) 建新表
         await conn.run_sync(Base.metadata.create_all, checkfirst=True)
-        # 2 & 3) 全部走 run_sync, 因为 Inspector 是 sync API
+        # 2) 全部走 run_sync, 因为 Inspector 是 sync API
         await conn.run_sync(_sync_auto_migrate_all_columns)
-        await conn.run_sync(_sync_auto_migrate_team_members)
 
     logger.info("init_db 完成: create_all + auto_migrate_all_columns")

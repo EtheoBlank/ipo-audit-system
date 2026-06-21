@@ -79,6 +79,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["认证与权限"])
 
 
+async def _audit(
+    db: AsyncSession,
+    user: Optional[User],
+    action: str,
+    **kwargs,
+):
+    """``record_audit_log`` 的薄封装 — 从 User 对象预填 4 个 user 字段.
+
+    复用 auth.py 13 处调用点的样板 (user_id/display/role/firm_id),
+    调用方只需写 action + 业务相关字段 (resource_type/summary/payload/...).
+    rotate 路径 user 可能为 None, 用 getattr 兜底 — 与原代码语义一致.
+    """
+    await record_audit_log(
+        db,
+        user_id=getattr(user, "id", None),
+        user_display=getattr(user, "full_name", None),
+        user_role=getattr(user, "role", None),
+        firm_id=getattr(user, "firm_id", None),
+        action=action,
+        **kwargs,
+    )
+
+
 # ============================================================
 #  Login / Token
 # ============================================================
@@ -99,12 +122,9 @@ async def login(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
     user: User = result["user"]
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=user.id,
-        user_display=user.full_name,
-        user_role=user.role,
-        firm_id=user.firm_id,
+        user,
         action=AUDIT_ACTION_LOGIN,
         resource_type="auth.user",
         resource_id=user.id,
@@ -131,12 +151,9 @@ async def logout(
     db: AsyncSession = Depends(get_db),
 ):
     """前端调用以记录登出. JWT 是无状态的, 真正失效靠 token 自然过期."""
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
-        firm_id=current_user.firm_id,
+        current_user,
         action=AUDIT_ACTION_LOGOUT,
         method="POST",
         path="/api/auth/logout",
@@ -176,11 +193,9 @@ async def change_my_password(
         await svc_change_password(db, current_user, payload.old_password, payload.new_password)
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_UPDATE,
         resource_type="auth.user",
         resource_id=current_user.id,
@@ -204,11 +219,9 @@ async def create_firm(
     db.add(firm)
     await db.commit()
     await db.refresh(firm)
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_CREATE,
         resource_type="auth.firm",
         resource_id=firm.id,
@@ -268,11 +281,9 @@ async def update_firm(
         setattr(firm, k, v)
     await db.commit()
     await db.refresh(firm)
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_UPDATE,
         resource_type="auth.firm",
         resource_id=firm_id,
@@ -320,11 +331,9 @@ async def create_user(
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_CREATE,
         resource_type="auth.user",
         resource_id=user.id,
@@ -437,11 +446,9 @@ async def update_user(
         setattr(user, k, v)
     await db.commit()
     await db.refresh(user)
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_UPDATE,
         resource_type="auth.user",
         resource_id=user_id,
@@ -469,11 +476,9 @@ async def deactivate_user(
         raise HTTPException(status_code=400, detail="不能停用自己")
     user.is_active = False
     await db.commit()
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_DELETE,
         resource_type="auth.user",
         resource_id=user_id,
@@ -499,11 +504,9 @@ async def reset_user_password(
         await svc_reset_password(db, user, payload.new_password)
     except AuthenticationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_UPDATE,
         resource_type="auth.user",
         resource_id=user_id,
@@ -687,12 +690,9 @@ async def rotate_audit_log_archive(
     )
     # 记录归档动作本身 (rotate 完成才记, 避免 rotate 失败也产生噪音)
     if confirm and result.get("archived", 0) > 0:
-        await record_audit_log(
+        await _audit(
             db,
-            user_id=getattr(current_user, "id", None),
-            user_display=getattr(current_user, "full_name", None),
-            user_role=getattr(current_user, "role", None),
-            firm_id=getattr(current_user, "firm_id", None),
+            current_user,
             action="audit_log_rotate",
             resource_type="audit_log",
             summary=(
@@ -771,11 +771,9 @@ async def create_approval(
         )
     except InvalidApprovalAction as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_CREATE,
         resource_type="auth.approval_workflow",
         resource_id=wf.id,
@@ -843,24 +841,42 @@ async def get_approval(
     return ApprovalWorkflowResponse.model_validate(wf)
 
 
-@router.post("/approvals/{workflow_id}/decide", response_model=ApprovalWorkflowResponse)
-async def decide_approval(
+async def ensure_approval_in_firm(
     workflow_id: int,
-    payload: ApprovalDecision,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+) -> ApprovalWorkflow:
+    """加载 ApprovalWorkflow, 同时校验 current_user 有权访问 (round 32 P0 IDOR).
+
+    规则 (与原 decide_approval / withdraw_approval 内嵌校验 100% 等价):
+      - workflow 不存在 → 404 "审批流不存在" (防枚举)
+      - 非 admin 且 wf.firm_id 存在且 != current_user.firm_id → 404 (防枚举)
+      - admin / wf.firm_id is None → 放过 (历史 NULL 数据全可见)
+
+    返回: 预加载的 ApprovalWorkflow (含 steps), handler 不必再次查询.
+    """
+    wf = await ApprovalEngine.get_workflow(db, workflow_id)
+    if wf is None:
+        raise HTTPException(status_code=404, detail="审批流不存在")
+    # P0 IDOR 修复 (round 32): 防跨所代签 / 撤回
+    # 防枚举: 跨 firm 一律 404, 不告诉调用方"存在但无权"
+    if current_user.role != ROLE_ADMIN and wf.firm_id and wf.firm_id != current_user.firm_id:
+        raise HTTPException(status_code=404, detail="审批流不存在")
+    return wf
+
+
+@router.post("/approvals/{workflow_id}/decide", response_model=ApprovalWorkflowResponse)
+async def decide_approval(
+    payload: ApprovalDecision,
+    pre_wf: ApprovalWorkflow = Depends(ensure_approval_in_firm),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    # P0 IDOR 修复 (round 32): decide 前先校验 firm, 防止跨所代签
-    # 防枚举: 跨 firm 一律 404
-    pre_wf = await ApprovalEngine.get_workflow(db, workflow_id)
-    if pre_wf is None:
-        raise HTTPException(status_code=404, detail="审批流不存在")
-    if current_user.role != ROLE_ADMIN and pre_wf.firm_id and pre_wf.firm_id != current_user.firm_id:
-        raise HTTPException(status_code=404, detail="审批流不存在")
+    # P0 IDOR 校验已抽到 ensure_approval_in_firm (round 32 规则保留: 跨 firm 一律 404)
     try:
         wf = await ApprovalEngine.decide(
             db,
-            workflow_id=workflow_id,
+            workflow_id=pre_wf.id,
             actor=current_user,
             action=payload.action,
             comment=payload.comment,
@@ -873,14 +889,12 @@ async def decide_approval(
     except InvalidApprovalAction as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     action_map = {"approve": AUDIT_ACTION_APPROVE, "reject": AUDIT_ACTION_REJECT}
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=action_map.get(payload.action, AUDIT_ACTION_UPDATE),
         resource_type="auth.approval_workflow",
-        resource_id=workflow_id,
+        resource_id=pre_wf.id,
         summary=f"审批 {payload.action} (step={wf.current_step}, status={wf.status}, version={wf.version})",
         payload=payload.model_dump(),
     )
@@ -889,23 +903,17 @@ async def decide_approval(
 
 @router.post("/approvals/{workflow_id}/withdraw", response_model=ApprovalWorkflowResponse)
 async def withdraw_approval(
-    workflow_id: int,
     payload: Optional[ApprovalWithdrawRequest] = None,
-    current_user: User = Depends(get_current_user),
+    pre_wf: ApprovalWorkflow = Depends(ensure_approval_in_firm),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    # P0 IDOR 修复 (round 32): withdraw 前先校验 firm, 防跨所撤回
-    # 防枚举: 跨 firm 一律 404
-    pre_wf = await ApprovalEngine.get_workflow(db, workflow_id)
-    if pre_wf is None:
-        raise HTTPException(status_code=404, detail="审批流不存在")
-    if current_user.role != ROLE_ADMIN and pre_wf.firm_id and pre_wf.firm_id != current_user.firm_id:
-        raise HTTPException(status_code=404, detail="审批流不存在")
+    # P0 IDOR 校验已抽到 ensure_approval_in_firm (round 32 规则保留: 跨 firm 一律 404)
     expected_version = payload.expected_version if payload else None
     try:
         wf = await ApprovalEngine.withdraw(
             db,
-            workflow_id=workflow_id,
+            workflow_id=pre_wf.id,
             actor=current_user,
             expected_version=expected_version,
         )
@@ -913,14 +921,12 @@ async def withdraw_approval(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except InvalidApprovalAction as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_UPDATE,
         resource_type="auth.approval_workflow",
-        resource_id=workflow_id,
+        resource_id=pre_wf.id,
         summary=f"撤回审批 (version={wf.version})",
     )
     return ApprovalWorkflowResponse.model_validate(wf)

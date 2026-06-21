@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.contracts import (
+from app.schemas.contracts import (
     ContractAnalysisRequest,
     ContractAnalysisResponse,
     ContractDocumentResponse,

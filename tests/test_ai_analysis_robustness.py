@@ -1,11 +1,13 @@
 """AI 引擎 / 审计备注生成器 / 风险识别器 单元测试.
 
 覆盖:
-  - AIAnalysisService (MiniMax wrapper): disabled / enabled / httpx 失败 / 解析失败 4 条路径
   - AIAnalysisEngine: _call_ai 失败返回 JSON 错误包 (不裸抛)
   - RiskIdentifier: 4 类规则识别 (收入 / 关联 / 商誉 / 存货 / 现金流)
   - AnomalyDetector: 4 类异常检测 (整数 / 余额方向 / 无活动 / 集中度)
   - AuditNoteGenerator: KB 失败 / AI 失败 / 法规失败 三路降级仍能输出 markdown
+
+注: AIAnalysisService 的 4 个业务方法 + 3 个 _parse_* 已迁出至 ai_analysis_engine.py,
+此处不再保留相关测试.
 
 不依赖真实 API — httpx 用 mock 替换.
 pytest-asyncio mode = auto (pyproject.toml).
@@ -18,123 +20,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.ai_analysis import AIAnalysisService
 from app.services.ai_analysis_engine import AIAnalysisEngine, AnomalyDetector, RiskIdentifier
 
 
 # ----------------------------------------------------------------------
-#  1) AIAnalysisService (MiniMax wrapper) — 4 条路径
-# ----------------------------------------------------------------------
-
-
-class TestAIAnalysisServiceDisabled:
-    """未配置 API key 时, 一切 AI 调用走降级路径, 不抛 500.
-
-    注: AIAnalysisService.__init__ 用 `api_key or settings.MINIMAX_API_KEY`,
-    所以传空串会被 settings 兜底. 真实生产环境若想关掉, 必须显式 disable_via_settings.
-
-    本测试类通过 monkeypatch 临时把 settings.MINIMAX_API_KEY 设为 None, 模拟未配置.
-    """
-
-    @pytest.fixture
-    def disabled_svc(self, monkeypatch):
-        from app.core.config import settings
-        monkeypatch.setattr(settings, "MINIMAX_API_KEY", None)
-        return AIAnalysisService()
-
-    def test_disabled_init(self, disabled_svc):
-        assert disabled_svc.enabled is False
-
-    async def test_analyze_risk_level_disabled(self, disabled_svc):
-        result = await disabled_svc.analyze_risk_level(
-            account_balances=[{"account_code": "1001", "credit_amount": 0}],
-            industry="制造业",
-        )
-        assert result["risk_level"] == "中"
-        assert any("MINIMAX_API_KEY" in c for c in result["key_concerns"])
-
-    async def test_generate_audit_recommendations_disabled(self, disabled_svc):
-        result = await disabled_svc.generate_audit_recommendations(
-            risk_points=[], regulatory_cases=[]
-        )
-        assert isinstance(result, list)
-        assert any("MINIMAX_API_KEY" in r for r in result)
-
-    async def test_match_regulatory_cases_disabled(self, disabled_svc):
-        result = await disabled_svc.match_regulatory_cases(
-            company_info={"name": "X"}, industry="", keywords=[]
-        )
-        assert result == []
-
-    async def test_analyze_financial_anomalies_disabled(self, disabled_svc):
-        result = await disabled_svc.analyze_financial_anomalies(
-            account_balances=[], chronological_accounts=[]
-        )
-        assert result == []
-
-
-class TestAIAnalysisServiceFallback:
-    """API 报错时, 必须返回降级结果, 不裸抛 500."""
-
-    async def test_analyze_risk_level_http_error_fallback(self):
-        """_call_minimax 抛 httpx.HTTPError → _parse_json_response 解析失败 → 返回 error dict."""
-        svc = AIAnalysisService(api_key="test-key")
-        # 直接 stub _call_minimax 返回错误字符串
-        svc._call_minimax = AsyncMock(return_value="AI分析调用失败: timeout")
-        result = await svc.analyze_risk_level(
-            account_balances=[{"account_code": "5001", "credit_amount": 100}],
-            industry="制造",
-        )
-        # _parse_json_response 找不到 JSON, 返回 error + raw
-        assert "error" in result or "AI分析调用失败" in result.get("raw_response", "")
-
-    async def test_parse_json_with_embedded_json(self):
-        """AI 返回 markdown + JSON 嵌套, 应能正确抽取."""
-        svc = AIAnalysisService(api_key="test-key")
-        # 私有方法测试 — 它是降级后的关键解析路径
-        response = '这是AI分析：{"risk_level": "高", "summary": "测试"}'
-        parsed = svc._parse_json_response(response)
-        assert parsed["risk_level"] == "高"
-        assert parsed["summary"] == "测试"
-
-    async def test_parse_json_no_json_in_response(self):
-        svc = AIAnalysisService(api_key="test-key")
-        parsed = svc._parse_json_response("纯文本无JSON")
-        assert "error" in parsed
-        assert parsed["raw_response"] == "纯文本无JSON"
-
-    async def test_parse_list_with_array(self):
-        svc = AIAnalysisService(api_key="test-key")
-        response = '建议: ["程序1", "程序2"]'
-        parsed = svc._parse_list_response(response)
-        assert parsed == ["程序1", "程序2"]
-
-    async def test_parse_list_fallback_to_raw(self):
-        svc = AIAnalysisService(api_key="test-key")
-        parsed = svc._parse_list_response("纯文本")
-        assert len(parsed) == 1
-        assert parsed[0] == "纯文本"
-
-    def test_total_revenue_credit_amount_only(self):
-        """round23 (P0 正确性回归): 收入应只算贷方 (5001/5051 等), 借方不计入."""
-        svc = AIAnalysisService(api_key="test-key")
-        balances = [
-            {"account_code": "5001", "credit_amount": 1000, "debit_amount": 0},
-            {"account_code": "5001", "credit_amount": 500, "debit_amount": 0},
-            {"account_code": "6401", "credit_amount": 999, "debit_amount": 0},  # 费用类不算
-        ]
-        # 直接调 _call_minimax 然后断言 prompt 中的 总收入 = 1500
-        svc._call_minimax = AsyncMock(return_value='{"risk_level": "低"}')
-        # 走 analyze_risk_level 验证 prompt 拼接
-        import asyncio
-
-        asyncio.run(svc.analyze_risk_level(balances, "X"))
-        call_args = svc._call_minimax.await_args.args[0]
-        assert "1500" in call_args  # 1000+500, 不含 6401 的 999
-
-
-# ----------------------------------------------------------------------
-#  2) AIAnalysisEngine._call_ai — 失败包装
+#  1) AIAnalysisEngine._call_ai — 失败包装
 # ----------------------------------------------------------------------
 
 
@@ -191,7 +81,7 @@ class TestAIAnalysisEngineCallAi:
 
 
 # ----------------------------------------------------------------------
-#  3) RiskIdentifier — 5 个规则函数
+#  2) RiskIdentifier — 5 个规则函数
 # ----------------------------------------------------------------------
 
 
@@ -304,7 +194,7 @@ class TestRiskIdentifier:
 
 
 # ----------------------------------------------------------------------
-#  4) AnomalyDetector — 4 类异常
+#  3) AnomalyDetector — 4 类异常
 # ----------------------------------------------------------------------
 
 
@@ -374,7 +264,7 @@ class TestAnomalyDetector:
 
 
 # ----------------------------------------------------------------------
-#  5) AuditNoteGenerator — 三路降级
+#  4) AuditNoteGenerator — 三路降级
 # ----------------------------------------------------------------------
 
 

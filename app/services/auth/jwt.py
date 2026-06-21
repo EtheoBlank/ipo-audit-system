@@ -24,18 +24,10 @@ class JWTError(Exception):
 
 
 # 优先 python-jose
-_jose_jwt = None
-
-
-class _JoseErrorSentinel(Exception):
-    """python-jose 不可用时的占位异常类型 — 仅用于 except 分支结构.
-
-    之前用 ``_JoseError = Exception`` 会把"任何异常"当成 JWT 错误吞掉, 真实的编程 bug
-    (TypeError 等) 会被掩盖. 用独立占位类型避免这个问题.
-    """
-
-
-_JoseError = _JoseErrorSentinel
+_jose_jwt: Any = None
+# 兜底类型: jose 不可用时 except _JoseError 仍能正确捕获 (我们的 JWTError
+# 不是基类, 用 Exception 会把 TypeError 等真实 bug 一并吞掉).
+_JoseError = JWTError
 try:  # pragma: no cover
     from jose import jwt as _jose_jwt  # type: ignore
     from jose import JWTError as _JoseError  # type: ignore

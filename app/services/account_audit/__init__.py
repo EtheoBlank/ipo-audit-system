@@ -529,34 +529,13 @@ class AccountAuditService:
             .all()
         )
 
-        debit_book = 0.0
-        debit_audited = 0.0
-        credit_book = 0.0
-        credit_audited = 0.0
-        d_pending = d_audited = d_disputed = 0
-        c_pending = c_audited = c_disputed = 0
-
-        for r in rows:
-            if r.status == MOVEMENT_AUDIT_STATUS_SKIPPED:
-                continue
-            if r.direction == MOVEMENT_DIRECTION_DEBIT:
-                debit_book += float(r.book_amount or 0)
-                debit_audited += float(r.audited_amount or 0)
-                if r.status == MOVEMENT_AUDIT_STATUS_PENDING:
-                    d_pending += 1
-                elif r.status == MOVEMENT_AUDIT_STATUS_AUDITED:
-                    d_audited += 1
-                elif r.status == MOVEMENT_AUDIT_STATUS_DISPUTED:
-                    d_disputed += 1
-            elif r.direction == MOVEMENT_DIRECTION_CREDIT:
-                credit_book += float(r.book_amount or 0)
-                credit_audited += float(r.audited_amount or 0)
-                if r.status == MOVEMENT_AUDIT_STATUS_PENDING:
-                    c_pending += 1
-                elif r.status == MOVEMENT_AUDIT_STATUS_AUDITED:
-                    c_audited += 1
-                elif r.status == MOVEMENT_AUDIT_STATUS_DISPUTED:
-                    c_disputed += 1
+        acc = AccountAuditService._accumulate_movements(rows)
+        debit_book = acc["debit_book"]
+        debit_audited = acc["debit_audited"]
+        credit_book = acc["credit_book"]
+        credit_audited = acc["credit_audited"]
+        d_pending, d_audited, d_disputed = acc["d_pending"], acc["d_audited"], acc["d_disputed"]
+        c_pending, c_audited, c_disputed = acc["c_pending"], acc["c_audited"], acc["c_disputed"]
 
         # 如果没有 movement_audit 行 (从未初始化), 直接用 AccountBalance 的发生额作为账面 + 审定
         if not rows and (debit_book_total_bal or credit_book_total_bal):
@@ -573,15 +552,15 @@ class AccountAuditService:
         beg_audited = beg
         end_audited = end_book  # 默认值; 真正的恒等式校验从下面计算
 
-        # 恒等式校验
-        # 借方科目(资产/费用): ending = beg + debit - credit → beg + debit - credit - ending = 0
-        # 贷方科目(负债/权益/收入): ending = beg + credit - debit → beg + credit - debit - ending = 0
-        if is_debit_account:
-            identity_book = beg + debit_book - credit_book - end_book
-            identity_audited = beg_audited + debit_audited - credit_audited - end_audited
-        else:
-            identity_book = beg + credit_book - debit_book - end_book
-            identity_audited = beg_audited + credit_audited - debit_audited - end_audited
+        identity = AccountAuditService._compute_identity(
+            beg, beg_audited,
+            debit_book, debit_audited,
+            credit_book, credit_audited,
+            end_book, end_audited,
+            is_debit_account,
+        )
+        identity_book = identity["identity_book"]
+        identity_audited = identity["identity_audited"]
 
         is_balanced = abs(identity_audited) < _EPS
         is_lta = is_long_term_asset_account(account_code, prefixes)
@@ -616,6 +595,64 @@ class AccountAuditService:
             identity_check_audited=identity_audited,
             is_balanced=is_balanced,
         )
+
+    # ----- helpers extracted from account_summary -----
+
+    @staticmethod
+    def _accumulate_movements(rows: Sequence[Any]) -> Dict[str, float]:
+        """扁平聚合 rows: 借/贷×book/audited + 3 状态计数."""
+        out = {
+            "debit_book": 0.0, "debit_audited": 0.0,
+            "credit_book": 0.0, "credit_audited": 0.0,
+            "d_pending": 0, "d_audited": 0, "d_disputed": 0,
+            "c_pending": 0, "c_audited": 0, "c_disputed": 0,
+        }
+        for r in rows:
+            if r.status == MOVEMENT_AUDIT_STATUS_SKIPPED:
+                continue
+            if r.direction == MOVEMENT_DIRECTION_DEBIT:
+                out["debit_book"] += float(r.book_amount or 0)
+                out["debit_audited"] += float(r.audited_amount or 0)
+                if r.status == MOVEMENT_AUDIT_STATUS_PENDING:
+                    out["d_pending"] += 1
+                elif r.status == MOVEMENT_AUDIT_STATUS_AUDITED:
+                    out["d_audited"] += 1
+                elif r.status == MOVEMENT_AUDIT_STATUS_DISPUTED:
+                    out["d_disputed"] += 1
+            elif r.direction == MOVEMENT_DIRECTION_CREDIT:
+                out["credit_book"] += float(r.book_amount or 0)
+                out["credit_audited"] += float(r.audited_amount or 0)
+                if r.status == MOVEMENT_AUDIT_STATUS_PENDING:
+                    out["c_pending"] += 1
+                elif r.status == MOVEMENT_AUDIT_STATUS_AUDITED:
+                    out["c_audited"] += 1
+                elif r.status == MOVEMENT_AUDIT_STATUS_DISPUTED:
+                    out["c_disputed"] += 1
+        return out
+
+    @staticmethod
+    def _compute_identity(
+        beg: float, beg_audited: float,
+        debit_book: float, debit_audited: float,
+        credit_book: float, credit_audited: float,
+        end_book: float, end_audited: float,
+        is_debit_account: bool,
+    ) -> Dict[str, float]:
+        """恒等式一处算: beg ± 借/贷 - end.
+
+        借方科目: ending = beg + debit - credit → beg + debit - credit - ending
+        贷方科目: ending = beg + credit - debit → beg + credit - debit - ending
+        """
+        # 借方 sign=+1, 贷方 sign=-1 (按 direction 镜像)
+        sign = 1.0 if is_debit_account else -1.0
+        # 在 is_debit_account 下: 借加 / 贷减; 否则借减 / 贷加
+        # = sign * (借 - 贷)
+        delta_book = sign * (debit_book - credit_book)
+        delta_audited = sign * (debit_audited - credit_audited)
+        return {
+            "identity_book": beg + delta_book - end_book,
+            "identity_audited": beg_audited + delta_audited - end_audited,
+        }
 
     @staticmethod
     async def project_overview(

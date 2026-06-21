@@ -503,36 +503,28 @@ class ConfirmationStatsBuilder:
         balances: list[AccountBalance],
         journals: list[ChronologicalAccount],
     ) -> dict[str, dict[str, Any]]:
-        by_party: dict[str, dict[str, Any]] = {}
-        for b in balances:
-            if b.account_code not in LOAN_ACCOUNTS:
-                continue
-            aux = (b.auxiliary_accounting or "").strip() or b.account_name
-            key = self._normalize_party_name(aux)
-            if key not in by_party:
-                by_party[key] = {
-                    "party_name": aux,
-                    "party_id": aux,
-                    "ending_balance": 0.0,
-                    "debit": 0.0,
-                    "credit": 0.0,
-                    "account_codes": set(),
-                    "account_names": set(),
-                }
-            entry = by_party[key]
-            entry["ending_balance"] += b.ending_balance or 0
-            entry["account_codes"].add(b.account_code)
-            entry["account_names"].add(b.account_name)
-        return by_party
+        # 借款 / 长期投资 行为完全一致: 按账户辅助核算聚合 ending_balance
+        return self._aggregate_by_aux_simple(balances, LOAN_ACCOUNTS)
 
     def _aggregate_investments(
         self,
         balances: list[AccountBalance],
         journals: list[ChronologicalAccount],
     ) -> dict[str, dict[str, Any]]:
+        return self._aggregate_by_aux_simple(balances, INVESTMENT_ACCOUNTS)
+
+    def _aggregate_by_aux_simple(
+        self,
+        balances: list[AccountBalance],
+        account_codes: set[str],
+    ) -> dict[str, dict[str, Any]]:
+        """借款 / 长投类轻量聚合: 按辅助核算聚合 ending_balance (无本期活动维度).
+
+        与 _aggregate_by_aux 的差别: 不参与本期发生额分摊, 仅按 ending_balance 累加.
+        """
         by_party: dict[str, dict[str, Any]] = {}
         for b in balances:
-            if b.account_code not in INVESTMENT_ACCOUNTS:
+            if b.account_code not in account_codes:
                 continue
             aux = (b.auxiliary_accounting or "").strip() or b.account_name
             key = self._normalize_party_name(aux)
@@ -571,50 +563,48 @@ class ConfirmationStatsBuilder:
         if party_type == PARTY_TYPE_CUSTOMER:
             threshold = req.customer_threshold
             default_subjects = self._get_default_subjects("1122")
+            default_account = "1122"
+            default_account_name = "应收账款"
         elif party_type == PARTY_TYPE_OTHER_RECEIVABLE:
             threshold = req.other_threshold
             default_subjects = self._get_default_subjects("1221")
+            default_account = "1221"
+            default_account_name = "其他应收款"
         else:
             # 2203 (合同负债) 走客户函证, 用 customer_threshold
             threshold = req.customer_threshold
             default_subjects = self._get_default_subjects("2203")
+            default_account = "2203"
+            default_account_name = "合同负债"
 
-        out: list[SubjectSelection] = []
-        rng = random.Random(req.random_seed)
-        keys = list(groups.keys())
-        for k in keys:
-            d = groups[k]
-            if account_codes and not (d["account_codes"] & account_codes):
-                continue
-            bal = d["ending_balance"]
-            if abs(bal) < 1e-6 and not req.include_zero_balance:
-                continue
-            importance = (
-                "A" if abs(bal) >= threshold * 5 else ("B" if abs(bal) >= threshold else "C")
-            )
-            reason = (
+        def _importance(bal: float) -> str:
+            abs_bal = abs(bal)
+            if abs_bal >= threshold * 5:
+                return "A"
+            if abs_bal >= threshold:
+                return "B"
+            return "C"
+
+        def _reason(bal: float) -> str:
+            return (
                 f"金额 {bal:,.2f} ≥ 必发阈值 {threshold:,.0f}"
                 if abs(bal) >= threshold
                 else f"金额 {bal:,.2f} 抽样补充"
             )
-            out.append(
-                SubjectSelection(
-                    account_code=", ".join(sorted(d["account_codes"])) or "1122",
-                    account_name=", ".join(sorted(d["account_names"])) or "应收账款",
-                    party_type=party_type,
-                    party_name=d["party_name"],
-                    party_id=d["party_id"],
-                    book_balance=round(bal, 2),
-                    book_balance_date=None,
-                    subject_matters=default_subjects,
-                    importance=importance,
-                    selection_reason=reason,
-                    contact_info=None,
-                    account_codes=sorted(d["account_codes"]),
-                )
-            )
 
-        # 阈值以下随机补充
+        out = self._build_selection(
+            groups, req,
+            party_type=party_type,
+            default_account=default_account,
+            default_account_name=default_account_name,
+            default_subjects=default_subjects,
+            account_codes_filter=account_codes,
+            importance_fn=_importance,
+            reason_fn=_reason,
+        )
+
+        # 应收类额外: 阈值以下随机补充 (random_seed 控制可复现)
+        rng = random.Random(req.random_seed)
         below = [g for g in groups.values() if abs(g["ending_balance"]) < threshold]
         if below and req.additional_sample_ratio > 0:
             n = max(1, int(len(below) * req.additional_sample_ratio))
@@ -627,19 +617,14 @@ class ConfirmationStatsBuilder:
                     continue
                 bal = d["ending_balance"]
                 out.append(
-                    SubjectSelection(
-                        account_code=", ".join(sorted(d["account_codes"])) or "1122",
-                        account_name=", ".join(sorted(d["account_names"])) or "应收账款",
+                    self._build_subject_selection(
+                        d,
                         party_type=party_type,
-                        party_name=d["party_name"],
-                        party_id=d["party_id"],
-                        book_balance=round(bal, 2),
-                        book_balance_date=None,
-                        subject_matters=default_subjects,
+                        default_account=default_account,
+                        default_account_name=default_account_name,
+                        default_subjects=default_subjects,
                         importance="C",
-                        selection_reason=f"金额 {bal:,.2f} 阈值以下随机抽样",
-                        contact_info=None,
-                        account_codes=sorted(d["account_codes"]),
+                        reason=f"金额 {bal:,.2f} 阈值以下随机抽样",
                     )
                 )
         return out
@@ -655,106 +640,147 @@ class ConfirmationStatsBuilder:
         if party_type == PARTY_TYPE_SUPPLIER:
             threshold = req.supplier_threshold
             default_subjects = self._get_default_subjects("2202")
+            default_account = "2202"
+            default_account_name = "应付账款"
         elif party_type == PARTY_TYPE_OTHER_PAYABLE:
             threshold = req.other_threshold
             default_subjects = self._get_default_subjects("2241")
+            default_account = "2241"
+            default_account_name = "其他应付款"
         elif party_type == PARTY_TYPE_CUSTOMER:
             # 2203 (合同负债) 由 _select_payables 用 customer 处理
             threshold = req.customer_threshold
             default_subjects = self._get_default_subjects("2203")
+            default_account = "2203"
+            default_account_name = "合同负债"
         else:
             raise ValueError(f"_select_payables 不支持 party_type={party_type}")
 
-        out: list[SubjectSelection] = []
-        for k, d in groups.items():
-            if account_codes and not (d["account_codes"] & account_codes):
-                continue
-            bal = d["ending_balance"]
-            if abs(bal) < 1e-6 and not req.include_zero_balance:
-                continue
-            importance = (
-                "A" if abs(bal) >= threshold * 5 else ("B" if abs(bal) >= threshold else "C")
-            )
-            reason = (
+        def _importance(bal: float) -> str:
+            abs_bal = abs(bal)
+            if abs_bal >= threshold * 5:
+                return "A"
+            if abs_bal >= threshold:
+                return "B"
+            return "C"
+
+        def _reason(bal: float) -> str:
+            return (
                 f"金额 {bal:,.2f} ≥ 必发阈值 {threshold:,.0f}"
                 if abs(bal) >= threshold
                 else f"金额 {bal:,.2f} 抽样补充"
             )
-            out.append(
-                SubjectSelection(
-                    account_code=", ".join(sorted(d["account_codes"])) or "2202",
-                    account_name=", ".join(sorted(d["account_names"])) or "应付账款",
-                    party_type=party_type,
-                    party_name=d["party_name"],
-                    party_id=d["party_id"],
-                    book_balance=round(bal, 2),
-                    book_balance_date=None,
-                    subject_matters=default_subjects,
-                    importance=importance,
-                    selection_reason=reason,
-                    contact_info=None,
-                    account_codes=sorted(d["account_codes"]),
-                )
-            )
-        return out
+
+        return self._build_selection(
+            groups, req,
+            party_type=party_type,
+            default_account=default_account,
+            default_account_name=default_account_name,
+            default_subjects=default_subjects,
+            account_codes_filter=account_codes,
+            importance_fn=_importance,
+            reason_fn=_reason,
+        )
 
     def _select_loans(
         self,
         groups: dict[str, dict[str, Any]],
         req: GenerateStatsRequest,
     ) -> list[SubjectSelection]:
-        loan_subjects = self._get_default_subjects("1002-loan")
-        out: list[SubjectSelection] = []
-        for d in groups.values():
-            bal = d["ending_balance"]
-            if abs(bal) < 1e-6 and not req.include_zero_balance:
-                continue
-            out.append(
-                SubjectSelection(
-                    account_code=", ".join(sorted(d["account_codes"])) or "2001",
-                    account_name=", ".join(sorted(d["account_names"])) or "短期借款",
-                    party_type=PARTY_TYPE_LOAN,
-                    party_name=d["party_name"],
-                    party_id=d["party_id"],
-                    book_balance=round(bal, 2),
-                    book_balance_date=None,
-                    subject_matters=loan_subjects,
-                    importance="A",
-                    selection_reason=f"贷款余额 {bal:,.2f}，必发",
-                    contact_info=None,
-                    account_codes=sorted(d["account_codes"]),
-                )
-            )
-        return out
+        return self._build_selection(
+            groups, req,
+            party_type=PARTY_TYPE_LOAN,
+            default_account="2001",
+            default_account_name="短期借款",
+            default_subjects=self._get_default_subjects("1002-loan"),
+            importance_fn=lambda _bal: "A",
+            reason_fn=lambda bal: f"贷款余额 {bal:,.2f}，必发",
+        )
 
     def _select_investments(
         self,
         groups: dict[str, dict[str, Any]],
         req: GenerateStatsRequest,
     ) -> list[SubjectSelection]:
-        inv_subjects = self._get_default_subjects("1511")
+        return self._build_selection(
+            groups, req,
+            party_type=PARTY_TYPE_INVESTMENT,
+            default_account="1511",
+            default_account_name="长期股权投资",
+            default_subjects=self._get_default_subjects("1511"),
+            importance_fn=lambda _bal: "A",
+            reason_fn=lambda bal: f"投资余额 {bal:,.2f}，必发",
+        )
+
+    # ---- 选样工厂 --------------------------------------------------------
+
+    def _build_selection(
+        self,
+        groups: dict[str, dict[str, Any]],
+        req: GenerateStatsRequest,
+        *,
+        party_type: str,
+        default_account: str,
+        default_account_name: str,
+        default_subjects: list[str],
+        importance_fn,
+        reason_fn,
+        account_codes_filter: Optional[set[str]] = None,
+    ) -> list[SubjectSelection]:
+        """按 groups 批量生成 SubjectSelection (通用选样工厂).
+
+        适用于: 应收 / 应付 / 借款 / 长投 — 共享过滤 + 0 余额剔除 + 重要性/原因派生.
+        应收类还会再做一轮"阈值以下随机补充", 由 _select_receivables 自行扩展.
+        """
         out: list[SubjectSelection] = []
         for d in groups.values():
+            if account_codes_filter and not (d["account_codes"] & account_codes_filter):
+                continue
             bal = d["ending_balance"]
             if abs(bal) < 1e-6 and not req.include_zero_balance:
                 continue
             out.append(
-                SubjectSelection(
-                    account_code=", ".join(sorted(d["account_codes"])) or "1511",
-                    account_name=", ".join(sorted(d["account_names"])) or "长期股权投资",
-                    party_type=PARTY_TYPE_INVESTMENT,
-                    party_name=d["party_name"],
-                    party_id=d["party_id"],
-                    book_balance=round(bal, 2),
-                    book_balance_date=None,
-                    subject_matters=inv_subjects,
-                    importance="A",
-                    selection_reason=f"投资余额 {bal:,.2f}，必发",
-                    contact_info=None,
-                    account_codes=sorted(d["account_codes"]),
+                self._build_subject_selection(
+                    d,
+                    party_type=party_type,
+                    default_account=default_account,
+                    default_account_name=default_account_name,
+                    default_subjects=default_subjects,
+                    importance=importance_fn(bal),
+                    reason=reason_fn(bal),
                 )
             )
         return out
+
+    @staticmethod
+    def _build_subject_selection(
+        d: dict[str, Any],
+        *,
+        party_type: str,
+        default_account: str,
+        default_account_name: str,
+        default_subjects: list[str],
+        importance: str,
+        reason: str,
+    ) -> SubjectSelection:
+        """组装单个 SubjectSelection (与选样逻辑无关的纯结构)."""
+        bal = d["ending_balance"]
+        account_codes = d.get("account_codes") or set()
+        account_names = d.get("account_names") or set()
+        return SubjectSelection(
+            account_code=", ".join(sorted(account_codes)) or default_account,
+            account_name=", ".join(sorted(account_names)) or default_account_name,
+            party_type=party_type,
+            party_name=d["party_name"],
+            party_id=d["party_id"],
+            book_balance=round(bal, 2),
+            book_balance_date=None,
+            subject_matters=default_subjects,
+            importance=importance,
+            selection_reason=reason,
+            contact_info=None,
+            account_codes=sorted(account_codes),
+        )
 
     @staticmethod
     def _get_default_subjects(code: str) -> list[str]:

@@ -47,7 +47,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import logging

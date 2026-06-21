@@ -1,11 +1,10 @@
 """Round 29 P1 — report_generator.py 单测.
 
-覆盖 ``app/services/report_generator.py`` 4 个核心类:
+覆盖 ``app/services/report_generator.py`` 3 个核心类 (ReportScheduler 已删):
   1. ComprehensiveReportGenerator.generate_word_report  —  Word 报告生成
   2. InteractiveReportGenerator.generate_dashboard_data  —  Web 仪表盘数据
   3. InteractiveReportGenerator.generate_trend_data      —  趋势数据
   4. PDFReportGenerator.generate_pdf                    —  PDF 报告
-  5. ReportScheduler                                    —  报告调度 CRUD
 
 设计要点:
   - 不写磁盘, 全部 in-memory BytesIO 验证
@@ -27,7 +26,6 @@ from app.services.report_generator import (
     ComprehensiveReportGenerator,
     InteractiveReportGenerator,
     PDFReportGenerator,
-    ReportScheduler,
 )
 
 
@@ -300,53 +298,6 @@ class TestInteractiveReportGenerator:
         assert result["financial_summary"]["revenue"] == 0
         assert result["risk_assessment"]["level"] == "中"  # 默认
         assert result["balance_status"]["is_balanced"] is False  # 默认 False
-
-
-# ============================================================
-# Task 4: ReportScheduler
-# ============================================================
-
-
-class TestReportScheduler:
-    """``ReportScheduler`` 调度 CRUD."""
-
-    def test_schedule_and_list(self):
-        sch = ReportScheduler()
-        s1 = sch.schedule_report(
-            project_id=1, report_type="comprehensive",
-            frequency="monthly", recipients=["a@example.com"],
-        )
-        s2 = sch.schedule_report(
-            project_id=2, report_type="dashboard",
-            frequency="weekly", recipients=["b@example.com"],
-        )
-        assert s1["id"] == 1
-        assert s2["id"] == 2
-        assert s1["status"] == "active"
-        # 全量
-        all_sch = sch.get_scheduled_reports()
-        assert len(all_sch) == 2
-        # 按 project 过滤
-        proj1 = sch.get_scheduled_reports(project_id=1)
-        assert len(proj1) == 1
-        assert proj1[0]["project_id"] == 1
-
-    def test_cancel_schedule(self):
-        sch = ReportScheduler()
-        s = sch.schedule_report(
-            project_id=1, report_type="comprehensive",
-            frequency="monthly", recipients=["a@example.com"],
-        )
-        assert sch.cancel_schedule(s["id"]) is True
-        # 列表里 status 应该是 cancelled
-        listed = sch.get_scheduled_reports(project_id=1)
-        assert listed[0]["status"] == "cancelled"
-        # 取消不存在的 ID 返回 False
-        assert sch.cancel_schedule(999) is False
-
-    def test_cancel_nonexistent_returns_false(self):
-        sch = ReportScheduler()
-        assert sch.cancel_schedule(999) is False
 
 
 # ============================================================

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.db.auth import AuditLog, AUDIT_ACTION_CREATE
+from app.utils.like_helpers import escape_like as _escape_like
 
 logger = logging.getLogger(__name__)
 
@@ -143,19 +144,6 @@ async def record_audit_log(
     except Exception as exc:  # noqa: BLE001
         logger.exception("写审计轨迹失败 (action=%s, resource=%s): %s", action, resource_type, exc)
         return None
-
-
-def _escape_like(text: str) -> str:
-    """转义 SQL LIKE 通配符 — 防止用户输入 % / _ 触发全表扫描.
-
-    配合 SQLAlchemy 的 ``escape="\\"`` 使用. 注意: SQLAlchemy 把
-    Python 字符串里的 ``"\\\\"`` 当作 SQL 层的单个反斜杠 escape 字符,
-    所以我们要先把用户输入里的 ``\\`` 替换为 ``\\\\`` (Python 串里的
-    两个反斜杠 = SQL 层的单个反斜杠), 再用单反斜杠转义 ``%`` 和 ``_``.
-    """
-    if not text:
-        return ""
-    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 async def query_audit_logs(
