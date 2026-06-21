@@ -43,6 +43,11 @@ class ConfirmationExporter:
                 if not isinstance(subjects, list):
                     subjects = [str(subjects)]
             except Exception:
+                # round 36 P1: 之前静默赋空, 函证项一栏空着, 审计师误以为确实没函证项
+                logger.exception(
+                    "confirmation excel_exporter: subject_matters 解析失败 item_id=%s, 退化为空",
+                    getattr(it, "id", None),
+                )
                 subjects = []
             rows.append(
                 {
@@ -66,22 +71,22 @@ class ConfirmationExporter:
     @staticmethod
     def _letters_df(letters: Iterable[Any]) -> pd.DataFrame:
         rows: list[dict[str, Any]] = []
-        for l in letters:
+        for lt in letters:
             rows.append(
                 {
-                    "函证编号": l.letter_no,
-                    "对方": getattr(l, "item", None) and l.item.party_name or "",
-                    "类型": PARTY_TYPE_LABELS.get(l.letter_type, l.letter_type),
-                    "发函日期": l.sent_date.strftime("%Y-%m-%d") if l.sent_date else "",
-                    "发函方式": l.sent_method,
-                    "发函人": l.sent_by or "",
-                    "收件人": l.recipient or "",
-                    "快递单号": l.courier_no or "",
-                    "预计回函日": l.expected_reply_date.strftime("%Y-%m-%d")
-                    if l.expected_reply_date
+                    "函证编号": lt.letter_no,
+                    "对方": getattr(lt, "item", None) and lt.item.party_name or "",
+                    "类型": PARTY_TYPE_LABELS.get(lt.letter_type, lt.letter_type),
+                    "发函日期": lt.sent_date.strftime("%Y-%m-%d") if lt.sent_date else "",
+                    "发函方式": lt.sent_method,
+                    "发函人": lt.sent_by or "",
+                    "收件人": lt.recipient or "",
+                    "快递单号": lt.courier_no or "",
+                    "预计回函日": lt.expected_reply_date.strftime("%Y-%m-%d")
+                    if lt.expected_reply_date
                     else "",
-                    "催办次数": l.reminder_count,
-                    "状态": l.letter_status,
+                    "催办次数": lt.reminder_count,
+                    "状态": lt.letter_status,
                 }
             )
         return pd.DataFrame(rows)
@@ -163,8 +168,8 @@ class ConfirmationExporter:
             d = by_type[PARTY_TYPE_LABELS.get(it.party_type, it.party_type)]
             d["函证对象数"] += 1
             d["账面金额合计"] += it.book_balance or 0
-        for l in letters_list:
-            item = l.item
+        for lt in letters_list:
+            item = lt.item
             if not item:
                 continue
             d = by_type[PARTY_TYPE_LABELS.get(item.party_type, item.party_type)]
@@ -209,7 +214,7 @@ class ConfirmationExporter:
         letters_list = list(letters)
         items_list = list(items)
         by_item_id: dict[int, ConfirmationLetter] = {
-            l.item_id: l for l in letters_list if l.item_id
+            lt.item_id: lt for lt in letters_list if lt.item_id
         }
 
         rows = []
@@ -217,19 +222,19 @@ class ConfirmationExporter:
             # P0 修复: 用常量代替硬编码字符串
             if it.status not in (ITEM_STATUS_SENT, ITEM_STATUS_NO_REPLY):
                 continue
-            l = by_item_id.get(it.id)
-            if l and l.letter_status != "sent":
+            lt = by_item_id.get(it.id)
+            if lt and lt.letter_status != "sent":
                 continue
             rows.append(
                 {
                     "对方": it.party_name,
                     "类型": PARTY_TYPE_LABELS.get(it.party_type, it.party_type),
                     "账面余额": it.book_balance or 0.0,
-                    "发函日期": l.sent_date.strftime("%Y-%m-%d") if l and l.sent_date else "",
-                    "预计回函日": l.expected_reply_date.strftime("%Y-%m-%d")
-                    if l and l.expected_reply_date
+                    "发函日期": lt.sent_date.strftime("%Y-%m-%d") if lt and lt.sent_date else "",
+                    "预计回函日": lt.expected_reply_date.strftime("%Y-%m-%d")
+                    if lt and lt.expected_reply_date
                     else "",
-                    "催办次数": l.reminder_count if l else 0,
+                    "催办次数": lt.reminder_count if lt else 0,
                     "状态": ITEM_STATUS_LABELS.get(it.status, it.status),
                 }
             )

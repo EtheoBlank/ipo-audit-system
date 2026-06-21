@@ -140,7 +140,18 @@ class RelatedPartyAIInferer:
         )
         customers = [{"name": r[0], "count": int(r[1])} for r in cust_rows if r[0]]
 
-        # 3) 拉供应商 (序时账"应付/采购"科目辅助核算 — 简化用关键词 "应付" 命中)
+        # 3) 拉供应商 (P0 修复: 用 account_code 准则前缀白名单替代 like('%应付%') 模糊匹配)
+        #    老实现用 account_name LIKE '%应付%', 会误伤:
+        #      - 应付职工薪酬 (2211)   → 含 "应付" 但不是供应商
+        #      - 应付福利费     (2241) → 含 "应付" 但不是供应商
+        #      - 预付账款       (1122) → 不含 "应付" 但其实是预付供应商款
+        #      - 预提费用       (2241) → 含 "应付" 边缘, 不是供应商
+        #    准则规定的"供应商应付/预付"科目编码:
+        #      1122 预付账款                 — pre-paid supplier
+        #      2202 应付账款                 — supplier payable
+        #      2203 预收账款                 — 客户预付, 不算供应商, 不在白名单
+        #      2241 其他应付款               — 多为费用/押金, 不算供应商
+        #    兜底: account_name 仍带 "职工/薪酬/福利" 关键字 → 直接跳过, 防止少数科目编码异常的项目
         sup_rows = list(
             (
                 await db.execute(
@@ -151,13 +162,30 @@ class RelatedPartyAIInferer:
                     .where(
                         ChronologicalAccount.project_id == project_id,
                         ChronologicalAccount.auxiliary_accounting.isnot(None),
-                        ChronologicalAccount.account_name.like("%应付%"),
+                        # P0 修复: 4 位/多位科目编码前缀白名单
+                        # 1122 预付账款 | 2202 应付账款 | 2201 应付票据 (供应商票据)
+                        # 2241 预提费用 已故意从白名单移除 — 不是供应商
+                        # 2203 预收账款 已故意从白名单移除 — 是客户预付, 不是供应商
+                        (
+                            ChronologicalAccount.account_code.like("1122%")
+                            | ChronologicalAccount.account_code.like("2201%")
+                            | ChronologicalAccount.account_code.like("2202%")
+                        ),
                     )
                     .group_by(ChronologicalAccount.auxiliary_accounting)
                 )
             ).all()
         )
-        suppliers = [{"name": r[0], "count": int(r[1])} for r in sup_rows if r[0]]
+        suppliers = []
+        for r in sup_rows:
+            name = r[0]
+            if not name:
+                continue
+            # P0 兜底: 即使 account_code 异常, account_name 关键词二次过滤
+            # raw 来自 auxiliary_accounting, 此处不能再取 account_name — 用名字本身体检
+            if "职工" in name or "薪酬" in name or "福利" in name:
+                continue
+            suppliers.append({"name": name, "count": int(r[1])})
 
         # 4) 已知关联方 (供 LLM 参考)
         existing_rps = list(
@@ -195,7 +223,8 @@ class RelatedPartyAIInferer:
             except DeepSeekError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                logger.warning("AI 推断单批失败 (batch start=%s): %s", start, exc)
+                # round 36 P1: warning 留不下 traceback, 改 exception
+                logger.exception("AI 推断单批失败 (batch start=%s): %s", start, exc)
                 continue
 
             for cand in (payload.get("candidates") or [])[:max_candidates]:

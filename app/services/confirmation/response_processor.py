@@ -36,6 +36,11 @@ class ResponseParseError(RuntimeError):
     """Raised when the response cannot be parsed."""
 
 
+# 合法 response_status 白名单 — 与 SYS_PROMPT_RESPONSE line 47 对齐
+# AI 输出不在此集合时, 记 warning + fallback 到 'unclear'
+_ALLOWED_RESPONSE_STATUS = frozenset({"match", "partial", "mismatch", "reject", "unclear"})
+
+
 # ---- Prompt -----------------------------------------------------------
 
 
@@ -115,6 +120,20 @@ class ConfirmationResponseProcessor:
 
     # ---- AI parse -----------------------------------------------------
 
+    @staticmethod
+    def _sanitize_response_status(raw: Any) -> str:
+        """P0 修复: 校验 AI 返回的 response_status, 非法值 fallback 'unclear'.
+
+        旧版直接 str(...) 入库, 任意字符串都接受, 下游筛选/统计会出错.
+        """
+        s = str(raw or "").strip().lower()
+        if not s:
+            return "unclear"
+        if s in _ALLOWED_RESPONSE_STATUS:
+            return s
+        logger.warning("AI 返回非法 response_status=%r, fallback to 'unclear'", raw)
+        return "unclear"
+
     async def parse(self, ocr_text: str) -> ParsedResponse:
         if not ocr_text or not ocr_text.strip():
             return ParsedResponse(response_status="unclear", response_summary="OCR 文本为空")
@@ -136,7 +155,7 @@ class ConfirmationResponseProcessor:
             logger.warning("回函 AI parse failed: %s, fallback to heuristic", exc)
             return _heuristic_parse(ocr_text)
 
-        result.response_status = str(data.get("response_status") or "unclear").strip()
+        result.response_status = self._sanitize_response_status(data.get("response_status"))
         result.amount_confirmed = _to_float(data.get("amount_confirmed")) or 0.0
         result.amount_difference = _to_float(data.get("amount_difference")) or 0.0
         result.difference_reason = (data.get("difference_reason") or "") or None
@@ -144,8 +163,13 @@ class ConfirmationResponseProcessor:
         if rd:
             try:
                 result.received_date = datetime.fromisoformat(rd[:10])
-            except ValueError:
-                pass
+            except ValueError as date_exc:
+                # 日期格式异常 (AI 偶尔返回 "2024/01/15" / "2024年1月" / 乱七八糟)
+                # 留痕便于排查, 不阻断主流程
+                logger.warning(
+                    "ConfirmationResponse AI received_date 解析失败 raw=%r exc=%s",
+                    rd[:32], date_exc,
+                )
         result.response_method = str(data.get("response_method") or "扫描件")
         result.subjects_detail = data.get("subjects_detail") or {}
         result.response_summary = str(data.get("response_summary") or "")

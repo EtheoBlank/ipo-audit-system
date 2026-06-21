@@ -1,5 +1,6 @@
 """Streamlit 页面 — 自助知识库.
 
+# P1 widget keys (round 32): kb_top_k, batch_top_n, batch_audit_obj, batch_include_reg
 - 上传书籍 (PDF/EPUB/DOCX/TXT/MD)
 - 书籍列表 + 索引状态
 - 重建索引 / 删除
@@ -8,12 +9,12 @@
 
 from __future__ import annotations
 
-from typing import Optional
 
-import requests
 import streamlit as st
 
-API_BASE_URL = "http://localhost:8000"
+# P0 安全修复: 使用共享 api_request (带 Authorization header + 401 处理)
+from frontend._components import apply_feishu_theme, page_header
+from frontend._http import api_request as _api, API_BASE_URL
 
 KB_CATEGORIES = [
     "审计实务",
@@ -26,20 +27,12 @@ KB_CATEGORIES = [
 ]
 
 
-def _api(method: str, path: str, **kw):
-    try:
-        r = requests.request(method, f"{API_BASE_URL}{path}", timeout=120, **kw)
-        r.raise_for_status()
-        if r.status_code == 204 or not r.content:
-            return {}
-        return r.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"调用 {path} 失败: {e}")
-        return None
-
-
 def show_knowledge_base():
-    st.markdown('<p class="sub-header">📚 自助知识库</p>', unsafe_allow_html=True)
+    apply_feishu_theme()
+    page_header('📚', '自助知识库', 'PDF / EPUB / DOCX / TXT / MD 实务书籍, 三种嵌入 provider 检索')
+
+    # [飞书化] st.markdown('<p class="sub-header">📚 自助知识库</p>', unsafe_allow_html=True)  # 已被 page_header() 替代
+
     st.caption(
         "上传你喜欢的实务书籍 / 案例集 / 准则解读 → 系统切块向量化 → "
         "生成审计说明时自动调用相似案例。"
@@ -167,9 +160,17 @@ def show_knowledge_base():
                         _api("POST", f"/api/knowledge-base/books/{b['id']}/reindex")
                         st.success("已加入队列")
                 with c2:
-                    if st.button("🗑️ 删除", key=f"del_{b['id']}"):
-                        _api("DELETE", f"/api/knowledge-base/books/{b['id']}")
-                        st.rerun()
+                    # P0: 二次确认防误删
+                    confirm_del_key = f"confirm_del_book_{b['id']}"
+                    if st.session_state.get(confirm_del_key):
+                        if st.button("确认删除", key=f"del_{b['id']}_confirm", type="primary"):
+                            _api("DELETE", f"/api/knowledge-base/books/{b['id']}")
+                            st.session_state.pop(confirm_del_key, None)
+                            st.rerun()
+                    else:
+                        if st.button("🗑️ 删除", key=f"del_{b['id']}"):
+                            st.session_state[confirm_del_key] = True
+                            st.warning("⚠️ 再点一次确认删除")
 
     # —————————————————————————————
     # 直接检索
@@ -180,6 +181,7 @@ def show_knowledge_base():
             "查询内容",
             placeholder="例如：制造业期末存货跌价测试的处理方式；客户函证差异的替代程序",
             height=80,
+            key="kb_search_query",  # round 31 widget key
         )
         c1, c2 = st.columns(2)
         with c1:
@@ -187,7 +189,7 @@ def show_knowledge_base():
         with c2:
             category = st.selectbox("限定分类", [""] + KB_CATEGORIES, key="search_cat")
 
-        if query and st.button("🔍 检索"):
+        if query and st.button("🔍 检索", key="kb_search_btn"):  # round 31 widget key
             payload = {"query": query, "top_k": int(top_k)}
             if category:
                 payload["category"] = category
@@ -228,7 +230,7 @@ def show_knowledge_base():
             return
 
         proj_map = {f"{p['id']} - {p['name']}": p for p in projects}
-        sel = st.selectbox("选择项目", list(proj_map.keys()))
+        sel = st.selectbox("选择项目", list(proj_map.keys()), key="kb_proj_sel")  # round 31 widget key
         project = proj_map[sel]
 
         tab_single, tab_batch = st.tabs(["🎯 单科目", "📦 批量写回底稿"])
@@ -236,8 +238,8 @@ def show_knowledge_base():
         with tab_single:
             c1, c2 = st.columns(2)
             with c1:
-                ac_code = st.text_input("科目编码", placeholder="例如 1122")
-                ac_name = st.text_input("科目名称", placeholder="例如 应收账款")
+                ac_code = st.text_input("科目编码", placeholder="例如 1122", key="kb_ac_code")  # round 31 widget key
+                ac_name = st.text_input("科目名称", placeholder="例如 应收账款", key="kb_ac_name")  # round 31 widget key
             with c2:
                 obj = st.selectbox(
                     "审计目标",
@@ -252,11 +254,12 @@ def show_knowledge_base():
                         "在建工程转固",
                         "公允价值计量",
                     ],
+                    key="kb_audit_obj",  # round 31 widget key
                 )
                 kb_cat = st.selectbox("限定知识库分类", [""] + KB_CATEGORIES, key="ann_cat")
-            risk = st.text_area("风险点描述 (可选)")
+            risk = st.text_area("风险点描述 (可选)", key="kb_risk")  # round 31 widget key
 
-            if st.button("🪄 生成审计说明", type="primary"):
+            if st.button("🪄 生成审计说明", type="primary", key="kb_gen_note"):  # round 31 widget key
                 payload = {
                     "project_id": project["id"],
                     "account_code": ac_code or None,
@@ -273,7 +276,9 @@ def show_knowledge_base():
                     if not r.get("ai_enabled"):
                         st.info("AI 未启用 — 当前返回的是基于检索结果的结构化骨架。")
                     st.markdown("### 生成的审计说明")
-                    st.markdown(r.get("note", ""))
+                    # P0 安全: LLM 输出经 safe_inline_text 转义后再 markdown
+                    from frontend._components.safe_render import safe_inline_text
+                    st.markdown(safe_inline_text(r.get("note", ""), max_len=8000))
 
                     with st.expander("引用 — 知识库"):
                         for k in r.get("references_kb", []):
@@ -300,6 +305,7 @@ def show_knowledge_base():
                 "底稿文件名",
                 placeholder="例如 科目明细表_2024.xlsx",
                 help="从「底稿生成」页拿到的 file_name",
+                key="kb_wb_fname",  # round 31 widget key
             )
             c1, c2 = st.columns(2)
             with c1:

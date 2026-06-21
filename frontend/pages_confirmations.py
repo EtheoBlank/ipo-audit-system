@@ -12,40 +12,22 @@ Tabs:
 
 from __future__ import annotations
 
-import json
-from datetime import date, datetime, timedelta
-from typing import Any, Optional
+from datetime import date, timedelta
 
 import pandas as pd
-import requests
 import streamlit as st
 
-API_BASE_URL = "http://localhost:8000"
+# P0 安全修复: 使用共享 api_request (带 Authorization header + 401 处理)
+from frontend._http import api_request
+from frontend._components import apply_feishu_theme, page_header
+from frontend._components.safe_render import safe_inline_text
 
 
-def api_request(method: str, endpoint: str, **kwargs) -> Optional[Any]:
-    try:
-        url = f"{API_BASE_URL}{endpoint}"
-        resp = requests.request(method, url, timeout=60, **kwargs)
-        if resp.status_code >= 400:
-            try:
-                detail = resp.json().get("detail", resp.text)
-            except Exception:
-                detail = resp.text
-            st.error(f"API {resp.status_code}: {detail}")
-            return None
-        if resp.headers.get("content-type", "").startswith("application/json"):
-            return resp.json()
-        return resp.content
-    except requests.exceptions.ConnectionError:
-        st.error("无法连接到后端服务")
-        return None
-    except Exception as e:  # noqa: BLE001
-        st.error(f"请求失败: {e}")
-        return None
+def _current_user_name() -> str:
+    """返回当前登录用户姓名; 未登录时返回空字符串 (避免 '审计师' 歧义)."""
+    user = st.session_state.get("auth_user") or {}
+    return user.get("full_name") or user.get("username") or ""
 
-
-@st.cache_data(ttl=60)
 def fetch_subjects():
     return api_request("GET", "/api/confirmations/subjects") or {}
 
@@ -55,20 +37,27 @@ def fetch_projects():
     return api_request("GET", "/api/projects/") or []
 
 
+@st.cache_data
 def fetch_cases(project_id: int):
     return api_request("GET", f"/api/confirmations/cases?project_id={project_id}") or []
 
 
+@st.cache_data
 def fetch_case_items(case_id: int):
     return api_request("GET", f"/api/confirmations/cases/{case_id}/items") or []
 
 
+@st.cache_data
 def fetch_case_summary(case_id: int):
     return api_request("GET", f"/api/confirmations/cases/{case_id}/summary") or {}
 
 
 def show_confirmations():
-    st.markdown("## 📬 函证管理 (Confirmation)")
+    apply_feishu_theme()
+    page_header('📬', '函证管理', '财政部模板 + 锁定金额快照 + 回函 OCR + AI 解析 + 差异统计')
+
+    # [飞书化]     st.markdown("## 📬 函证管理 (Confirmation)")  # 已被 page_header() 替代
+
     st.caption(
         "从账套自动生成银行/客户/供应商/其他往来询证函统计表 → "
         "确定发函后锁定 → 回函照片 OCR + AI 解析 → 回函情况自动统计"
@@ -86,6 +75,7 @@ def show_confirmations():
         "选择审计项目",
         options=projects,
         format_func=lambda p: f"#{p['id']} {p['name']} - {p['company_name']} ({p['fiscal_year']})",
+        key="conf_proj",  # round 31 widget key
     )
     if not proj:
         return
@@ -131,11 +121,11 @@ def show_confirmations():
                     for s in subjects
                 ]
             )
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
             with st.expander("📄 银行询证函官方模板字段 (26 项)", expanded=False):
                 bank_fields = catalogue.get("bank_template_fields", [])
-                st.dataframe(pd.DataFrame(bank_fields), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(bank_fields, height=400), use_container_width=True, hide_index=True)
 
             with st.expander("📄 客户/供应商函证默认函证项", expanded=False):
                 for s in subjects:
@@ -170,7 +160,7 @@ def show_confirmations():
                             "生成时间": c["generated_at"][:19] if c.get("generated_at") else "",
                         }
                     )
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(rows, height=400), use_container_width=True, hide_index=True)
             else:
                 st.info("该项目下尚无案卷")
 
@@ -181,7 +171,7 @@ def show_confirmations():
                 period_end = st.date_input("报告期截止日", value=date(fiscal_year, 12, 31))
                 notes = st.text_area("备注", value="")
                 generated_by = st.text_input(
-                    "生成人", value=st.session_state.get("user_name", "审计师")
+                    "生成人", value=_current_user_name()
                 )
                 if st.form_submit_button("✅ 创建案卷", type="primary"):
                     payload = {
@@ -213,6 +203,7 @@ def show_confirmations():
                     f"#{c['id']} {c['case_name']} ({c['period_end']})"
                     + (" 🔒" if c["is_locked"] else "")
                 ),
+                key="conf_case",  # round 31 widget key
             )
             if case and case["is_locked"]:
                 st.warning("⚠️ 案卷已锁定, 无法重新生成。请新建案卷。")
@@ -220,18 +211,18 @@ def show_confirmations():
                 st.markdown("#### 选样规则")
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    bank_threshold = st.number_input("银行阈值 (0=全发)", value=0.0, min_value=0.0)
-                    customer_threshold = st.number_input("客户阈值", value=100000.0, min_value=0.0)
+                    bank_threshold = st.number_input("银行阈值 (0=全发)", value=0.0, min_value=0.0, key="conf_bank_thr")  # round 31 widget key
+                    customer_threshold = st.number_input("客户阈值", value=100000.0, min_value=0.0, key="conf_cust_thr")  # round 31 widget key
                 with col2:
                     supplier_threshold = st.number_input(
-                        "供应商阈值", value=100000.0, min_value=0.0
+                        "供应商阈值", value=100000.0, min_value=0.0, key="conf_supp_thr",  # round 31 widget key
                     )
-                    other_threshold = st.number_input("其他往来阈值", value=50000.0, min_value=0.0)
+                    other_threshold = st.number_input("其他往来阈值", value=50000.0, min_value=0.0, key="conf_other_thr")  # round 31 widget key
                 with col3:
                     sample_ratio = st.slider("阈值以下随机抽样比例", 0.0, 0.5, 0.10, 0.05)
-                    include_zero = st.checkbox("包含零余额", value=False)
+                    include_zero = st.checkbox("包含零余额", value=False, key="conf_inc_zero")  # round 31 widget key
 
-                if st.button("🧮 生成统计表", type="primary"):
+                if st.button("🧮 生成统计表", type="primary", key="conf_gen_stats"):  # round 31 widget key
                     payload = {
                         "case_id": case["id"],
                         "bank_threshold": bank_threshold,
@@ -242,7 +233,7 @@ def show_confirmations():
                         "random_seed": 42,
                         "include_zero_balance": include_zero,
                         "persist": True,
-                        "generated_by": st.session_state.get("user_name", "审计师"),
+                        "generated_by": _current_user_name(),
                     }
                     with st.spinner("正在从账套聚合并选样..."):
                         r = api_request(
@@ -262,7 +253,7 @@ def show_confirmations():
                                     for k, v in r["by_party_type"].items()
                                 ]
                             )
-                            st.dataframe(tdf, use_container_width=True, hide_index=True)
+                            st.dataframe(tdf, use_container_width=True, hide_index=True, height=400)
 
                 # 现有 items
                 items = fetch_case_items(case["id"])
@@ -283,7 +274,7 @@ def show_confirmations():
                         }
                         for it in items
                     ]
-                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(rows, height=400), use_container_width=True, hide_index=True)
 
     # ============================================================
     # Tab 4: 确定发函
@@ -314,9 +305,9 @@ def show_confirmations():
             col1, col2, col3 = st.columns([1, 1, 2])
             with col1:
                 if not case["is_locked"]:
-                    if st.button("🔒 确定发函 (锁定案卷)", type="primary"):
+                    if st.button("🔒 确定发函 (锁定案卷)", type="primary", key="conf_lock_case"):  # round 31 widget key
                         payload = {
-                            "locked_by": st.session_state.get("user_name", "审计师"),
+                            "locked_by": _current_user_name(),
                             "lock_reason": "已确认函证对象清单",
                         }
                         r = api_request(
@@ -329,7 +320,7 @@ def show_confirmations():
                     st.success("🔒 案卷已锁定")
             with col2:
                 if case["is_locked"]:
-                    if st.button("🔓 解锁", help="仅当无发函时允许"):
+                    if st.button("🔓 解锁", help="仅当无发函时允许", key="conf_unlock_case"):  # round 31 widget key
                         r = api_request("POST", f"/api/confirmations/cases/{case['id']}/unlock")
                         if r:
                             st.success("已解锁")
@@ -362,7 +353,7 @@ def show_confirmations():
                                         "发函方式", ["邮寄", "电子邮件", "跟函", "电邮+邮寄"]
                                     )
                                     sent_by = st.text_input(
-                                        "发函人", value=st.session_state.get("user_name", "审计师")
+                                        "发函人", value=_current_user_name()
                                     )
                                 with col2:
                                     recipient = st.text_input("收件人", value=it["party_name"])
@@ -402,6 +393,7 @@ def show_confirmations():
                                 content = api_request(
                                     "GET",
                                     f"/api/confirmations/letters/{it['sent_letter_id']}/download",
+                                    expect_bytes=True,
                                 )
                                 if content:
                                     st.download_button(
@@ -443,6 +435,7 @@ def show_confirmations():
                         format_func=lambda it: (
                             f"#{it['id']} {it['party_name']} - {it['book_balance']:,.2f} - {it['status_label']}"
                         ),
+                        key="conf_sent_item",  # round 31 widget key
                     )
                     if sel:
                         letter_id = sel["sent_letter_id"]
@@ -451,7 +444,10 @@ def show_confirmations():
                         st.markdown("---")
 
                         mode = st.radio(
-                            "录入方式", ["📷 上传回函照片 (OCR+AI)", "✍️ 手工录入"], horizontal=True
+                            "录入方式",
+                            ["📷 上传回函照片 (OCR+AI)", "✍️ 手工录入"],
+                            horizontal=True,
+                            key="conf_input_mode",  # round 31 widget key
                         )
 
                         if mode.startswith("📷"):
@@ -464,8 +460,9 @@ def show_confirmations():
                                 "AI 解析后自动回填状态",
                                 value=True,
                                 help="取消则只解析不修改状态, 需人工确认",
+                                key="conf_auto_confirm",  # round 31 widget key
                             )
-                            if uploaded and st.button("🚀 OCR + AI 解析", type="primary"):
+                            if uploaded and st.button("🚀 OCR + AI 解析", type="primary", key="conf_ocr_run"):  # round 31 widget key
                                 files = {
                                     "file": (
                                         uploaded.name,
@@ -484,7 +481,7 @@ def show_confirmations():
                                     st.success(r.get("message", "OK"))
                                     parsed = r.get("parsed_data") or {}
                                     if parsed:
-                                        with st.expander("AI 解析结果", expanded=True):
+                                        with st.expander("AI 解析结果", expanded=False):
                                             st.json(parsed)
                                     st.rerun()
                         else:
@@ -521,7 +518,7 @@ def show_confirmations():
                                         "difference_reason": difference_reason,
                                         "response_summary": response_summary,
                                         "auditor_note": auditor_note,
-                                        "confirmed_by": st.session_state.get("user_name", "审计师"),
+                                        "confirmed_by": _current_user_name(),
                                     }
                                     r = api_request(
                                         "POST",
@@ -553,7 +550,7 @@ def show_confirmations():
                             st.markdown(f"**回函方式**: {resp.get('response_method')}")
                             st.markdown(f"**差异原因**: {resp.get('difference_reason') or '-'}")
                             st.markdown(f"**回函摘要**: {resp.get('response_summary') or '-'}")
-                            st.markdown(f"**审计师备注**: {resp.get('auditor_note') or '-'}")
+                            st.markdown(f"**审计师备注**: {safe_inline_text(resp.get('auditor_note', ''), max_len=500) or '-'}")
                             if resp.get("photos"):
                                 st.markdown(f"**已上传 {len(resp['photos'])} 张回函照片**")
 
@@ -600,7 +597,7 @@ def show_confirmations():
                     if summary.get("by_party_type"):
                         st.markdown("#### 按函证方类型")
                         df = pd.DataFrame(summary["by_party_type"])
-                        st.dataframe(df, use_container_width=True, hide_index=True)
+                        st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
                     # 状态分布
                     col1, col2 = st.columns(2)
@@ -613,7 +610,7 @@ def show_confirmations():
                                     for k, v in summary["status_summary"].items()
                                 ]
                             )
-                            st.dataframe(df, use_container_width=True, hide_index=True)
+                            st.dataframe(df, use_container_width=True, hide_index=True, height=400)
                     with col2:
                         st.markdown("#### 回函状态分布")
                         if summary.get("response_status_summary"):
@@ -623,18 +620,18 @@ def show_confirmations():
                                     for k, v in summary["response_status_summary"].items()
                                 ]
                             )
-                            st.dataframe(df, use_container_width=True, hide_index=True)
+                            st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
                     # 催办
                     if summary.get("no_reply_items"):
                         st.markdown("#### ⏰ 未回函催办")
                         df = pd.DataFrame(summary["no_reply_items"])
-                        st.dataframe(df, use_container_width=True, hide_index=True)
+                        st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
                     if summary.get("pending_items"):
                         st.markdown("#### ⏳ 待回函")
                         df = pd.DataFrame(summary["pending_items"])
-                        st.dataframe(df, use_container_width=True, hide_index=True)
+                        st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
     # ============================================================
     # Tab 7: 导出
@@ -654,8 +651,10 @@ def show_confirmations():
                 format_func=lambda c: f"#{c['id']} {c['case_name']} ({c['period_end']})",
                 key="exp_case",
             )
-            if case and st.button("📤 导出工作簿", type="primary"):
-                content = api_request("GET", f"/api/confirmations/cases/{case['id']}/export")
+            if case and st.button("📤 导出工作簿", type="primary", key="conf_export_wb"):  # round 31 widget key
+                content = api_request(
+                    "GET", f"/api/confirmations/cases/{case['id']}/export", expect_bytes=True
+                )
                 if content and isinstance(content, bytes):
                     st.download_button(
                         "下载 Excel",

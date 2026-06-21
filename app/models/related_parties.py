@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import List, Optional
 
@@ -14,6 +15,18 @@ from app.models.db.related_parties import (
     DISCLOSURE_GAP_REVIEW,
     DISCLOSURE_GAP_OK,
 )
+
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _validate_iso_date(v: Optional[str], field: str) -> Optional[str]:
+    """统一校验 YYYY-MM-DD 格式."""
+    if v is None or v == "":
+        return v
+    if not _ISO_DATE_RE.match(v):
+        raise ValueError(f"{field} 必须是 YYYY-MM-DD 格式")
+    return v
 
 
 # ============================================================
@@ -101,6 +114,11 @@ class RelationCreate(BaseModel):
     until_date: Optional[str] = Field(None, max_length=20)
     notes: Optional[str] = None
 
+    @field_validator("since_date", "until_date")
+    @classmethod
+    def _dates_iso(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_iso_date(v, "date")
+
 
 class RelationResponse(RelationCreate):
     id: int
@@ -170,6 +188,11 @@ class TransactionCreate(BaseModel):
     source_contract_no: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = None
 
+    @field_validator("period_start", "period_end")
+    @classmethod
+    def _period_iso(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_iso_date(v, "period")
+
 
 class TransactionResponse(TransactionCreate):
     id: int
@@ -187,6 +210,11 @@ class FairnessCheckRequest(BaseModel):
     transaction_ids: Optional[List[int]] = None
     party_id: Optional[int] = None
     period_end: Optional[str] = None
+
+    @field_validator("period_end")
+    @classmethod
+    def _period_end_iso(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_iso_date(v, "period_end")
 
 
 class FairnessCheckResponse(BaseModel):
@@ -216,6 +244,11 @@ class CapitalOccupationCreate(BaseModel):
     max_occupation_date: Optional[str] = None
     cleanup_status: str = Field(default="pending", pattern=r"^(pending|partial|cleared)$")
     notes: Optional[str] = None
+
+    @field_validator("period_start", "period_end", "max_occupation_date")
+    @classmethod
+    def _period_iso(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_iso_date(v, "date")
 
 
 class CapitalOccupationResponse(CapitalOccupationCreate):
@@ -312,6 +345,13 @@ class RelatedPartyReportRequest(BaseModel):
         ]
     )
     output_format: str = Field(default="docx", pattern=r"^(docx|xlsx)$")
+
+    @field_validator("period_end")
+    @classmethod
+    def _period_end_iso(cls, v: str) -> str:
+        if not _ISO_DATE_RE.match(v):
+            raise ValueError("period_end 必须是 YYYY-MM-DD 格式")
+        return v
 
 
 __all__ = [

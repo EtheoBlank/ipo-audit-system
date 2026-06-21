@@ -119,8 +119,9 @@ async def lifespan(app: FastAPI):
     settings.ensure_dirs()
 
     # Pack A — 生产护栏: JWT_SECRET 不能用 dev 默认值
-    if settings.AUTH_ENABLED and not settings.DEBUG:
-        # P0 第 2 轮修复 — 用 == 严格比较 (不再 startswith 假阳), + 长度校验
+    # P0 (round 32, 2026-06-20): AUTH_ENABLED=true 即便 DEBUG=True 也要校验
+    # 空串/默认值 — 因为生产部署若 DEBUG=True 也会被这个洞拖死
+    if settings.AUTH_ENABLED:
         _DEV_JWT_DEFAULTS = {
             "ipo-audit-dev-only-change-in-prod-please-use-secrets-token-urlsafe-32",
             "please-generate-a-random-secret-with-secrets-token-urlsafe-48-bytes",
@@ -128,12 +129,12 @@ async def lifespan(app: FastAPI):
         }
         if settings.JWT_SECRET in _DEV_JWT_DEFAULTS or len(settings.JWT_SECRET or "") < 32:
             logger.error(
-                "❌ 生产模式 (DEBUG=False) + AUTH_ENABLED=true, 但 JWT_SECRET "
-                "仍是 dev 默认值或长度不足 32 字节。请在 .env 设置强随机串后再启动: "
+                "❌ AUTH_ENABLED=true 但 JWT_SECRET 为空/默认值/长度不足 32 字节. "
+                "请在 .env 设置强随机串: "
                 'python -c "import secrets; print(secrets.token_urlsafe(48))"'
             )
             raise RuntimeError(
-                "JWT_SECRET must be set to a strong random string (>=32 bytes) in production"
+                "JWT_SECRET must be set to a strong random string (>=32 bytes) when AUTH_ENABLED=true"
             )
         # 启动自检: encode → decode roundtrip
         try:
@@ -172,6 +173,16 @@ async def lifespan(app: FastAPI):
         await stop_scheduler()
     except Exception:
         logger.exception("舆情调度器停止失败")
+
+    # 关闭数据库连接池，避免 Postgres/MySQL 上的连接泄漏
+    try:
+        from app.core.database import engine
+
+        await engine.dispose()
+        logger.info("数据库连接池已释放")
+    except Exception:
+        logger.exception("数据库引擎释放失败")
+
     logger.info("👋 %s 关闭", settings.APP_NAME)
 
 
@@ -225,20 +236,25 @@ def create_app() -> FastAPI:
                 "http://localhost:8501",
                 "http://127.0.0.1:8501",
                 "http://localhost:3000",
+                "http://127.0.0.1:3000",
             ]
         )
         allowed_origins = list(set(allowed_origins))
+
+    # Pack A — 审计轨迹中间件 (必须先于 CORS 添加, 因为 add_middleware 后加的包裹在最外层)
+    # 执行顺序: CORSMiddleware(外) → AuditLogMiddleware(中) → 路由(内)
+    app.add_middleware(AuditLogMiddleware)
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        # P0 安全修复: 收紧白名单 — 最小权限原则, 避免 allow_methods=['*'] + allow_headers=['*']
+        # 组合下 allow_origins 列表里任何 origin 都能用任意 method + 任意 header + 带 cookie
+        # 调用任意 API。改成显式白名单。
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
     )
-
-    # Pack A — 审计轨迹中间件 (放在 CORS 之后, 业务路由之前)
-    app.add_middleware(AuditLogMiddleware)
 
     # Include routers
     app.include_router(projects.router)

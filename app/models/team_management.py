@@ -6,10 +6,15 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# 控制字符白名单: \n 允许 (0x0A), 其余 0x00-0x1F 一律拒绝,
+# 0x7F (DEL) 也拒绝 — 避免 docx / PDF / Streamlit 渲染时被误读为注入载体.
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x09\x0b-\x1f\x7f]")
 
 
 # ============================================================
@@ -490,6 +495,7 @@ class ManagementRecommendationResponse(BaseModel):
     confirmed_at: Optional[datetime] = None
     is_confirmed: bool
     manager_notes: Optional[str] = None
+    notes_hash: Optional[str] = None  # P0 (2026-06-19, round25 #14): sha256 hex 前 8 位
 
     model_config = {"from_attributes": True}
 
@@ -510,15 +516,40 @@ class ManagementRecommendationResponse(BaseModel):
             "confirmed_at": obj.confirmed_at,
             "is_confirmed": obj.is_confirmed,
             "manager_notes": obj.manager_notes,
+            "notes_hash": getattr(obj, "notes_hash", None),
         }
         return super().model_validate(data, *args, **kwargs)
 
 
 class ManagementRecommendationConfirm(BaseModel):
-    """项目负责人确认管理建议。"""
+    """项目负责人确认管理建议.
 
-    manager_notes: Optional[str] = Field(None, description="负责人备注")
-    confirmed_by: str = Field(..., description="确认人姓名")
+    P1 (2026-06-19): 旧 confirmed_by 字段是自由文本, 服务端会从 token 取真实用户.
+    现在该字段降级为可选, 后端忽略其值; 保留 schema 字段防止破坏前端旧调用.
+
+    P0 (2026-06-19, round25 #14): ``manager_notes`` 加严校验.
+      - 长度上限 2000 字符 (审计追溯可读性 + 防止塞入巨大文本 DoS DB)
+      - 拒绝纯空白 / 仅含换行 (避免管理员留下"已绕过, 不需复核"等误导文本)
+      - 拒绝控制字符 (除 \n) — 防止 docx / 终端 / 日志渲染时被注入或破坏显示
+    服务端会在持久化时另算 ``notes_hash`` (sha256 hex 前 8 位) 留痕,
+    配合 ``confirmed_by_user_id`` 形成完整审计追溯.
+    """
+
+    manager_notes: Optional[str] = Field(
+        None, max_length=2000, description="负责人备注, 1-2000 字符, 不可纯空白, 不可含控制字符"
+    )
+    confirmed_by: Optional[str] = Field(None, description="已废弃, 服务端从 token 取真实用户")
+
+    @field_validator("manager_notes")
+    @classmethod
+    def _validate_manager_notes(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not v.strip():
+            raise ValueError("manager_notes 不能为纯空白")
+        if _CONTROL_CHAR_RE.search(v):
+            raise ValueError("manager_notes 含非法控制字符 (除 \\n 外 0x00-0x1F / 0x7F 不可用)")
+        return v
 
 
 class ManagementRecommendationRequest(BaseModel):

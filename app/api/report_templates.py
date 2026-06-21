@@ -70,7 +70,6 @@ def _parse_allowed_exts() -> set:
 
 @router.get("", response_model=ReportTemplateListResponse)
 async def list_templates(
-    firm_id: Optional[int] = None,
     report_type: Optional[str] = None,
     is_active: Optional[bool] = None,
     skip: int = Query(0, ge=0),
@@ -80,7 +79,7 @@ async def list_templates(
 ):
     total, items = await ReportTemplateService.list_templates(
         db,
-        firm_id=firm_id,
+        firm_id=current_user.firm_id,
         report_type=report_type,
         is_active=is_active,
         skip=skip,
@@ -100,11 +99,11 @@ async def upload_template(
     output_format: str = Form(REPORT_FORMAT_DOCX),
     version: str = Form("v1"),
     description: Optional[str] = Form(None),
-    firm_id: Optional[int] = Form(None),
     file: UploadFile = File(...),
     current_user: User = Depends(require_role(ROLE_MANAGER)),
     db: AsyncSession = Depends(get_db),
 ):
+    firm_id = current_user.firm_id
     if not _SAFE_CODE.match(template_code):
         raise HTTPException(status_code=400, detail="template_code 仅支持字母/数字/_/./-")
     if report_type not in ALL_REPORT_TYPES:
@@ -161,9 +160,9 @@ async def get_template(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tpl = await ReportTemplateService.get(db, template_id)
+    tpl = await ReportTemplateService.get(db, template_id, firm_id=current_user.firm_id)
     if tpl is None:
-        raise HTTPException(status_code=404, detail="模板不存在")
+        raise HTTPException(status_code=404, detail="模板不存在或无权访问")
     return ReportTemplateResponse.model_validate(tpl)
 
 
@@ -176,13 +175,14 @@ async def update_template(
 ):
     tpl = await ReportTemplateService.update(
         db,
+        firm_id=current_user.firm_id,
         template_id=template_id,
         template_name=payload.template_name,
         description=payload.description,
         is_active=payload.is_active,
     )
     if tpl is None:
-        raise HTTPException(status_code=404, detail="模板不存在")
+        raise HTTPException(status_code=404, detail="模板不存在或无权访问")
     await record_audit_log(
         db,
         user_id=current_user.id,
@@ -203,9 +203,9 @@ async def delete_template(
     current_user: User = Depends(require_role(ROLE_MANAGER)),
     db: AsyncSession = Depends(get_db),
 ):
-    ok = await ReportTemplateService.delete(db, template_id)
+    ok = await ReportTemplateService.delete(db, template_id, firm_id=current_user.firm_id)
     if not ok:
-        raise HTTPException(status_code=404, detail="模板不存在")
+        raise HTTPException(status_code=404, detail="模板不存在或无权访问")
     await record_audit_log(
         db,
         user_id=current_user.id,
@@ -225,9 +225,9 @@ async def download_template(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tpl = await ReportTemplateService.get(db, template_id)
+    tpl = await ReportTemplateService.get(db, template_id, firm_id=current_user.firm_id)
     if tpl is None:
-        raise HTTPException(status_code=404, detail="模板不存在")
+        raise HTTPException(status_code=404, detail="模板不存在或无权访问")
     return StreamingResponse(
         io.BytesIO(tpl.template_bytes),
         media_type="application/octet-stream",
@@ -241,9 +241,9 @@ async def analyze_template_api(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tpl = await ReportTemplateService.get(db, template_id)
+    tpl = await ReportTemplateService.get(db, template_id, firm_id=current_user.firm_id)
     if tpl is None:
-        raise HTTPException(status_code=404, detail="模板不存在")
+        raise HTTPException(status_code=404, detail="模板不存在或无权访问")
     analysis = analyze_template(tpl.template_bytes, tpl.output_format)
     return TemplateAnalyzeResponse(
         placeholders=analysis.placeholders,
@@ -263,6 +263,7 @@ async def render_template(
     try:
         rendered, out_name, history = await ReportTemplateService.render(
             db,
+            firm_id=current_user.firm_id,
             template_id=payload.template_id,
             context=payload.context or {},
             project_id=payload.project_id,
@@ -286,13 +287,17 @@ async def render_template(
         payload={"context_keys": list((payload.context or {}).keys())},
     )
 
+    # P1 安全 (2026-06-19): out_name 拼到 Content-Disposition 须防 ; / " 注入
+    # filename= 里出现 ;filename=evil.docx 会被部分代理解析错位
+    import re as _re_rt
+    _safe_name = _re_rt.sub(r"[^A-Za-z0-9_.\-一-龥]", "_", out_name)
     media = (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        if out_name.endswith(".docx")
+        if _safe_name.endswith(".docx")
         else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     return StreamingResponse(
         io.BytesIO(rendered),
         media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
+        headers={"Content-Disposition": f'attachment; filename="{_safe_name}"'},
     )

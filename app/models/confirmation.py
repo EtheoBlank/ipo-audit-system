@@ -9,15 +9,43 @@ Provides:
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.db_models import (
     ITEM_STATUS_LABELS,
     PARTY_TYPE_LABELS,
 )
+
+# P0 (2026-06-19, round25 #15): subject_matters 字段清洗.
+# 模板注入 / XSS / 控制字符污染 docx 输出, 一律拒绝.
+# 与 team_management.py 中的 _CONTROL_CHAR_RE 保持一致 — 0x7F (DEL) 也算非法.
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x09\x0b-\x1f\x7f]")
+
+# P0-11 (2026-06-19, round30): 锁定后白名单字段 (contact_person / contact_info /
+# selection_reason / importance / account_code / account_name / book_balance_date)
+# 直接进 docx 渲染, 必须拒收 XSS payload. 不引入 bleach (新增依赖, 风险), 用
+# regex 黑名单覆盖主流 XSS 向量: <script>/javascript:/data:text/html/on*=/
+# <iframe>/<object>/<embed>/<svg>/vbscript:/expression().
+_XSS_PATTERN = re.compile(
+    r"<script|javascript:|data:text/html|on\w+\s*=|"
+    r"<iframe|<object|<embed|</?\s*svg|"
+    r"vbscript:|expression\s*\(",
+    re.IGNORECASE,
+)
+
+
+def _no_xss_payload(v: Optional[str]) -> Optional[str]:
+    """P0-11: 锁定后字段拒绝 XSS payload. 已通过 _no_control_chars_str 的还可能含
+    ``<script>alert(1)</script>`` 这类合法字符但仍是攻击向量, 这里再过一遍."""
+    if v is None:
+        return v
+    if _XSS_PATTERN.search(v):
+        raise ValueError("字段含 XSS 模式 (<script>/javascript:/onerror 等), 已拒绝")
+    return v
 
 
 # ============================================================
@@ -384,6 +412,70 @@ class ConfirmationItemResponse(BaseModel):
 
 
 # ---- 统计表生成请求 --------------------------------------------------
+
+
+class SubjectMatterItem(BaseModel):
+    """P0 (2026-06-19, round25 #15): 单条函证项结构化校验.
+
+    旧逻辑: API 路由 ``update_item`` 直接 ``json.dumps(payload["subject_matters"])``
+    落库, 任意 dict / list / 嵌套结构都可写入, 后续 ``gen.generate`` 渲染 docx 时
+    把脏数据带进函证文本. 现在每条 subject 都要经过字段长度 / 控制字符 / 必填校验,
+    否则 422.
+    """
+
+    subject: str = Field(..., min_length=1, max_length=200, description="函证项名称")
+    amount: Optional[float] = Field(None, description="金额, 可选")
+    note: Optional[str] = Field(default=None, max_length=500, description="备注")
+
+    @field_validator("subject", "note")
+    @classmethod
+    def _no_control_chars(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if _CONTROL_CHAR_RE.search(v):
+            raise ValueError("字段含非法控制字符 (除 \\n 外 0x00-0x1F / 0x7F 不可用)")
+        return v
+
+
+class ConfirmationItemUpdateRequest(BaseModel):
+    """P0 (2026-06-19, round25 #15): update_item 路由的 Pydantic schema.
+
+    锁定语义 (锁定后只允许白名单) 由路由层 ``ITEM_LOCKED_ALLOWED_FIELDS`` /
+    ``ITEM_UNLOCKED_ALLOWED_FIELDS`` 强制, 这里只校验字段值本身.
+    ``subject_matters`` 必须是 ``list[SubjectMatterItem]``, 路由层会把
+    它序列化为 JSON 字符串再写库.
+    """
+
+    contact_person: Optional[str] = Field(default=None, max_length=100)
+    contact_info: Optional[str] = Field(default=None, max_length=200)
+    selection_reason: Optional[str] = Field(default=None, max_length=500)
+    subject_matters: Optional[list[SubjectMatterItem]] = Field(
+        default=None, description="函证项清单, 每条 SubjectMatterItem 必填 subject"
+    )
+    importance: Optional[str] = Field(default=None, max_length=10)
+    account_code: Optional[str] = Field(default=None, max_length=50)
+    account_name: Optional[str] = Field(default=None, max_length=200)
+    book_balance: Optional[float] = Field(default=None)
+    total_confirm_amount: Optional[float] = Field(default=None)
+    book_balance_date: Optional[str] = Field(default=None, max_length=20)
+
+    @field_validator("contact_person", "contact_info", "selection_reason", "importance",
+                     "account_code", "account_name", "book_balance_date")
+    @classmethod
+    def _no_control_chars_str(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if _CONTROL_CHAR_RE.search(v):
+            raise ValueError("字段含非法控制字符 (除 \\n 外 0x00-0x1F / 0x7F 不可用)")
+        return v
+
+    @field_validator("contact_person", "contact_info", "selection_reason")
+    @classmethod
+    def _no_xss(cls, v: Optional[str]) -> Optional[str]:
+        # P0-11 (2026-06-19, round30): 锁定后这些字段是 docx 渲染源, 防 XSS.
+        # 不重复校验 importance/account_code/account_name/book_balance_date —
+        # 它们结构受控 (enum/科目代码/日期), 无 XSS 向量.
+        return _no_xss_payload(v)
 
 
 class SubjectSelection(BaseModel):

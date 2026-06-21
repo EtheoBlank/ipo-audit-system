@@ -42,9 +42,19 @@ class TrialBalanceEngine:
                     "debit": debit_accounts["beginning_balance"].sum(),
                     "credit": credit_accounts["beginning_balance"].sum(),
                 },
+                # P0 修复: current_period 按 balance_direction 过滤求和
+                # (旧版所有科目 debit_amount / credit_amount 全加, 重复计算)
                 "current_period": {
-                    "debit": account_balances["debit_amount"].sum(),
-                    "credit": account_balances["credit_amount"].sum(),
+                    "debit": float(
+                        account_balances.loc[
+                            account_balances["balance_direction"] == "借", "debit_amount"
+                        ].sum()
+                    ),
+                    "credit": float(
+                        account_balances.loc[
+                            account_balances["balance_direction"] == "贷", "credit_amount"
+                        ].sum()
+                    ),
                 },
             },
         )

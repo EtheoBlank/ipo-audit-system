@@ -69,9 +69,9 @@ class ComprehensiveReportGenerator:
         rows_data = [
             ("公司名称", project_info.get("company_name", "")),
             ("所属行业", project_info.get("industry", "")),
-            ("注册资本", f"{financial_data.get('registered_capital', 0):,.2f}万元"),
-            ("总资产", f"{financial_data.get('total_assets', 0):,.2f}万元"),
-            ("营业收入", f"{financial_data.get('revenue', 0):,.2f}万元"),
+            ("注册资本", f"{financial_data.get('registered_capital') or 0:,.2f}万元"),
+            ("总资产", f"{financial_data.get('total_assets') or 0:,.2f}万元"),
+            ("营业收入", f"{financial_data.get('revenue') or 0:,.2f}万元"),
         ]
 
         for i, (label, value) in enumerate(rows_data):
@@ -88,10 +88,10 @@ class ComprehensiveReportGenerator:
         table.style = "Table Grid"
 
         rows_data = [
-            ("毛利率", f"{financial_data.get('gross_margin', 0):.2f}%"),
-            ("净利率", f"{financial_data.get('net_margin', 0):.2f}%"),
-            ("净资产收益率", f"{financial_data.get('roe', 0):.2f}%"),
-            ("每股收益", f"{financial_data.get('eps', 0):.2f}元"),
+            ("毛利率", f"{financial_data.get('gross_margin') or 0:.2f}%"),
+            ("净利率", f"{financial_data.get('net_margin') or 0:.2f}%"),
+            ("净资产收益率", f"{financial_data.get('roe') or 0:.2f}%"),
+            ("每股收益", f"{financial_data.get('eps') or 0:.2f}元"),
         ]
 
         for i, (label, value) in enumerate(rows_data):
@@ -104,9 +104,9 @@ class ComprehensiveReportGenerator:
         table2.style = "Table Grid"
 
         rows_data2 = [
-            ("流动比率", f"{financial_data.get('current_ratio', 0):.2f}"),
-            ("速动比率", f"{financial_data.get('quick_ratio', 0):.2f}"),
-            ("资产负债率", f"{financial_data.get('debt_ratio', 0):.2f}%"),
+            ("流动比率", f"{financial_data.get('current_ratio') or 0:.2f}"),
+            ("速动比率", f"{financial_data.get('quick_ratio') or 0:.2f}"),
+            ("资产负债率", f"{financial_data.get('debt_ratio') or 0:.2f}%"),
         ]
 
         for i, (label, value) in enumerate(rows_data2):
@@ -301,10 +301,10 @@ class PDFReportGenerator:
         story.append(Paragraph("二、主要财务指标", styles["Heading2"]))
         fin_data = [
             ["指标", "金额/比例"],
-            ["总资产", f"{financial_data.get('total_assets', 0):,.2f}万元"],
-            ["营业收入", f"{financial_data.get('revenue', 0):,.2f}万元"],
-            ["净利润", f"{financial_data.get('net_profit', 0):,.2f}万元"],
-            ["毛利率", f"{financial_data.get('gross_margin', 0):.2f}%"],
+            ["总资产", f"{financial_data.get('total_assets') or 0:,.2f}万元"],
+            ["营业收入", f"{financial_data.get('revenue') or 0:,.2f}万元"],
+            ["净利润", f"{financial_data.get('net_profit') or 0:,.2f}万元"],
+            ["毛利率", f"{financial_data.get('gross_margin') or 0:.2f}%"],
         ]
         fin_table = Table(fin_data, colWidths=[4 * cm, 10 * cm])
         fin_table.setStyle(
@@ -337,8 +337,8 @@ class PDFReportGenerator:
         story.append(
             Paragraph(
                 f"状态：{'平衡' if trial_balance.get('is_balanced') else '不平衡'} | "
-                f"借方合计：{trial_balance.get('total_debit', 0):,.2f} | "
-                f"贷方合计：{trial_balance.get('total_credit', 0):,.2f}",
+                f"借方合计：{trial_balance.get('total_debit') or 0:,.2f} | "
+                f"贷方合计：{trial_balance.get('total_credit') or 0:,.2f}",
                 styles["Normal"],
             )
         )
@@ -346,44 +346,3 @@ class PDFReportGenerator:
         doc.build(story)
         buffer.seek(0)
         return buffer.read()
-
-
-class ReportScheduler:
-    """报告调度器 - 支持定期生成报告."""
-
-    def __init__(self):
-        self.scheduled_reports: List[Dict] = []
-
-    def schedule_report(
-        self,
-        project_id: int,
-        report_type: str,
-        frequency: str,  # daily, weekly, monthly
-        recipients: List[str],
-    ) -> Dict:
-        """调度报告生成."""
-        schedule = {
-            "id": len(self.scheduled_reports) + 1,
-            "project_id": project_id,
-            "report_type": report_type,
-            "frequency": frequency,
-            "recipients": recipients,
-            "created_at": datetime.now().isoformat(),
-            "status": "active",
-        }
-        self.scheduled_reports.append(schedule)
-        return schedule
-
-    def get_scheduled_reports(self, project_id: Optional[int] = None) -> List[Dict]:
-        """获取调度的报告列表."""
-        if project_id:
-            return [r for r in self.scheduled_reports if r["project_id"] == project_id]
-        return self.scheduled_reports
-
-    def cancel_schedule(self, schedule_id: int) -> bool:
-        """取消报告调度."""
-        for schedule in self.scheduled_reports:
-            if schedule["id"] == schedule_id:
-                schedule["status"] = "cancelled"
-                return True
-        return False

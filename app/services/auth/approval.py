@@ -88,6 +88,7 @@ class ApprovalEngine:
         title: str,
         description: Optional[str] = None,
         project_id: Optional[int] = None,
+        firm_id: Optional[int] = None,
         steps: Optional[List[StepSpec]] = None,
     ) -> ApprovalWorkflow:
         steps = steps or DEFAULT_FIVE_LEVEL_FLOW
@@ -98,8 +99,14 @@ class ApprovalEngine:
         if nos != list(range(1, len(steps) + 1)):
             raise InvalidApprovalAction("step_no 必须从 1 开始连续")
 
+        # round 32 P0 IDOR: firm_id 落库. 优先用调用方传的 firm_id, 否则从
+        # initiator 继承, 最后兜底 project 关联查询.
+        if firm_id is None and initiator is not None:
+            firm_id = initiator.firm_id
+
         wf = ApprovalWorkflow(
             project_id=project_id,
+            firm_id=firm_id,
             resource_type=resource_type,
             resource_id=resource_id,
             title=title,
@@ -180,6 +187,7 @@ class ApprovalEngine:
         comment: Optional[str] = None,
         delegate_to_user_id: Optional[int] = None,
         expected_version: Optional[int] = None,
+        allow_self_approval: bool = False,
     ) -> ApprovalWorkflow:
         """处理一步审批.
 
@@ -220,6 +228,13 @@ class ApprovalEngine:
             raise InvalidApprovalAction(
                 f"该步骤指定 user_id={current_step.approver_user_id} 处理, 你无权"
             )
+        # 防自审批: 发起人不能审批自己的请求 (除非明确 allow_self_approval)
+        if (
+            wf.initiator_user_id is not None
+            and wf.initiator_user_id == actor.id
+            and not allow_self_approval
+        ):
+            raise InvalidApprovalAction("不能审批自己发起的请求")
 
         now = _utcnow_naive()
         current_step.action = action

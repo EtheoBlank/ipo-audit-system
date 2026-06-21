@@ -11,11 +11,50 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Optional
 
 from app.services.sales_ledger.deepseek_client import DeepSeekClient, DeepSeekError
+
+
+def _try_parse_date(s: Any) -> Optional[date]:
+    """P0-2: AI 返回的日期字段容错解析.
+
+    支持格式:
+      - ISO: "2024-12-30"
+      - 斜杠: "2024/12/30"
+      - 中文: "12月30日" (默认 2024 年, 当前业务场景是 2024 年度盘点)
+
+    无法解析返回 None (不抛), 由调用方决定如何 fallback.
+    """
+    if s is None:
+        return None
+    s = str(s).strip()
+    if not s:
+        return None
+    # 1) ISO
+    try:
+        return date.fromisoformat(s)
+    except (ValueError, TypeError) as exc:
+        # 不抛给上层 (fallback 流程), 但留痕便于排查脏数据
+        logger.debug("count_plan: ISO date 解析失败 input=%r exc=%s", s, exc)
+    # 2) YYYY/MM/DD 或 YYYY/M/D
+    m = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})$", s)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+    # 3) M月D日 (中文, 默认 2024 年)
+    m = re.search(r"(\d{1,2})月(\d{1,2})日", s)
+    if m:
+        try:
+            return date(2024, int(m.group(1)), int(m.group(2)))
+        except ValueError:
+            return None
+    return None
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +348,21 @@ class CountPlanGenerator:
             draft.special_notes = (draft.special_notes or "") + f"\n[用户补充] {user_instruction}"
             return draft
 
+        # P0-2: 日期字段单独解析, 解析失败保留旧值 + 写 revision_log warning.
+        # 不静默吞错, 否则下游 date.fromisoformat 会 500.
+        date_warnings: list[str] = []
+        for date_field in ("count_date_start", "count_date_end"):
+            raw = result.get(date_field)
+            if not raw:
+                continue
+            parsed = _try_parse_date(raw)
+            if parsed is None:
+                date_warnings.append(
+                    f"{date_field}='{raw}' 无法解析为日期, 保留旧值"
+                )
+                continue
+            setattr(draft, date_field, parsed.isoformat())
+
         for k in (
             "title",
             "objectives",
@@ -316,17 +370,18 @@ class CountPlanGenerator:
             "procedures",
             "special_notes",
             "risks",
-            "count_date_start",
-            "count_date_end",
         ):
             if result.get(k):
                 setattr(draft, k, str(result[k]))
         if isinstance(result.get("team"), list):
             draft.team = result["team"]
+        applied_msg = str(result.get("change_summary", "AI 已按指令调整"))
+        if date_warnings:
+            applied_msg += "；警告: " + "; ".join(date_warnings)
         draft.revision_log.append(
             {
                 "instruction": user_instruction,
-                "applied": str(result.get("change_summary", "AI 已按指令调整")),
+                "applied": applied_msg,
             }
         )
         return draft

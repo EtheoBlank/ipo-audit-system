@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api._helpers import get_project_or_404
 from app.core.database import get_db
 from app.models.db.auth import (
     AUDIT_ACTION_CREATE,
@@ -59,6 +58,7 @@ from app.services.auth import (
     record_audit_log,
     require_role,
 )
+from app.services.auth.tenant import ensure_project_in_firm
 from app.services.notification import NotificationService
 from app.services.related_parties import (
     CapitalOccupationService,
@@ -84,7 +84,7 @@ async def create_party(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     rp = RelatedParty(
         project_id=project_id,
         **payload.model_dump(),
@@ -120,7 +120,7 @@ async def list_parties(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     conds = [RelatedParty.project_id == project_id]
     if party_type:
         conds.append(RelatedParty.party_type == party_type)
@@ -160,6 +160,8 @@ async def update_party(
     ).scalar_one_or_none()
     if rp is None:
         raise HTTPException(404, "关联方不存在")
+    # IDOR fix (P0): 校验关联方所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, rp.project_id, current_user)
     for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(rp, k, v)
     await db.commit()
@@ -189,6 +191,8 @@ async def delete_party(
     ).scalar_one_or_none()
     if rp is None:
         raise HTTPException(404, "关联方不存在")
+    # IDOR fix (P0): 校验关联方所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, rp.project_id, current_user)
     pid, name = rp.project_id, rp.name
     await db.delete(rp)
     await db.commit()
@@ -218,7 +222,7 @@ async def create_relation(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     rel = RelatedPartyRelation(project_id=project_id, **payload.model_dump())
     db.add(rel)
     await db.commit()
@@ -232,6 +236,7 @@ async def list_relations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (
             await db.execute(
@@ -256,7 +261,7 @@ async def run_detector(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     req = payload or DetectorRunRequest(project_id=project_id)
     req.project_id = project_id
     result = await RelatedPartyDetector.run(
@@ -297,7 +302,7 @@ async def create_transaction(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     tx = RelatedPartyTransaction(project_id=project_id, **payload.model_dump())
     db.add(tx)
     await db.commit()
@@ -316,6 +321,7 @@ async def list_transactions(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     conds = [RelatedPartyTransaction.project_id == project_id]
     if party_id:
         conds.append(RelatedPartyTransaction.party_id == party_id)
@@ -344,7 +350,7 @@ async def check_fairness(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     result = await TransactionAnalyzer.check_fairness(db, payload, project_id=project_id)
     await record_audit_log(
         db,
@@ -384,7 +390,7 @@ async def create_capital_occupation(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     co = RelatedPartyCapitalOccupation(project_id=project_id, **payload.model_dump())
     db.add(co)
     await db.commit()
@@ -402,6 +408,7 @@ async def list_capital_occupations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     conds = [RelatedPartyCapitalOccupation.project_id == project_id]
     if party_id:
         conds.append(RelatedPartyCapitalOccupation.party_id == party_id)
@@ -420,7 +427,7 @@ async def auto_compute_occupation(
     db: AsyncSession = Depends(get_db),
 ):
     """从序时账自动算最大占用. 不入库, 仅返回供前端预览."""
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     return await CapitalOccupationService.compute_max_occupation(
         db,
         project_id=project_id,
@@ -445,7 +452,7 @@ async def assess_peer_competition(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     try:
         result = await PeerCompetitionService.assess(
             db,
@@ -481,6 +488,7 @@ async def list_peer_competition(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (
             await db.execute(
@@ -510,7 +518,7 @@ async def check_disclosure(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     payload.project_id = project_id
     result = await DisclosureChecker.diff(
         db, project_id=project_id, prospectus_party_names=payload.prospectus_party_names
@@ -552,6 +560,7 @@ async def list_disclosure_gaps(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     conds = [ProspectusDisclosureGap.project_id == project_id]
     if gap_status:
         conds.append(ProspectusDisclosureGap.gap_status == gap_status)

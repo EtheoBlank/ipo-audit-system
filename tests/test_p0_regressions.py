@@ -283,10 +283,6 @@ async def test_fill_handles_none_project_without_crash():
         template_id="t1", template_name="T", version="1.0.0", firm_id="f",
         fields=[
             TemplateField(
-                field_id="x", label="X", type="text",
-                source="workpaper:ar_ledger.total_ending", source_required=False,
-                cell_ref="A1", sheet="s", row=1, column=1,
-            ) if False else TemplateField(
                 field_id="x", label="X", type="number",
                 source="workpaper:ar_ledger.total_ending",
                 cell_ref="s!A1", sheet="s", row=1, column=1,

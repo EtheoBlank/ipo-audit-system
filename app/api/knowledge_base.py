@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import uuid
@@ -27,12 +28,13 @@ from fastapi import (
     HTTPException,
     UploadFile,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.utils.upload_safety import check_magic_bytes
 from app.models.db_models import KnowledgeBook
 from app.models.db.auth import User
 from app.services.auth import get_current_user, get_current_user_optional
@@ -46,6 +48,15 @@ _kb_service = KnowledgeBaseService()
 
 
 _ALLOWED_SUFFIXES = {"pdf", "epub", "docx", "txt", "md", "markdown"}
+
+
+def _sync_write(path: Path, content: bytes) -> None:
+    """同步写文件, 供 asyncio.to_thread 调用.
+
+    100MB PDF 同步写会阻塞 event loop 数百 ms, 用 to_thread 释放 worker.
+    """
+    with open(path, "wb") as out:
+        out.write(content)
 
 
 # ----------------------------------------------------------------------
@@ -72,8 +83,7 @@ class BookOut(BaseModel):
     uploaded_at: datetime
     indexed_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SearchRequest(BaseModel):
@@ -145,27 +155,47 @@ async def upload_book(
     target = settings.KNOWLEDGE_BASE_DIR / unique
     target.parent.mkdir(parents=True, exist_ok=True)
 
+    # P0 性能 (2026-06-19): 100MB PDF 同步写阻塞 event loop, 改 asyncio.to_thread.
+    # 流式读到 bytes 再 to_thread 写盘 — read 仍 async (上传是网络 IO),
+    # 只有 CPU+磁盘部分交给 thread pool.
     size = 0
-    with target.open("wb") as out:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
-            size += len(chunk)
-            if size > settings.KB_MAX_BOOK_SIZE:
-                out.close()
+    chunks: list[bytes] = []
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+        if size > settings.KB_MAX_BOOK_SIZE:
+            # 清理已落盘的部分 + 关闭 handle
+            try:
                 target.unlink(missing_ok=True)
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"文件过大 (>{settings.KB_MAX_BOOK_SIZE // (1024 * 1024)}MB)",
-                )
+            except Exception as unlink_exc:  # noqa: BLE001
+                # 文件过大要被清掉, unlink 失败不阻塞 413 抛出
+                logger.warning("KB 上传超限清理临时文件失败: path=%s exc=%s", target, unlink_exc)
+            raise HTTPException(
+                status_code=413,
+                detail=f"文件过大 (>{settings.KB_MAX_BOOK_SIZE // (1024 * 1024)}MB)",
+            )
+    content_bytes = b"".join(chunks)
+    # P1 (round 32): magic bytes 校验 — 防 'evil.pdf.exe' 双扩展名绕过
+    if suffix and not check_magic_bytes(content_bytes, f".{suffix}"):
+        try:
+            target.unlink(missing_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("清理 magic-bytes 校验失败的文件失败 (target=%s): %s", target, exc)
+        raise HTTPException(
+            status_code=400,
+            detail=f"文件内容与扩展名 .{suffix} 不符 (疑似伪造)",
+        )
+    await asyncio.to_thread(_sync_write, target, content_bytes)
 
     book = KnowledgeBook(
         title=(title or Path(filename).stem)[:500],
         author=author,
         publisher=publisher,
         isbn=isbn,
+        firm_id=current_user.firm_id,  # P0 (2026-06-19): 多租户隔离
         filename=filename,
         file_path=str(target),
         file_type=detect_file_type(filename),
@@ -197,7 +227,17 @@ async def list_books(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    # P0 多租户 (2026-06-19): 旧 select 全表 — 任意登录用户读别所上传内部资料
+    # 新: 非 admin 强制 firm_id = current_user.firm_id
+    # admin 跨所可见; 老数据 firm_id=NULL 在 admin 下可见 (兼容)
+    from app.models.db.auth import ROLE_ADMIN as _ADMIN
     q = select(KnowledgeBook)
+    if current_user is None or current_user.role != _ADMIN:
+        if current_user is not None and current_user.firm_id:
+            q = q.where(KnowledgeBook.firm_id == current_user.firm_id)
+        else:
+            # 没登录 / 无 firm → 不返回
+            return []
     if category:
         q = q.where(KnowledgeBook.category == category)
     if status:
@@ -212,19 +252,40 @@ async def get_book(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    # P0 多租户 (2026-06-19): 与 list_books 一致, 非 admin 强制 firm_id 匹配,
+    # firm_id=NULL 老数据仅 admin 可见
+    from app.models.db.auth import ROLE_ADMIN as _ADMIN
     book = (
         await db.execute(select(KnowledgeBook).where(KnowledgeBook.id == book_id))
     ).scalar_one_or_none()
     if not book:
         raise HTTPException(status_code=404, detail="书籍不存在")
+    if current_user is None or current_user.role != _ADMIN:
+        if current_user is None or not current_user.firm_id:
+            raise HTTPException(status_code=404, detail="书籍不存在")
+        if book.firm_id is None or book.firm_id != current_user.firm_id:
+            raise HTTPException(status_code=404, detail="书籍不存在")
     return book
 
 
 @router.delete("/books/{book_id}")
 async def delete_book(
     book_id: int,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # P0 多租户 (2026-06-19): 删前 ORM 取出校验 firm 隔离, admin 跨所
+    from app.models.db.auth import ROLE_ADMIN as _ADMIN
+    book = (
+        await db.execute(select(KnowledgeBook).where(KnowledgeBook.id == book_id))
+    ).scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="书籍不存在")
+    if current_user.role != _ADMIN:
+        if not current_user.firm_id:
+            raise HTTPException(status_code=404, detail="书籍不存在")
+        if book.firm_id is None or book.firm_id != current_user.firm_id:
+            raise HTTPException(status_code=404, detail="书籍不存在")
     await _kb_service.delete_book(book_id)
     return {"message": "已删除"}
 
@@ -256,6 +317,11 @@ async def search_kb(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    # P0 多租户 (2026-06-19): 与 list_books 一致, 非 admin 强制 firm_id = 自己
+    from app.models.db.auth import ROLE_ADMIN as _ADMIN
+    firm_id = None if (current_user is None or current_user.role == _ADMIN) else (
+        current_user.firm_id
+    )
     results = await _kb_service.search(
         db,
         query=req.query,
@@ -264,6 +330,7 @@ async def search_kb(
         category=req.category,
         project_id=req.project_id,
         context=req.context,
+        firm_id=firm_id,
     )
     return [SearchResult(**r.__dict__) for r in results]
 

@@ -6,7 +6,7 @@
 #     避免误操作直接把 feature 分支推到 hf/main 触发公开 rebuild。
 #   * HF 推送前必跑安全检查 + 显式确认交互 + origin/master 与 hf/main 双向比对,
 #     拒绝覆盖 hf 端的本地提交。
-#   * 安全检查覆盖: .env 文件、sk- 字面量、>50MB 文件、历史里出现过的 .env。
+#   * 安全检查覆盖: .env 文件、API key 字面量 (sk-/ark-等)、>50MB 文件、历史里出现过的 .env。
 #
 # 用法:
 #   bash scripts/sync.sh status                  # 看 remote 状态和 ahead/behind
@@ -56,19 +56,20 @@ safety_check() {
     exit 1
   fi
 
-  # 2. sk- 字面量扫描(忽略 .venv / node_modules / 本脚本 / CLAUDE.md 文档里的占位符)
+  # 2. API key 字面量扫描 (sk-/ark- 等前缀, 忽略 .venv / node_modules / 本脚本 / CLAUDE.md 文档里的占位符)
+  local KEY_PATTERN='(sk-[a-f0-9]{20,}|ark-[a-f0-9-]{20,})'
   if grep -RIn --include='*.py' --include='*.md' --include='*.toml' --include='*.example' \
-      -E 'sk-[a-f0-9]{20,}' . 2>/dev/null \
+      -E "$KEY_PATTERN" . 2>/dev/null \
       | grep -v '\.venv/' \
       | grep -v 'node_modules/' \
       | grep -v 'scripts/sync.sh' \
       | grep -v 'CLAUDE\.md' \
       | grep -v 'HF_SYNC' \
       | grep -q .; then
-    red "  ❌ 检测到疑似真实 API key 字面量 (sk- 开头),脚本中止"
+    red "  ❌ 检测到疑似真实 API key 字面量 (sk-/ark- 开头),脚本中止"
     echo "     涉及文件:"
     grep -RIn --include='*.py' --include='*.md' --include='*.toml' --include='*.example' \
-        -E 'sk-[a-f0-9]{20,}' . 2>/dev/null \
+        -E "$KEY_PATTERN" . 2>/dev/null \
         | grep -v '\.venv/' | grep -v 'node_modules/' | grep -v 'scripts/sync.sh' \
         | grep -v 'CLAUDE\.md' | grep -v 'HF_SYNC' | head -5
     exit 1

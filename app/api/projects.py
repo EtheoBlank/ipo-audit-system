@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional
+import asyncio
 import pandas as pd
+import uuid
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -34,6 +36,16 @@ from app.services.auth import (
     scope_projects_to_firm,
 )
 from app.services.excel_parser import ExcelParser
+from app.utils.upload_safety import (
+    check_magic_bytes,
+    read_upload_capped,
+)
+
+
+def _write_bytes(path, data: bytes) -> None:
+    """同步写文件, 供 asyncio.to_thread 调用."""
+    with open(path, "wb") as f:
+        f.write(data)
 
 router = APIRouter(prefix="/api/projects", tags=["项目管理"])
 
@@ -173,13 +185,22 @@ async def upload_account_balances(
             break
 
     # Parse Excel with adapter
-    temp_path = settings.UPLOAD_DIR / f"temp_{file.filename}"
-    content = await file.read()
-    with open(temp_path, "wb") as f:
-        f.write(content)
+    # P0 安全 (round 32): 路径穿越 + magic bytes + 大小限制
+    # read_upload_capped 内: 流式读 (上限 MAX_UPLOAD_BYTES) + sanitize_filename
+    content, safe_name, suffix = await read_upload_capped(file)
+    if suffix and not check_magic_bytes(content, suffix):
+        raise HTTPException(
+            status_code=400,
+            detail=f"文件内容与扩展名 {suffix} 不符 (疑似伪造)",
+        )
+    # 用 UUID 防止同名并发上传相互覆盖 + 安全文件名防路径穿越
+    temp_path = settings.UPLOAD_DIR / f"temp_{uuid.uuid4().hex}_{safe_name}"
+    # P0 性能 (2026-06-19): 同步 write/read_excel 在 async 端点内阻塞事件循环
+    # 改 asyncio.to_thread, 释放 worker 接收其他请求
+    await asyncio.to_thread(_write_bytes, temp_path, content)
 
     try:
-        raw_df = pd.read_excel(temp_path)
+        raw_df = await asyncio.to_thread(pd.read_excel, temp_path)
 
         # Auto-detect ERP type if not specified
         if erp_type_enum is None:

@@ -165,6 +165,43 @@ class BaseRegulationAdapter:
                 return m.group(0).strip()
         return None
 
+    async def fetch_paginated(
+        self,
+        categories: List[tuple],
+        parse_fn,
+        max_pages: int = 0,
+    ) -> List[RegulationItem]:
+        """通用分页抓取 helper — 4 个分页 Adapter (MOF/STA/SAFE/PBOC) 共用。
+
+        每个 entry 是 ``(category, page_url_fn, link_base)`` 三元组:
+          - ``page_url_fn(page: int) -> str`` 由 Adapter 提供, 决定 page N 怎么拼 URL;
+            4 个 Adapter 的拼法各不相同 (MOF 目录 + .htm / SAFE 显式 index.html 等),
+            由各 Adapter 自封装最简单。
+          - ``link_base`` 传给 parse_fn, 用于 urljoin 拼详情页 (通常 = page_url_fn(1))。
+
+        Args:
+            categories: ``[(category, page_url_fn, link_base), ...]`` 列表。
+            parse_fn: ``(body: str, base_url: str, category: str) -> List[RegulationItem]``,
+                由各 Adapter 实现, 决定如何从单页 HTML 抽条目。
+            max_pages: 单栏目最多翻几页 (0 = 用 settings.REGULATION_MAX_PAGES)。
+
+        Returns:
+            各栏目各页汇总后的 ``RegulationItem`` 列表 (未去重 — 顶层 ``scrape`` 会去重)。
+        """
+        max_pages = max_pages or settings.REGULATION_MAX_PAGES
+        items: List[RegulationItem] = []
+        for category, page_url_fn, link_base in categories:
+            for page in range(1, max_pages + 1):
+                page_url = page_url_fn(page)
+                resp = await self.http.get(page_url)
+                if not resp:
+                    break
+                page_items = parse_fn(resp.text, link_base, category)
+                if not page_items:
+                    break
+                items.extend(page_items)
+        return items
+
 
 # ----------------------------------------------------------------------
 # 证监会 Adapter
@@ -284,25 +321,46 @@ class MOFAdapter(BaseRegulationAdapter):
         ("准则问答", "{accounting}/zhengwuxinxi/zhengcefabu/zhunzewenda/"),
     ]
 
-    async def fetch(self, max_pages: int = 0) -> List[RegulationItem]:
-        max_pages = max_pages or settings.REGULATION_MAX_PAGES
-        items: List[RegulationItem] = []
-        urls = [
-            ("会计司公告", f"{settings.MOF_ACCOUNTING_URL}/zhengwuxinxi/zhengcefabu/"),
-            ("会计准则", f"{settings.MOF_ACCOUNTING_URL}/zhengwuxinxi/zhengcefabu/kuaijizhuze/"),
-            ("准则解释", f"{settings.MOF_ACCOUNTING_URL}/zhengwuxinxi/zhengcefabu/zhunzejieshi/"),
-            ("准则问答", f"{settings.MOF_ACCOUNTING_URL}/zhengwuxinxi/zhengcefabu/zhunzewenda/"),
+    def _category_urls(self) -> List[tuple]:
+        """组装 (category, page_url_fn, link_base) 三元组列表 — fetch_paginated 直接消费.
+
+        MOF 列表页 URL 模式: page 1 = ``base``, page N (N>=2) = ``base + index_N.htm``.
+        """
+        def _make_fn(base: str):
+            def _fn(page: int) -> str:
+                return base if page == 1 else f"{base}index_{page}.htm"
+            return _fn
+
+        base_accounting = settings.MOF_ACCOUNTING_URL
+        return [
+            (
+                "会计司公告",
+                _make_fn(f"{base_accounting}/zhengwuxinxi/zhengcefabu/"),
+                f"{base_accounting}/zhengwuxinxi/zhengcefabu/",
+            ),
+            (
+                "会计准则",
+                _make_fn(f"{base_accounting}/zhengwuxinxi/zhengcefabu/kuaijizhuze/"),
+                f"{base_accounting}/zhengwuxinxi/zhengcefabu/kuaijizhuze/",
+            ),
+            (
+                "准则解释",
+                _make_fn(f"{base_accounting}/zhengwuxinxi/zhengcefabu/zhunzejieshi/"),
+                f"{base_accounting}/zhengwuxinxi/zhengcefabu/zhunzejieshi/",
+            ),
+            (
+                "准则问答",
+                _make_fn(f"{base_accounting}/zhengwuxinxi/zhengcefabu/zhunzewenda/"),
+                f"{base_accounting}/zhengwuxinxi/zhengcefabu/zhunzewenda/",
+            ),
         ]
-        for category, base_url in urls:
-            for page in range(1, max_pages + 1):
-                page_url = base_url if page == 1 else f"{base_url}index_{page}.htm"
-                resp = await self.http.get(page_url)
-                if not resp:
-                    break
-                page_items = self._parse_mof_list(resp.text, base_url, category)
-                if not page_items:
-                    break
-                items.extend(page_items)
+
+    async def fetch(self, max_pages: int = 0) -> List[RegulationItem]:
+        items = await self.fetch_paginated(
+            self._category_urls(),
+            self._parse_mof_list,
+            max_pages=max_pages,
+        )
         logger.info("MOF: 抓取 %d 条法规", len(items))
         return items
 
@@ -356,20 +414,24 @@ class STAAdapter(BaseRegulationAdapter):
         ("税务总局令", "/n810341/n810771/"),
     ]
 
-    async def fetch(self, max_pages: int = 0) -> List[RegulationItem]:
-        max_pages = max_pages or settings.REGULATION_MAX_PAGES
-        items: List[RegulationItem] = []
-        for category, path in self.LIST_URLS:
+    def _category_urls(self) -> List[tuple]:
+        def _make_fn(base: str):
+            def _fn(page: int) -> str:
+                return base if page == 1 else f"{base}index_{page}.html"
+            return _fn
+
+        out = []
+        for cat, path in self.LIST_URLS:
             base = f"{settings.STA_URL}{path}"
-            for page in range(1, max_pages + 1):
-                page_url = base if page == 1 else f"{base}index_{page}.html"
-                resp = await self.http.get(page_url)
-                if not resp:
-                    break
-                page_items = self._parse_sta_list(resp.text, base, category)
-                if not page_items:
-                    break
-                items.extend(page_items)
+            out.append((cat, _make_fn(base), base))
+        return out
+
+    async def fetch(self, max_pages: int = 0) -> List[RegulationItem]:
+        items = await self.fetch_paginated(
+            self._category_urls(),
+            self._parse_sta_list,
+            max_pages=max_pages,
+        )
         logger.info("STA: 抓取 %d 条法规", len(items))
         return items
 
@@ -411,92 +473,109 @@ class SAFEAdapter(BaseRegulationAdapter):
     source_code = "SAFE"
     issuing_authority = "国家外汇管理局"
 
+    def _category_urls(self) -> List[tuple]:
+        """SAFE 列表页 URL 模式: page 1 = ``.../zcfg/index.html``,
+        page N (N>=2) = ``.../zcfg/index_N.html`` (注意: page 1 显式带 .html, page 2+ 不带)."""
+        page1 = f"{settings.SAFE_URL}/safe/zcfg/index.html"
+        link_base = f"{settings.SAFE_URL}/safe/zcfg/"
+
+        def _fn(page: int) -> str:
+            return page1 if page == 1 else f"{settings.SAFE_URL}/safe/zcfg/index_{page}.html"
+
+        return [("外汇政策", _fn, link_base)]
+
     async def fetch(self, max_pages: int = 0) -> List[RegulationItem]:
-        max_pages = max_pages or settings.REGULATION_MAX_PAGES
-        items: List[RegulationItem] = []
-        base = f"{settings.SAFE_URL}/safe/zcfg/index.html"
-        for page in range(1, max_pages + 1):
-            url = base if page == 1 else f"{settings.SAFE_URL}/safe/zcfg/index_{page}.html"
-            resp = await self.http.get(url)
-            if not resp:
-                break
-            soup = BeautifulSoup(resp.text, "lxml")
-            page_items: List[RegulationItem] = []
-            for li in soup.select("ul li, .list li"):
-                a = li.find("a")
-                if not a:
-                    continue
-                title = self._clean(a.get("title") or a.get_text())
-                href = a.get("href", "")
-                if not title or len(title) < 6:
-                    continue
-                date_text = ""
-                span = li.find("span")
-                if span:
-                    date_text = self._clean(span.get_text())
-                page_items.append(
-                    RegulationItem(
-                        source=self.source_code,
-                        issuing_authority=self.issuing_authority,
-                        category="外汇政策",
-                        title=title,
-                        document_no=self._extract_doc_no(title),
-                        publish_date=self._norm_date(date_text),
-                        source_url=urljoin(settings.SAFE_URL, href),
-                    )
-                )
-            if not page_items:
-                break
-            items.extend(page_items[:50])
+        items = await self.fetch_paginated(
+            self._category_urls(),
+            self._parse_safe_list,
+            max_pages=max_pages,
+        )
+        # 行为等价: 原代码每页截 [:50], parse_fn 内已做这个截断.
         logger.info("SAFE: 抓取 %d 条法规", len(items))
         return items
+
+    def _parse_safe_list(self, body: str, base_url: str, category: str) -> List[RegulationItem]:
+        soup = BeautifulSoup(body, "lxml")
+        items: List[RegulationItem] = []
+        for li in soup.select("ul li, .list li"):
+            a = li.find("a")
+            if not a:
+                continue
+            title = self._clean(a.get("title") or a.get_text())
+            href = a.get("href", "")
+            if not title or len(title) < 6:
+                continue
+            date_text = ""
+            span = li.find("span")
+            if span:
+                date_text = self._clean(span.get_text())
+            items.append(
+                RegulationItem(
+                    source=self.source_code,
+                    issuing_authority=self.issuing_authority,
+                    category=category,
+                    title=title,
+                    document_no=self._extract_doc_no(title),
+                    publish_date=self._norm_date(date_text),
+                    # 行为等价: SAFE 原代码 urljoin 用 SAFE_URL 本身 (而非当前页目录);
+                    # 显式拼回 settings.SAFE_URL 以维持绝对等价, 不依赖 base_url 参数。
+                    source_url=urljoin(settings.SAFE_URL, href),
+                )
+            )
+        return items[:50]
 
 
 class PBOCAdapter(BaseRegulationAdapter):
     source_code = "PBOC"
     issuing_authority = "中国人民银行"
 
+    def _category_urls(self) -> List[tuple]:
+        """PBOC 列表页 URL 模式: page 1 = ``.../125213/index.html``,
+        page N (N>=2) = ``.../125213/index_N.html`` (page 1 显式带 .html, page 2+ 不带)."""
+        page1 = f"{settings.PBOC_URL}/zhengcehuobisi/125207/125213/index.html"
+        link_base = f"{settings.PBOC_URL}/zhengcehuobisi/125207/125213/"
+
+        def _fn(page: int) -> str:
+            return page1 if page == 1 else f"{settings.PBOC_URL}/zhengcehuobisi/125207/125213/index_{page}.html"
+
+        return [("货币政策", _fn, link_base)]
+
     async def fetch(self, max_pages: int = 0) -> List[RegulationItem]:
-        max_pages = max_pages or settings.REGULATION_MAX_PAGES
-        items: List[RegulationItem] = []
-        base = f"{settings.PBOC_URL}/zhengcehuobisi/125207/125213/index.html"
-        for page in range(1, max_pages + 1):
-            url = (
-                base
-                if page == 1
-                else f"{settings.PBOC_URL}/zhengcehuobisi/125207/125213/index_{page}.html"
-            )
-            resp = await self.http.get(url)
-            if not resp:
-                break
-            soup = BeautifulSoup(resp.text, "lxml")
-            page_items: List[RegulationItem] = []
-            for tr in soup.select("table tr"):
-                a = tr.find("a")
-                if not a:
-                    continue
-                title = self._clean(a.get_text())
-                href = a.get("href", "")
-                if not title or len(title) < 6:
-                    continue
-                tds = tr.find_all("td")
-                date_text = self._clean(tds[-1].get_text()) if tds else ""
-                page_items.append(
-                    RegulationItem(
-                        source=self.source_code,
-                        issuing_authority=self.issuing_authority,
-                        category="货币政策",
-                        title=title,
-                        document_no=self._extract_doc_no(title),
-                        publish_date=self._norm_date(date_text),
-                        source_url=urljoin(settings.PBOC_URL, href),
-                    )
-                )
-            if not page_items:
-                break
-            items.extend(page_items[:50])
+        items = await self.fetch_paginated(
+            self._category_urls(),
+            self._parse_pboc_list,
+            max_pages=max_pages,
+        )
         logger.info("PBOC: 抓取 %d 条法规", len(items))
         return items
+
+    def _parse_pboc_list(self, body: str, base_url: str, category: str) -> List[RegulationItem]:
+        soup = BeautifulSoup(body, "lxml")
+        items: List[RegulationItem] = []
+        for tr in soup.select("table tr"):
+            a = tr.find("a")
+            if not a:
+                continue
+            title = self._clean(a.get_text())
+            href = a.get("href", "")
+            if not title or len(title) < 6:
+                continue
+            tds = tr.find_all("td")
+            date_text = self._clean(tds[-1].get_text()) if tds else ""
+            items.append(
+                RegulationItem(
+                    source=self.source_code,
+                    issuing_authority=self.issuing_authority,
+                    category=category,
+                    title=title,
+                    document_no=self._extract_doc_no(title),
+                    publish_date=self._norm_date(date_text),
+                    # 行为等价: PBOC 原代码 urljoin 用 PBOC_URL 本身;
+                    # 显式拼回 settings.PBOC_URL 以维持绝对等价, 不依赖 base_url 参数。
+                    source_url=urljoin(settings.PBOC_URL, href),
+                )
+            )
+        return items[:50]
 
 
 # ----------------------------------------------------------------------
@@ -554,9 +633,13 @@ class RegulationScraperService:
             adapter = _ADAPTERS[code](self.http)
             tasks.append(self._safe_fetch(adapter, max_pages))
 
-        results = await asyncio.gather(*tasks, return_exceptions=False)
+        # return_exceptions=True: 单个信源失败不应拖垮整次抓取 (一个 adapter 抛错不应取消其余)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         all_items: List[RegulationItem] = []
-        for batch in results:
+        for code, batch in zip(codes, results):
+            if isinstance(batch, Exception):
+                logger.warning("法规源 %s 抓取失败 (跳过): %s", code, batch)
+                continue
             all_items.extend(batch)
 
         # 按 content_hash 去重

@@ -220,9 +220,16 @@ def _replace_pat(
     """用正则匹配并替换为 ``<{prefix}_n>``，相同 token 复用同一编号。"""
 
     def _sub(m: re.Match) -> str:
-        if group is not None and group <= len(m.groups()):
+        # ALG-06 (round32, 2026-06-20): guard group 越界, 避免 IndexError 被吞后
+        # 返回原文 (PII 泄漏). group 越界时回退 m.group(0) + 记 warning.
+        if group is not None and 1 <= group <= len(m.groups()):
             name = m.group(group)
         else:
+            if group is not None:
+                logger.warning(
+                    "_replace_pat: group=%d 超出 regex groups(%d), 回退 group(0). prefix=%s",
+                    group, len(m.groups()), prefix,
+                )
             name = m.group(0)
         if not name:
             return m.group(0)
@@ -256,12 +263,29 @@ def _anonymize_excel(b: bytes) -> tuple[bytes, str]:
             ws.title = _anonymize_text(ws.title, counter)
 
     # 2) 单元格值 + 批注
+    # ALG-07 (round32, 2026-06-20): 增加对 int/float 单元格的脱敏, 防止数字
+    # 银行账户 (16 位 int) 漏脱敏, 直接被 openpyxl 写回文件 (PII 泄漏).
+    _DIGITS_RE = re.compile(r"\d{13,19}")
     for ws in wb.worksheets:
         for row in ws.iter_rows():
             for cell in row:
-                if isinstance(cell.value, str) and cell.value.strip():
-                    anon = _anonymize_text(cell.value, counter)
-                    if anon != cell.value:
+                v = cell.value
+                if isinstance(v, bool):
+                    # bool 是 int 的子类, 但不应走数字脱敏
+                    pass
+                elif isinstance(v, (int, float)):
+                    # 数字单元格: 检测是否含 13~19 位连续数字 (银行卡号)
+                    s = str(int(v)) if isinstance(v, int) and v == int(v) else str(v)
+                    if _DIGITS_RE.search(s):
+                        masked = _DIGITS_RE.sub(
+                            lambda m: "*" * (len(m.group(0)) - 4) + m.group(0)[-4:],
+                            s,
+                        )
+                        cell.value = masked
+                        excerpts.append(masked)
+                elif isinstance(v, str) and v.strip():
+                    anon = _anonymize_text(v, counter)
+                    if anon != v:
                         cell.value = anon
                     excerpts.append(anon)
                 if cell.comment and cell.comment.text:

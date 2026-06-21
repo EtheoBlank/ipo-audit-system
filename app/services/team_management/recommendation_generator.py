@@ -237,7 +237,12 @@ class ManagementRecommendationGenerator:
     def _build_prompt(self, ctx: RecommendationContext) -> str:
         members = json.dumps(ctx.members_load, ensure_ascii=False, indent=2)
         blockers = json.dumps(ctx.recent_blockers[:10], ensure_ascii=False, indent=2)
-        summaries = "\n".join(f"- {s}" for s in ctx.recent_summaries[-15:]) or "(无)"
+        # P0 安全: 截断每条日报摘要 + 限制总条数
+        safe_summaries = [
+            (s or "")[:120].replace(chr(10), " ")
+            for s in ctx.recent_summaries[-15:]
+        ]
+        summaries = "\n".join(f"- {s}" for s in safe_summaries) or "(无)"
         period = f"{ctx.period_start or '?'} ~ {ctx.period_end or '?'}"
         return (
             f"### 项目\n- {ctx.project_name} (id={ctx.project_id})\n- 周期: {period}\n\n"

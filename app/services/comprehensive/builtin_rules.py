@@ -59,7 +59,8 @@ def default_rule_book() -> RuleBook:
                 target_field="risk_level",
                 priority=10,
                 conditions=[
-                    RuleCondition(field="ar_turnover_days", op="is_not_none", value=None),
+                    # P0 正确性: 改为 between [0, 90] 范围检查 (周转天数 <= 90 才算低风险)
+                    RuleCondition(field="ar_turnover_days", op="between", value=[0, 90]),
                 ],
                 action=RuleAction(
                     value="低",

@@ -1,74 +1,76 @@
 """Streamlit frontend for IPO Audit System - 全功能版."""
 
-import os
-
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime
 
-# 后端 API 基础地址。
-#
-# 默认值 "http://localhost:8000" 同时适用于:
-#   1. 本地开发 (uvicorn :8000 + streamlit :8501/7860)
-#   2. Hugging Face Space 单容器双进程部署 (uvicorn :8000 + streamlit :7860)
-#      — Streamlit 通过服务端 HTTP 调 FastAPI, 浏览器只连 Streamlit 的 7860。
-#
-# 如果未来要把前端/后端拆成两个独立 Space 部署, 在 HF Space 的
-# "Variables and secrets" 里覆盖 API_BASE_URL 为后端 Space 的公网 URL 即可。
-API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+from frontend._http import API_BASE_URL, api_request, auth_headers
+from frontend._components import (
+    apply_feishu_theme,
+    page_header,
+    metric_card,
+    render_top_badges,
+    section_card_start,
+    section_card_end,
+    feishu_divider,
+    empty_state,
+    FEISHU_C,
+    FEISHU_R,
+)
+from frontend._components.feishu_components import (
+    # Pack A 美学 + UX 扩展
+    kbd,
+    toast,
+    timeline,
+    skeleton,
+    breadcrumb,
+    progress_ring,
+    stat_grid,
+    info_panel,
+    link_card,
+    kv_list,
+    pill_label,
+    greeting_banner,
+    feature_card,
+)
+from frontend._components.golden import PHI, PHI_INV
 
 st.set_page_config(
-    page_title="IPO审计系统",
+    page_title="IPO 审计系统",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.markdown(
-    """
-<style>
-    .main-header {font-size: 2.5rem;font-weight:bold;color:#4472C4;text-align:center;padding:1rem;}
-    .sub-header {font-size:1.5rem;font-weight:bold;color:#2E4057;}
-    .success-box {padding:1rem;border-radius:0.5rem;background-color:#D4EDDA;border:1px solid #C3E6CB;color:#155724;}
-    .warning-box {padding:1rem;border-radius:0.5rem;background-color:#FFF3CD;border:1px solid #FFEAA7;color:#856404;}
-    .error-box {padding:1rem;border-radius:0.5rem;background-color:#F8D7DA;border:1px solid #F5C6CB;color:#721C24;}
-    .metric-card {padding:1rem;border-radius:0.5rem;background-color:#E9ECEF;border:1px solid #DEE2E6;}
-    .sentiment-badge {position: fixed; top: 0.5rem; right: 1rem; z-index: 999;
-        background: #dc3545; color: white; border-radius: 999px;
-        padding: 0.3rem 0.8rem; font-weight: bold; font-size: 0.85rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);}
-    .sentiment-badge-zero {position: fixed; top: 0.5rem; right: 1rem; z-index: 999;
-        background: #6c757d; color: white; border-radius: 999px;
-        padding: 0.3rem 0.8rem; font-weight: bold; font-size: 0.85rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);}
-    .global-badge {position: fixed; top: 0.5rem; right: 9rem; z-index: 999;
-        background: #fd7e14; color: white; border-radius: 999px;
-        padding: 0.3rem 0.8rem; font-weight: bold; font-size: 0.85rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);}
-    .global-badge-zero {position: fixed; top: 0.5rem; right: 9rem; z-index: 999;
-        background: #6c757d; color: white; border-radius: 999px;
-        padding: 0.3rem 0.8rem; font-weight: bold; font-size: 0.85rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);}
-</style>
-""",
-    unsafe_allow_html=True,
-)
+# 注入飞书浅色主题 (幂等, 后续 sub-page 再调一次也无副作用)
+apply_feishu_theme()
 
 
-def _auth_headers() -> dict:
-    """Pack A: 从 st.session_state 取 token, 给所有 API 调用带上."""
-    token = st.session_state.get("auth_token")
-    return {"Authorization": f"Bearer {token}"} if token else {}
+# ── 全局快捷键提示 (首次访问显示一次) ───────────────────
+def _show_first_run_tip() -> None:
+    """首次访问显示引导提示, 之后写入 session_state 不再显示."""
+    if not st.session_state.get("_first_run_tip_shown", False):
+        st.session_state["_first_run_tip_shown"] = True
+        info_panel(
+            title="欢迎使用 IPO 审计系统",
+            body=(
+                "这是一站式 IPO 审计工作台. "
+                f"使用 {kbd('Ctrl+R')} 刷新页面, {kbd('Ctrl+K')} 浏览器搜索 (Streamlit 自带). "
+                "左侧菜单切换功能, 顶部右上角查看通知 / 舆情. "
+                "如遇问题可联系管理员, 或在侧栏「🔐 系统管理」查看日志."
+            ),
+            kind="info",
+            icon="👋",
+        )
 
 
-@st.cache_data(ttl=30)
+# P0: 取消缓存, 每次都拉新 (跨用户 / 跨 firm 不能复用缓存)
 def get_sentiment_unread_count() -> int:
     """全局红点: 30 秒缓存, 调一次 /notifications/unread."""
     try:
         r = requests.get(
             f"{API_BASE_URL}/api/sentiment/notifications/unread?limit=1",
-            headers=_auth_headers(),
+            headers=auth_headers(),
             timeout=2,
         )
         if r.status_code == 200:
@@ -78,12 +80,12 @@ def get_sentiment_unread_count() -> int:
     return 0
 
 
-@st.cache_data(ttl=30)
+# P0: 取消缓存, 每次都拉新 (跨用户 / 跨 firm 不能复用缓存)
 def get_global_unread_count() -> dict:
     """Pack A: 通用通知中心未读数, 30s 缓存."""
     try:
         r = requests.get(
-            f"{API_BASE_URL}/api/notifications/unread", headers=_auth_headers(), timeout=2
+            f"{API_BASE_URL}/api/notifications/unread", headers=auth_headers(), timeout=2
         )
         if r.status_code == 200:
             return r.json() or {"total_unread": 0}
@@ -93,31 +95,11 @@ def get_global_unread_count() -> dict:
 
 
 def render_sentiment_global_badge() -> None:
-    """在主页 main() 顶部渲染右上角红点 (舆情 + 全局通知)."""
+    """在主页 main() 顶部渲染右上角红点 (舆情 + 全局通知) — 飞书化."""
     s_count = get_sentiment_unread_count()
-    if s_count > 0:
-        st.markdown(
-            f'<div class="sentiment-badge">🔴 舆情 {s_count}</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            '<div class="sentiment-badge-zero">⚪ 舆情 0</div>',
-            unsafe_allow_html=True,
-        )
-
     g = get_global_unread_count()
     total = int(g.get("total_unread", 0))
-    if total > 0:
-        st.markdown(
-            f'<div class="global-badge">🔔 通知 {total}</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            '<div class="global-badge-zero">🔕 通知 0</div>',
-            unsafe_allow_html=True,
-        )
+    render_top_badges(sentiment_count=s_count, notification_count=total)
 
 
 def check_api_health() -> bool:
@@ -139,28 +121,7 @@ def get_auth_status() -> dict:
     return {}
 
 
-def api_request(method: str, endpoint: str, **kwargs):
-    try:
-        url = f"{API_BASE_URL}{endpoint}"
-        headers = kwargs.pop("headers", {}) or {}
-        headers.update(_auth_headers())
-        response = requests.request(method, url, timeout=30, headers=headers, **kwargs)
-        if response.status_code == 401:
-            st.warning("登录已失效, 请重新登录 (左侧 '🔐 系统管理' 页)")
-            st.session_state.pop("auth_token", None)
-            st.session_state.pop("auth_user", None)
-            return None
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.ConnectionError:
-        st.error("无法连接到后端服务，请确保FastAPI服务已启动")
-        return None
-    except requests.exceptions.HTTPError as e:
-        st.error(f"API错误: {e}")
-        return None
-
-
-@st.cache_data(ttl=60)
+# P0: 取消缓存, 每次都拉新 (firm_id 已写入 token claims)
 def get_projects():
     return api_request("GET", "/api/projects/") or []
 
@@ -178,7 +139,7 @@ def _render_user_card_in_sidebar() -> None:
             try:
                 requests.post(
                     f"{API_BASE_URL}/api/auth/logout",
-                    headers=_auth_headers(),
+                    headers=auth_headers(),
                     timeout=5,
                 )
             except Exception:
@@ -196,10 +157,31 @@ def _render_user_card_in_sidebar() -> None:
 
 
 def main():
-    st.markdown('<p class="main-header">📊 IPO 审计系统 (专业版)</p>', unsafe_allow_html=True)
+    # 飞书页头
+    page_header(
+        icon="📊",
+        title="IPO 审计系统 (专业版)",
+        subtitle="面向 IPO 审计的底稿生成 · 试算平衡 · AI 风险识别一站式平台",
+    )
 
     # 全局红点 — 舆情 + 通用通知 (右上角 fixed)
     render_sentiment_global_badge()
+
+    # 首次访问轻量引导 (避免打扰, 只一次)
+    _show_first_run_tip()
+
+    # 顶部欢迎横幅 — 按登录用户身份 + 项目数 + 待办数 个性化
+    user = st.session_state.get("auth_user") or {}
+    try:
+        projects = get_projects() or []
+    except Exception:
+        projects = []
+    greeting_banner(
+        user_name=user.get("full_name") or user.get("username") or "用户",
+        role=user.get("role", "auditor"),
+        project_count=len(projects),
+        pending_count=0,
+    )
 
     # Sidebar
     st.sidebar.title("功能菜单")
@@ -247,7 +229,22 @@ def main():
             "🎯 IPO 专属 (Pack D)",  # Pack D
             "🔐 系统管理",  # Pack A
         ],
+        key="sidebar_page_radio",
     )
+
+    # P0 修复: 改用 st.query_params 驱动跳转, 避免与 sidebar radio 抢状态
+    # (原 session_state hack 会在 rerun 时被 pop 出去, 用户立即切 radio 会闪烁)
+    _nav = st.query_params.get("nav")
+    _NAV_MAP = {
+        "projects": "📁 项目管理",
+        "import": "📤 数据导入",
+        "workbook": "📊 底稿生成",
+        "report": "📄 综合报告",
+    }
+    if _nav and _nav in _NAV_MAP:
+        page = _NAV_MAP[_nav]
+        # 消费掉, 不持久化
+        st.query_params.pop("nav", None)
 
     if page == "🏠 首页概览":
         show_homepage()
@@ -386,79 +383,171 @@ def main():
 
 
 def show_homepage():
-    st.markdown("## 📊 系统概览")
+    page_header(icon="🏠", title="系统概览", subtitle="一站式 IPO 审计工作台")
+    breadcrumb(["首页", "系统概览"])
 
-    col1, col2, col3, col4 = st.columns(4)
+    # 数据加载阶段 — 用骨架占位, 避免空白闪烁
+    placeholder = st.empty()
+    with placeholder.container():
+        skeleton(lines=4, height=20)
+
     projects = get_projects() or []
+    active = len([p for p in projects if p.get("status") == "active"])
+    api_status = "在线" if check_api_health() else "离线"
 
-    with col1:
-        st.metric("项目总数", len(projects))
-    with col2:
-        active = len([p for p in projects if p.get("status") == "active"])
-        st.metric("进行中项目", active)
-    with col3:
-        st.metric("API状态", "在线" if check_api_health() else "离线")
-    with col4:
-        st.metric("版本", "0.2.0")
+    # 数据加载完毕, 清空骨架
+    placeholder.empty()
 
-    st.markdown("---")
+    # ── 关键指标 — 4 卡 φ 等宽 (视觉重心) ────────────────
+    stat_grid(
+        [
+            {
+                "label": "项目总数",
+                "value": str(len(projects)),
+                "delta": f"+{active} 进行中" if active else None,
+                "delta_dir": "up" if active else "neutral",
+            },
+            {
+                "label": "进行中项目",
+                "value": str(active),
+                "status": "primary" if active else "default",
+            },
+            {
+                "label": "API 状态",
+                "value": api_status,
+                "delta": "健康" if api_status == "在线" else "请检查后端",
+                "delta_dir": "up" if api_status == "在线" else "down",
+            },
+            {
+                "label": "系统版本",
+                "value": "v0.2.0",
+                "delta": "2026-06 更新",
+                "delta_dir": "up",
+            },
+        ],
+        aspect="equal",
+    )
 
+    feishu_divider()
+
+    # ── 快速操作 — 4 张大入口卡 (φ 等宽) ─────────────────
     st.markdown("### ⚡ 快速操作")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        if st.button("➕ 新建项目", use_container_width=True, type="primary"):
-            st.session_state["page"] = "📁 项目管理"
+    cols = st.columns([1, 1, 1, 1])  # φ 等宽
+    with cols[0]:
+        if link_card("➕", "新建项目", "创建 IPO 审计项目, 设置年度和被审计单位", "新建项目", "home_new_project", "primary"):
+            st.query_params["nav"] = "projects"
             st.rerun()
-    with col2:
-        if st.button("📤 导入数据", use_container_width=True):
-            st.session_state["page"] = "📤 数据导入"
+    with cols[1]:
+        if link_card("📤", "导入数据", "上传科目余额表 / 序时账 / 银行对账单", "导入数据", "home_import_data"):
+            st.query_params["nav"] = "import"
             st.rerun()
-    with col3:
-        if st.button("📊 生成底稿", use_container_width=True):
-            st.session_state["page"] = "📊 底稿生成"
+    with cols[2]:
+        if link_card("📊", "生成底稿", "一键生成科目明细 / 利润表 / 资产负债表 / 现金流量表", "生成底稿", "home_gen_workbook"):
+            st.query_params["nav"] = "workbook"
             st.rerun()
-    with col4:
-        if st.button("📄 生成报告", use_container_width=True):
-            st.session_state["page"] = "📄 综合报告"
+    with cols[3]:
+        if link_card("📄", "生成报告", "综合报告 / 异常检测 / 仪表盘", "生成报告", "home_gen_report"):
+            st.query_params["nav"] = "report"
             st.rerun()
 
-    st.markdown("---")
-    st.markdown("### 📋 最近项目")
-    if projects:
-        df = pd.DataFrame(projects[:5])
-        st.dataframe(
-            df[["name", "company_name", "fiscal_year", "status"]], use_container_width=True
+    feishu_divider()
+
+    # ── 主区 + 侧栏 — φ 38.2% / 61.8% 分栏 ───────────────
+    col_main, col_side = st.columns([PHI_INV, 1 - PHI_INV])
+
+    with col_main:
+        # 左侧主区: 最近项目
+        st.markdown("### 📋 最近项目")
+        if projects:
+            section_card_start("最新项目动态", "📁")
+            df = pd.DataFrame(projects[:5])
+            try:
+                cols_show = [c for c in ["name", "company_name", "fiscal_year", "status"] if c in df.columns]
+                if cols_show:
+                    st.dataframe(df[cols_show], use_container_width=True, hide_index=True)
+                else:
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+            except Exception:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            section_card_end()
+        else:
+            empty_state(
+                icon="📁",
+                message="暂无项目",
+                hint="点击上方「➕ 新建项目」开始你的第一个 IPO 审计项目",
+            )
+
+    with col_side:
+        # 右侧 φ: 系统状态 + 快捷入口
+        st.markdown("### 🎯 系统状态")
+
+        # 进度环 — 总体健康度
+        ring_placeholder = st.container()
+        with ring_placeholder:
+            health_pct = 100 if api_status == "在线" else 30
+            cols = st.columns([1, 1.618])  # φ 比例
+            with cols[0]:
+                progress_ring(percent=health_pct, size=80, label=f"{health_pct}%")
+            with cols[1]:
+                kv_list([
+                    ("后端", "🟢 在线" if api_status == "在线" else "🔴 离线"),
+                    ("数据库", "🟢 SQLite"),
+                    ("AI", "🟢 就绪"),
+                    ("认证", "🟢 启用" if get_auth_status().get("auth_enabled") else "⚪ 关闭"),
+                ])
+
+        st.markdown("")
+
+        # 推荐功能 — φ feature card
+        st.markdown("### ✨ 推荐功能")
+        feature_card(
+            "🤖", "AI 风险分析",
+            "基于 MiniMax + DeepSeek 双引擎, 自动识别异常交易和潜在风险点",
+            badge="热门",
         )
-    else:
-        st.info("暂无项目，请先创建项目")
+        st.markdown("")
+        feature_card(
+            "📚", "自助知识库",
+            "上传审计实务书籍, AI 自动检索相似案例辅助说明生成",
+            badge="新",
+        )
+        st.markdown("")
+        feature_card(
+            "📡", "舆情跟踪",
+            "多源抓取 + AI 去重, 实时监控被审计单位舆情动态",
+            badge=None,
+        )
 
 
 def show_projects():
-    st.markdown('<p class="sub-header">📁 项目管理</p>', unsafe_allow_html=True)
+    page_header(icon="📁", title="项目管理", subtitle="管理所有 IPO 审计项目 (创建 / 查询)")
 
     tab1, tab2 = st.tabs(["📋 项目列表", "➕ 新建项目"])
 
     with tab1:
-        st.markdown("#### 项目列表")
+        section_card_start("项目列表", "📋")
         projects = get_projects()
         if projects:
             df = pd.DataFrame(projects)
             st.dataframe(
                 df[["id", "name", "company_name", "industry", "fiscal_year", "status"]],
                 use_container_width=True,
+                hide_index=True,
             )
         else:
-            st.info("暂无项目")
+            empty_state(icon="📁", message="暂无项目", hint="切到「➕ 新建项目」标签页创建")
+        section_card_end()
 
     with tab2:
-        st.markdown("#### 创建新项目")
+        section_card_start("创建新项目", "➕")
         with st.form("create_project_form"):
-            name = st.text_input("项目名称", placeholder="例如：XX公司IPO审计")
-            company_name = st.text_input("公司名称", placeholder="例如：华大基因")
+            name = st.text_input("项目名称", placeholder="例如：XX公司IPO审计", key="new_project_name")
+            company_name = st.text_input("公司名称", placeholder="例如：华大基因", key="new_project_company")
             industry = st.selectbox(
-                "所属行业", ["制造业", "信息技术", "医药生物", "金融服务", "房地产", "零售", "其他"]
+                "所属行业", ["制造业", "信息技术", "医药生物", "金融服务", "房地产", "零售", "其他"],
+                key="new_project_industry",
             )
-            fiscal_year = st.number_input("审计年度", min_value=2000, max_value=2030, value=2024)
+            fiscal_year = st.number_input("审计年度", min_value=2000, max_value=2030, value=2024, key="new_project_fy")
             submitted = st.form_submit_button("创建项目", type="primary", use_container_width=True)
 
             if submitted:
@@ -478,27 +567,30 @@ def show_projects():
                     if result:
                         st.success(f"✅ 项目创建成功: {result.get('name')}")
                         st.rerun()
+        section_card_end()
 
 
 def show_data_import():
-    st.markdown('<p class="sub-header">📤 数据导入</p>', unsafe_allow_html=True)
+    page_header(icon="📤", title="数据导入", subtitle="科目余额表 / 序时账 / 银行对账单, 支持金蝶/用友/SAP 自动识别")
 
     projects = get_projects()
     if not projects:
-        st.warning("请先创建项目")
+        empty_state(icon="📁", message="请先创建项目", hint="到「📁 项目管理」创建第一个项目")
         return
 
     project_options = {f"{p['id']} - {p['name']}": p["id"] for p in projects}
-    selected = st.selectbox("选择项目", list(project_options.keys()))
+    selected = st.selectbox("选择项目", list(project_options.keys()), key="data_import_project")
     project_id = project_options[selected]
 
     tab1, tab2, tab3 = st.tabs(["📋 科目余额表", "📒 序时账", "🏦 银行对账单"])
 
     with tab1:
-        st.markdown("#### 导入科目余额表")
-        st.markdown("**支持格式**: .xlsx, .xls, .csv | **ERP**: 金蝶、用友、SAP自动识别")
-        uploaded_file = st.file_uploader("选择科目余额表文件", type=["xlsx", "xls", "csv"])
-        if uploaded_file and st.button("导入", type="primary"):
+        section_card_start("导入科目余额表", "📋")
+        st.markdown("**支持格式**: `.xlsx`, `.xls`, `.csv` | **ERP**: 金蝶、用友、SAP 自动识别")
+        uploaded_file = st.file_uploader(
+            "选择科目余额表文件", type=["xlsx", "xls", "csv"], key="data_import_balance_upload"
+        )
+        if uploaded_file and st.button("导入科目余额表", type="primary", use_container_width=True, key="imp_balance_run"):
             files = {"file": (uploaded_file.name, uploaded_file.read(), uploaded_file.type)}
             result = api_request(
                 "POST", f"/api/projects/{project_id}/account-balances", files=files
@@ -506,11 +598,14 @@ def show_data_import():
             if result:
                 st.success(f"✅ {result.get('message', '导入成功')}")
                 st.rerun()
+        section_card_end()
 
     with tab2:
-        st.markdown("#### 导入序时账")
-        uploaded_file = st.file_uploader("选择序时账文件", type=["xlsx", "xls", "csv"])
-        if uploaded_file and st.button("导入序时账", type="primary"):
+        section_card_start("导入序时账", "📒")
+        uploaded_file = st.file_uploader(
+            "选择序时账文件", type=["xlsx", "xls", "csv"], key="data_import_ledger_upload"
+        )
+        if uploaded_file and st.button("导入序时账", type="primary", use_container_width=True, key="imp_ledger_run"):
             files = {"file": (uploaded_file.name, uploaded_file.read(), uploaded_file.type)}
             result = api_request(
                 "POST", f"/api/projects/{project_id}/chronological-accounts", files=files
@@ -518,30 +613,34 @@ def show_data_import():
             if result:
                 st.success(f"✅ {result.get('message', '导入成功')}")
                 st.rerun()
+        section_card_end()
 
     with tab3:
-        st.markdown("#### 导入银行对账单")
-        uploaded_file = st.file_uploader("选择银行对账单文件", type=["xlsx", "xls", "csv"])
-        if uploaded_file and st.button("导入", type="primary"):
+        section_card_start("导入银行对账单", "🏦")
+        uploaded_file = st.file_uploader(
+            "选择银行对账单文件", type=["xlsx", "xls", "csv"], key="data_import_bank_upload"
+        )
+        if uploaded_file and st.button("导入银行对账单", type="primary", use_container_width=True, key="imp_bank_run"):
             files = {"file": (uploaded_file.name, uploaded_file.read(), uploaded_file.type)}
             result = api_request("POST", f"/api/projects/{project_id}/bank-statements", files=files)
             if result:
                 st.success(f"✅ {result.get('message', '导入成功')}")
+        section_card_end()
 
 
 def show_workbook_generation():
-    st.markdown('<p class="sub-header">📊 底稿生成</p>', unsafe_allow_html=True)
+    page_header(icon="📊", title="底稿生成", subtitle="5 种标准底稿模板, 一键导出 Excel")
 
     projects = get_projects()
     if not projects:
-        st.warning("请先创建项目")
+        empty_state(icon="📁", message="请先创建项目", hint="到「📁 项目管理」创建第一个项目")
         return
 
     project_options = {f"{p['id']} - {p['name']}": p["id"] for p in projects}
-    selected = st.selectbox("选择项目", list(project_options.keys()))
+    selected = st.selectbox("选择项目", list(project_options.keys()), key="workbook_project")
     project_id = project_options[selected]
 
-    st.markdown("#### 选择模板类型")
+    section_card_start("选择模板类型", "📋")
     template_options = {
         "📋 科目明细表": "account_detail",
         "📈 利润表": "income_statement",
@@ -549,10 +648,10 @@ def show_workbook_generation():
         "💰 现金流量表": "cash_flow",
         "⚖️ 试算平衡表": "trial_balance",
     }
-    selected_template = st.selectbox("模板类型", list(template_options.keys()))
+    selected_template = st.selectbox("模板类型", list(template_options.keys()), key="workbook_tpl")
     template_type = template_options[selected_template]
 
-    if st.button("生成底稿", type="primary", use_container_width=True):
+    if st.button("生成底稿", type="primary", use_container_width=True, key="workbook_run"):
         with st.spinner("生成中..."):
             result = api_request(
                 "POST",
@@ -560,137 +659,168 @@ def show_workbook_generation():
                 json={"project_id": project_id, "template_type": template_type},
             )
             if result:
-                st.success(f"✅ 底稿生成成功")
+                st.success("✅ 底稿生成成功")
                 st.markdown(f"📁 文件路径: `{result.get('file_path')}`")
                 st.markdown(
                     f"📥 下载链接: [{result.get('file_name')}]({result.get('download_url')})"
                 )
+    section_card_end()
 
 
 def show_trial_balance():
-    st.markdown('<p class="sub-header">⚖️ 试算平衡</p>', unsafe_allow_html=True)
+    page_header(icon="⚖️", title="试算平衡", subtitle="检查借/贷方合计与差异, 验证报表平衡")
 
     projects = get_projects()
     if not projects:
-        st.warning("请先创建项目")
+        empty_state(icon="📁", message="请先创建项目", hint="到「📁 项目管理」创建第一个项目")
         return
 
     project_options = {f"{p['id']} - {p['name']}": p["id"] for p in projects}
-    selected = st.selectbox("选择项目", list(project_options.keys()))
+    selected = st.selectbox("选择项目", list(project_options.keys()), key="trial_balance_project")
     project_id = project_options[selected]
 
-    if st.button("检查试算平衡", type="primary", use_container_width=True):
+    if st.button("检查试算平衡", type="primary", use_container_width=True, key="trial_balance_run"):
         with st.spinner("检查中..."):
             result = api_request(
                 "POST", "/api/workbooks/trial-balance", json={"project_id": project_id}
             )
             if result:
-                if result.get("is_balanced"):
+                is_balanced = result.get("is_balanced")
+                # 飞书化结果展示
+                if is_balanced:
                     st.markdown(
-                        '<div class="success-box">✅ <strong>试算平衡</strong> - 资产负债表平衡！</div>',
+                        f'<div style="background:{FEISHU_C.success_light};color:{FEISHU_C.success};'
+                        f'padding:1rem 1.25rem;border-radius:{FEISHU_R.lg};'
+                        f'border-left:4px solid {FEISHU_C.success};font-weight:500;">'
+                        f'✅ 试算平衡 - 资产负债表平衡</div>',
                         unsafe_allow_html=True,
                     )
                 else:
                     st.markdown(
-                        '<div class="warning-box">⚠️ <strong>试算不平衡</strong> - 存在差异，请检查数据</div>',
+                        f'<div style="background:{FEISHU_C.warning_light};color:{FEISHU_C.warning};'
+                        f'padding:1rem 1.25rem;border-radius:{FEISHU_R.lg};'
+                        f'border-left:4px solid {FEISHU_C.warning};font-weight:500;">'
+                        f'⚠️ 试算不平衡 - 存在差异, 请检查数据</div>',
                         unsafe_allow_html=True,
                     )
 
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("借方合计", f"¥ {result.get('total_debit', 0):,.2f}")
+                    metric_card("借方合计", f"¥ {result.get('total_debit', 0):,.2f}")
                 with col2:
-                    st.metric("贷方合计", f"¥ {result.get('total_credit', 0):,.2f}")
+                    metric_card("贷方合计", f"¥ {result.get('total_credit', 0):,.2f}")
                 with col3:
-                    st.metric("差异", f"¥ {result.get('difference', 0):,.2f}")
+                    diff = float(result.get("difference", 0))
+                    metric_card(
+                        "差异",
+                        f"¥ {diff:,.2f}",
+                        delta=("平衡" if abs(diff) < 0.01 else "需调整"),
+                        delta_direction=("up" if abs(diff) < 0.01 else "down"),
+                    )
 
                 if result.get("account_details"):
-                    st.markdown("#### 科目明细")
+                    section_card_start("科目明细", "📋")
                     df = pd.DataFrame(result["account_details"])
-                    st.dataframe(df, use_container_width=True)
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+                    section_card_end()
 
 
 def show_regulatory_cases():
-    st.markdown('<p class="sub-header">🔍 监管案例库</p>', unsafe_allow_html=True)
+    page_header(icon="🔍", title="监管案例库", subtitle="证监会 / 上交所 / 深交所 问询函与处罚案例")
 
     tab1, tab2, tab3 = st.tabs(["📥 抓取案例", "📋 案例列表", "🔎 关键词搜索"])
 
     with tab1:
-        st.markdown("#### 抓取监管案例")
+        section_card_start("抓取监管案例", "📥")
         st.info("从证监会、上交所、深交所自动抓取问询函和处罚案例")
-        if st.button("开始抓取", type="primary"):
+        if st.button("开始抓取", type="primary", key="reg_scrape_run"):
             with st.spinner("抓取中，请稍候..."):
                 result = api_request("POST", "/api/regulatory-cases/scrape")
                 if result:
                     st.success(f"✅ 成功抓取 {result.get('scraped_count', 0)} 条案例")
+        section_card_end()
 
     with tab2:
-        st.markdown("#### 案例列表")
+        section_card_start("案例列表", "📋")
         cases = api_request("GET", "/api/regulatory-cases/")
         if cases:
             df = pd.DataFrame(cases)
             st.dataframe(
                 df[["case_no", "case_type", "source", "publish_date", "title"]],
-                use_container_width=True,
+                use_container_width=True, hide_index=True,
             )
         else:
-            st.info("暂无案例，请先抓取")
+            empty_state(icon="📋", message="暂无案例", hint="先到「📥 抓取案例」抓取")
+        section_card_end()
 
     with tab3:
-        st.markdown("#### 关键词搜索")
-        keywords = st.text_input("输入关键词（逗号分隔）")
-        if keywords and st.button("搜索"):
+        section_card_start("关键词搜索", "🔎")
+        keywords = st.text_input("输入关键词（逗号分隔）", key="reg_search_kw")
+        if keywords and st.button("搜索", key="reg_search_run"):
             result = api_request(
                 "GET", f"/api/regulatory-cases/search/by-keywords?keywords={keywords}"
             )
             if result:
                 st.success(f"找到 {result.get('matched_count', 0)} 条相关案例")
+        section_card_end()
 
 
 def show_ai_analysis():
-    st.markdown('<p class="sub-header">🤖 AI 风险分析</p>', unsafe_allow_html=True)
+    page_header(icon="🤖", title="AI 风险分析", subtitle="MiniMax 大模型驱动的风险识别与仪表盘")
 
     projects = get_projects()
     if not projects:
-        st.warning("请先创建项目")
+        empty_state(icon="📁", message="请先创建项目", hint="到「📁 项目管理」创建第一个项目")
         return
 
     project_options = {f"{p['id']} - {p['name']}": p["id"] for p in projects}
-    selected = st.selectbox("选择项目", list(project_options.keys()))
+    selected = st.selectbox("选择项目", list(project_options.keys()), key="ai_project")
     project_id = project_options[selected]
 
-    st.info("🤖 AI分析功能需要配置MINIMAX_API_KEY后使用")
+    st.info("🤖 AI 分析功能需要配置 `MINIMAX_API_KEY` 后使用")
 
-    st.markdown("### 📊 仪表盘数据")
-    if st.button("获取仪表盘数据"):
+    section_card_start("仪表盘数据", "📊")
+    if st.button("获取仪表盘数据", type="primary", key="ai_dashboard_run"):
         result = api_request("GET", f"/api/reports/dashboard?project_id={project_id}")
         if result:
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric(
-                    "总资产", f"¥ {result.get('financial_summary', {}).get('total_assets', 0):,.0f}"
+                metric_card(
+                    "总资产",
+                    f"¥ {result.get('financial_summary', {}).get('total_assets', 0):,.0f}",
                 )
             with col2:
-                st.metric(
-                    "营业收入", f"¥ {result.get('financial_summary', {}).get('revenue', 0):,.0f}"
+                metric_card(
+                    "营业收入",
+                    f"¥ {result.get('financial_summary', {}).get('revenue', 0):,.0f}",
                 )
             with col3:
-                st.metric("风险等级", result.get("risk_assessment", {}).get("level", "未知"))
+                level = result.get("risk_assessment", {}).get("level", "未知")
+                level_status = {
+                    "高": "error", "中": "warning", "低": "success",
+                }.get(level, "default")
+                metric_card(
+                    "风险等级", level,
+                    delta="需重点关注" if level == "高" else None,
+                    delta_direction=("down" if level == "高" else "neutral"),
+                    status=level_status,
+                )
+    section_card_end()
 
 
 def show_anomaly_detection():
-    st.markdown('<p class="sub-header">📋 异常检测</p>', unsafe_allow_html=True)
+    page_header(icon="📋", title="异常检测", subtitle="自动识别交易/科目级异常并按风险分级")
 
     projects = get_projects()
     if not projects:
-        st.warning("请先创建项目")
+        empty_state(icon="📁", message="请先创建项目", hint="到「📁 项目管理」创建第一个项目")
         return
 
     project_options = {f"{p['id']} - {p['name']}": p["id"] for p in projects}
-    selected = st.selectbox("选择项目", list(project_options.keys()))
+    selected = st.selectbox("选择项目", list(project_options.keys()), key="anomaly_project")
     project_id = project_options[selected]
 
-    if st.button("开始异常检测", type="primary"):
+    if st.button("开始异常检测", type="primary", key="anomaly_run"):
         with st.spinner("检测中..."):
             result = api_request("GET", f"/api/reports/anomalies?project_id={project_id}")
             if result:
@@ -699,7 +829,7 @@ def show_anomaly_detection():
 
                 if anomalies:
                     df = pd.DataFrame(anomalies)
-                    st.dataframe(df, use_container_width=True)
+                    st.dataframe(df, use_container_width=True, hide_index=True)
 
                     # 风险汇总
                     risk_counts = (
@@ -709,46 +839,52 @@ def show_anomaly_detection():
                     )
                     if not risk_counts.empty:
                         st.markdown("### 风险分布")
-                        col1, col2, col3 = st.columns(3)
-                        for level, count in risk_counts.items():
-                            with col1 if level == "高" else col2 if level == "中" else col3:
-                                st.metric(f"{level}风险", count)
+                        cols = st.columns(max(len(risk_counts), 1))
+                        for i, (level, count) in enumerate(risk_counts.items()):
+                            with cols[i % len(cols)]:
+                                status = {"高": "error", "中": "warning", "低": "success"}.get(
+                                    level, "default"
+                                )
+                                metric_card(f"{level}风险", str(count), status=status)
+                else:
+                    empty_state(icon="✅", message="未发现异常", hint="当前项目数据健康")
 
 
 def show_comprehensive_report():
-    st.markdown('<p class="sub-header">📄 综合报告</p>', unsafe_allow_html=True)
+    page_header(icon="📄", title="综合报告", subtitle="Word / PDF 报告生成 + 仪表盘预览")
 
     projects = get_projects()
     if not projects:
-        st.warning("请先创建项目")
+        empty_state(icon="📁", message="请先创建项目", hint="到「📁 项目管理」创建第一个项目")
         return
 
     project_options = {f"{p['id']} - {p['name']}": p["id"] for p in projects}
-    selected = st.selectbox("选择项目", list(project_options.keys()))
+    selected = st.selectbox("选择项目", list(project_options.keys()), key="comprehensive_project")
     project_id = project_options[selected]
 
+    section_card_start("生成报告", "📄")
     col1, col2 = st.columns(2)
-
     with col1:
-        if st.button("📄 生成Word报告", use_container_width=True):
+        if st.button("📄 生成 Word 报告", use_container_width=True, type="primary", key="comprehensive_word"):
             with st.spinner("生成中..."):
                 result = api_request("POST", f"/api/reports/generate/word?project_id={project_id}")
                 if result:
-                    st.success("✅ Word报告生成成功")
-
+                    st.success("✅ Word 报告生成成功")
     with col2:
-        if st.button("📕 生成PDF报告", use_container_width=True):
+        if st.button("📕 生成 PDF 报告", use_container_width=True, key="comprehensive_pdf"):
             with st.spinner("生成中..."):
                 result = api_request("POST", f"/api/reports/generate/pdf?project_id={project_id}")
                 if result:
-                    st.success("✅ PDF报告生成成功")
+                    st.success("✅ PDF 报告生成成功")
+    section_card_end()
 
-    st.markdown("---")
-    st.markdown("### 📊 快速预览")
-    if st.button("预览仪表盘数据"):
+    feishu_divider()
+    section_card_start("快速预览", "📊")
+    if st.button("预览仪表盘数据", key="comprehensive_preview"):
         result = api_request("GET", f"/api/reports/dashboard?project_id={project_id}")
         if result:
             st.json(result)
+    section_card_end()
 
 
 if __name__ == "__main__":

@@ -2,8 +2,11 @@
 
 import httpx
 import json
-from typing import List, Dict, Optional
+import logging
+from typing import Any, List, Dict, Optional
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class AIAnalysisEngine:
@@ -47,16 +50,51 @@ class AIAnalysisEngine:
         except Exception as e:
             return json.dumps({"error": str(e)})
 
+    async def _ai_json_call(
+        self,
+        prompt: str,
+        default: Any,
+        *,
+        method: str,
+        context: str,
+        coerce_list: bool = False,
+    ) -> Any:
+        """调 AI + 解析 JSON 响应 + 失败兜底。
+
+        4 个公开方法 (analyze_risk_level / detect_anomalies /
+        generate_audit_program / analyze_regulatory_compliance) 共用这个 helper,
+        行为完全等价: 解析失败 logger.exception + 返回 default。
+
+        Args:
+            prompt: 拼接好的用户 prompt。
+            default: 解析失败时返回的兜底 (dict / list / 任意)。
+            method: 公开方法名, 用于日志前缀 (例 ``"analyze_risk_level"``)。
+            context: 上下文信息 (行业/条数等), 附加到日志便于排查。
+            coerce_list: True 时若 AI 返回 dict (单对象) 强制包成 [dict];
+                False 时若 AI 返回非 list 直接返回 default。
+        """
+        response = await self._call_ai(prompt)
+        try:
+            result = json.loads(response)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("AI %s 响应解析失败 (%s): %s", method, context, exc)
+            return default
+        if coerce_list:
+            return result if isinstance(result, list) else [result]
+        if isinstance(default, list) and not isinstance(result, list):
+            return default
+        return result
+
     async def analyze_risk_level(self, financial_data: Dict, industry: str) -> Dict:
         """分析风险等级."""
         prompt = f"""
 作为IPO审计专家，请分析以下财务数据的风险等级：
 
 行业: {industry}
-总资产: {financial_data.get("total_assets", 0):,.2f}
-营业收入: {financial_data.get("revenue", 0):,.2f}
-净利润: {financial_data.get("net_profit", 0):,.2f}
-毛利率: {financial_data.get("gross_margin", 0):.2f}%
+总资产: {financial_data.get("total_assets") or 0:,.2f}
+营业收入: {financial_data.get("revenue") or 0:,.2f}
+净利润: {financial_data.get("net_profit") or 0:,.2f}
+毛利率: {financial_data.get("gross_margin") or 0:.2f}%
 应收账款周转天数: {financial_data.get("receivable_turnover_days", 0)}
 存货周转天数: {financial_data.get("inventory_turnover_days", 0)}
 
@@ -68,15 +106,16 @@ class AIAnalysisEngine:
 返回JSON格式：
 {{"risk_level": "高/中/低", "risk_points": [...], "recommendations": [...]}}
 """
-        response = await self._call_ai(prompt)
-        try:
-            return json.loads(response)
-        except:
-            return {
+        return await self._ai_json_call(
+            prompt,
+            {
                 "risk_level": "中",
                 "risk_points": ["AI响应解析失败"],
                 "recommendations": ["请检查API配置"],
-            }
+            },
+            method="analyze_risk_level",
+            context=f"industry={industry}",
+        )
 
     async def detect_anomalies(
         self, account_balances: List[Dict], chronological_accounts: List[Dict]
@@ -100,12 +139,13 @@ class AIAnalysisEngine:
 返回JSON数组格式：
 [{{"account_code": "...", "anomaly_type": "...", "description": "...", "severity": "高/中/低"}}]
 """
-        response = await self._call_ai(prompt)
-        try:
-            result = json.loads(response)
-            return result if isinstance(result, list) else [result]
-        except:
-            return []
+        return await self._ai_json_call(
+            prompt,
+            [],
+            method="detect_anomalies",
+            context=f"account_count={len(account_balances)}",
+            coerce_list=True,
+        )
 
     async def generate_audit_program(
         self, risk_points: List[Dict], regulatory_cases: List[Dict]
@@ -129,12 +169,12 @@ class AIAnalysisEngine:
 返回JSON数组格式：
 [{{"program_name": "...", "steps": [...], "evidence": [...], "expected_findings": [...]}}]
 """
-        response = await self._call_ai(prompt)
-        try:
-            result = json.loads(response)
-            return result if isinstance(result, list) else []
-        except:
-            return []
+        return await self._ai_json_call(
+            prompt,
+            [],
+            method="generate_audit_program",
+            context=f"risk_points={len(risk_points)}",
+        )
 
     async def analyze_regulatory_compliance(self, company_info: Dict, industry: str) -> Dict:
         """分析监管合规性."""
@@ -145,7 +185,7 @@ class AIAnalysisEngine:
 - 名称：{company_info.get("name", "")}
 - 行业：{industry}
 - 主营业务：{company_info.get("main_business", "")}
-- 营收规模：{company_info.get("revenue", 0):,.2f}
+- 营收规模：{company_info.get("revenue") or 0:,.2f}
 
 请识别：
 1. 该行业IPO最常见被质疑的问题
@@ -155,11 +195,12 @@ class AIAnalysisEngine:
 返回JSON格式：
 {{"common_issues": [...], "focus_areas": [...], "compliance_suggestions": [...]}}
 """
-        response = await self._call_ai(prompt)
-        try:
-            return json.loads(response)
-        except:
-            return {}
+        return await self._ai_json_call(
+            prompt,
+            {},
+            method="analyze_regulatory_compliance",
+            context=f"company={company_info.get('name', '')} industry={industry}",
+        )
 
 
 class RiskIdentifier:
@@ -169,14 +210,16 @@ class RiskIdentifier:
     def identify_revenue_recognition_risk(account_balances: List[Dict]) -> List[Dict]:
         """识别收入确认风险."""
         risks = []
+        # P0 正确性: 只把主营业务收入 (5001) / 其他业务收入 (5051) 算收入, 排除 5401/5501 等费用类
+        _revenue_prefixes = ("5001", "5002", "5051", "5301")
         revenue_accounts = [
-            ab for ab in account_balances if "5" in str(ab.get("account_code", ""))[:1]
+            ab for ab in account_balances
+            if any(str(ab.get("account_code", "")).startswith(p) for p in _revenue_prefixes)
         ]
 
         for ab in revenue_accounts:
-            ending = ab.get("ending_balance", 0)
-            ab.get("debit_amount", 0)
-            credit = ab.get("credit_amount", 0)
+            ending = ab.get("ending_balance") or 0
+            credit = ab.get("credit_amount") or 0
 
             # 期末突然大量确认收入
             if credit > 5000000 and ending > 0:
@@ -239,7 +282,7 @@ class RiskIdentifier:
         ]
 
         for ab in goodwill_accounts:
-            ending = ab.get("ending_balance", 0)
+            ending = ab.get("ending_balance") or 0
             if ending > 0:
                 # 商誉占资产比例过高
                 risks.append(
@@ -263,15 +306,7 @@ class RiskIdentifier:
             for ab in account_balances
             if any(kw in str(ab.get("account_name", "")) for kw in ["存货", "库存商品", "原材料"])
         ]
-        total_inventory = sum(ab.get("ending_balance", 0) for ab in inventory_accounts)
-
-        industry_thresholds = {
-            "制造业": 180,
-            "零售": 90,
-            "医药生物": 120,
-            "信息技术": 90,
-        }
-        industry_thresholds.get(industry, 120)
+        total_inventory = sum(ab.get("ending_balance") or 0 for ab in inventory_accounts)
 
         if total_inventory > 0:
             # 简化计算，实际应用中需要结合销售成本
@@ -327,7 +362,7 @@ class AnomalyDetector:
         """检测整数金额异常."""
         anomalies = []
         for ab in account_balances:
-            ending = ab.get("ending_balance", 0)
+            ending = ab.get("ending_balance") or 0
             if ending != 0 and ending % 10000 == 0 and ending > 100000:
                 anomalies.append(
                     {

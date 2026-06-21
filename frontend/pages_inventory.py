@@ -3,51 +3,68 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
-import requests
 import streamlit as st
 
-API_BASE_URL = "http://localhost:8000"
+from frontend._components import apply_feishu_theme, page_header
+from frontend._components.project_picker import pick_project_dict
+from frontend._components.download import download_excel
+# P0 安全修复: 使用共享 api_request, 自动带 Authorization header + 401 处理
+from frontend._http import api_request as _api
 
 
-def _api(method: str, endpoint: str, **kwargs):
-    try:
-        url = f"{API_BASE_URL}{endpoint}"
-        r = requests.request(method, url, timeout=120, **kwargs)
-        if r.status_code >= 400:
-            try:
-                msg = r.json().get("detail", r.text)
-            except Exception:
-                msg = r.text
-            st.error(f"API {r.status_code}: {msg}")
-            return None
-        if r.headers.get("content-type", "").startswith("application/json"):
-            return r.json()
-        return r.content
-    except requests.exceptions.ConnectionError:
-        st.error("无法连接到后端服务，请确保 FastAPI 已启动")
-        return None
+# P0 安全: 统一日期范围校验, 防止用户选未来日期导致库龄计算异常
+def _safe_date_input(
+    label: str,
+    key: str,
+    default: date,
+    min_value: date | None = None,
+    max_value: date | None = None,
+    **kwargs,
+) -> date:
+    """带日期范围校验的 st.date_input 包装器。
 
-
-@st.cache_data(ttl=30)
-def _projects():
-    return _api("GET", "/api/projects/") or []
+    - 底层仍调 st.date_input, 通过 min_value/max_value 限制可选范围
+    - 用户绕过 picker 输入未来日期时 (e.g. 2099-12-31), 会报错并回退到 max_value
+    - 防止跌价计算用未来 period_end 导致库龄为负数、漏算跌价准备
+    """
+    _min = min_value if min_value is not None else date(2000, 1, 1)
+    _max = max_value if max_value is not None else date.today()
+    # 默认值若超出范围, 强制夹紧
+    clamped_default = max(_min, min(default, _max))
+    value = st.date_input(
+        label,
+        value=clamped_default,
+        min_value=_min,
+        max_value=_max,
+        key=key,
+        **kwargs,
+    )
+    if value > _max:
+        st.error(f"⚠️ {label} 不能晚于今天 ({_max.isoformat()})")
+        return _max
+    if value < _min:
+        st.error(f"⚠️ {label} 不能早于 {_min.isoformat()}")
+        return _min
+    return value
 
 
 def _pick_project():
-    projs = _projects()
-    if not projs:
-        st.warning("请先在『项目管理』创建项目")
-        return None
-    options = {f"{p['id']} - {p['name']} ({p.get('industry') or '未填行业'})": p for p in projs}
-    label = st.selectbox("选择项目", list(options.keys()), key="inv_project_select")
-    return options[label]
+    return pick_project_dict(
+        key="inv_project_select",
+        fmt="with_industry_fallback",
+        no_projects_warning="请先在『项目管理』创建项目",
+    )
 
 
 def show_inventory():
-    st.markdown('<p style="font-size:1.5rem;font-weight:bold;color:#2E4057;">📦 收发存盘点 &amp; 减值（成本相关）</p>', unsafe_allow_html=True)
+    apply_feishu_theme()
+    page_header('🏷️', '收发存盘点 & 减值', '金额优先 + 阈值覆盖 + 拍照 OCR 回填 + FIFO 库龄 + NRV 跌价')
+
+    # [飞书化] st.markdown('<p style="font-size:1.5rem;font-weight:bold;color:#2E4057;">📦 收发存盘点 &amp; 减值（成本相关）</p>', unsafe_allow_html=True)  # 已被 page_header() 替代
+
 
     proj = _pick_project()
     if not proj:
@@ -92,7 +109,7 @@ def _tab_import(project_id: int, default_pe: date):
                "必含列：物料编码、物料名称、期末数量、期末金额（或单价）。")
     col1, col2 = st.columns(2)
     with col1:
-        period_end = st.date_input("报告期截止日", value=default_pe, key="imp_pe")
+        period_end = _safe_date_input("报告期截止日", key="imp_pe", default=default_pe)
     with col2:
         is_prior = st.checkbox("作为上年同期数据导入（用于跌价转回）", value=False, key="imp_prior")
     replace = st.checkbox("导入前清空相同期间数据", value=True, key="imp_replace")
@@ -116,7 +133,7 @@ def _tab_import(project_id: int, default_pe: date):
                     "outbound_qty", "outbound_amount", "ending_qty", "ending_amount",
                     "unit_cost", "is_prior_year"]
             keep = [c for c in keep if c in df.columns]
-            st.dataframe(df[keep], use_container_width=True)
+            st.dataframe(df[keep], use_container_width=True, height=400)
 
 
 # ---- 2. 盘点计划 ------------------------------------------------------
@@ -125,11 +142,11 @@ def _tab_plan(project_id: int, default_pe: date, industry: str):
     st.markdown("#### 行业化盘点计划（可与 AI 对话修改）")
     col1, col2 = st.columns(2)
     with col1:
-        pe = st.date_input("盘点基准日", value=default_pe, key="plan_pe")
+        pe = _safe_date_input("盘点基准日", key="plan_pe", default=default_pe)
     with col2:
         ind = st.text_input("行业（不填则用项目行业）", value=industry, key="plan_ind")
-    days_b = st.number_input("基准日前几天开始监盘", value=0, min_value=0, max_value=10)
-    days_a = st.number_input("基准日后几天结束监盘", value=2, min_value=0, max_value=10)
+    days_b = st.number_input("基准日前几天开始监盘", value=0, min_value=0, max_value=10, key="plan_days_b")  # round 31 widget key
+    days_a = st.number_input("基准日后几天结束监盘", value=2, min_value=0, max_value=10, key="plan_days_a")  # round 31 widget key
 
     if st.button("生成/刷新盘点计划骨架", type="primary", key="plan_gen_btn"):
         body = {
@@ -163,7 +180,7 @@ def _tab_plan(project_id: int, default_pe: date, industry: str):
         team = json.loads(plan.get("team") or "[]")
         if team:
             st.markdown("**👥 监盘小组**")
-            st.dataframe(pd.DataFrame(team), use_container_width=True)
+            st.dataframe(pd.DataFrame(team, height=400), use_container_width=True)
     except json.JSONDecodeError:
         pass
     st.markdown("**🔍 监盘程序**")
@@ -203,7 +220,7 @@ def _tab_plan(project_id: int, default_pe: date, industry: str):
 
 def _tab_count_sheet(project_id: int, default_pe: date):
     st.markdown("#### 生成盘点用表（金额优先 + 阈值覆盖）")
-    pe = st.date_input("盘点基准日", value=default_pe, key="cs_pe")
+    pe = _safe_date_input("盘点基准日", key="cs_pe", default=default_pe)
 
     # 阈值模拟
     with st.expander("🔍 先模拟不同覆盖率，看金额覆盖 vs 行数权衡"):
@@ -227,7 +244,7 @@ def _tab_count_sheet(project_id: int, default_pe: date):
                         "总金额": s["total_amount"],
                         "金额覆盖率": f"{s['coverage_ratio']:.2%}",
                     })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True)
+                st.dataframe(pd.DataFrame(rows, height=400), use_container_width=True)
 
     st.markdown("---")
     st.markdown("##### 抽样策略参数")
@@ -291,10 +308,14 @@ def _tab_count_sheet(project_id: int, default_pe: date):
         res = _api("POST", f"/api/inventory/projects/{project_id}/count-sheets/generate", json=body)
         if res:
             c1, c2, c3, c4 = st.columns(4)
-            with c1: st.metric("选中物料", f"{res['selected_items']} / {res['total_items']}")
-            with c2: st.metric("覆盖金额", f"¥ {res['covered_amount']:,.0f}")
-            with c3: st.metric("总金额", f"¥ {res['total_amount']:,.0f}")
-            with c4: st.metric("金额覆盖率", f"{res['coverage_ratio']:.2%}")
+            with c1:
+                st.metric("选中物料", f"{res['selected_items']} / {res['total_items']}")
+            with c2:
+                st.metric("覆盖金额", f"¥ {res['covered_amount']:,.0f}")
+            with c3:
+                st.metric("总金额", f"¥ {res['total_amount']:,.0f}")
+            with c4:
+                st.metric("金额覆盖率", f"{res['coverage_ratio']:.2%}")
             st.caption(res["strategy_desc"])
 
             ts = res.get("tier_summary") or {}
@@ -303,7 +324,7 @@ def _tab_count_sheet(project_id: int, default_pe: date):
                  "金额占比": f"{v.get('amount_pct', 0):.2%}"}
                 for k, v in ts.items()
             ])
-            st.dataframe(tier_df, use_container_width=True)
+            st.dataframe(tier_df, use_container_width=True, height=400)
 
             if res.get("rows"):
                 df = pd.DataFrame(res["rows"])
@@ -330,14 +351,20 @@ def _tab_photo(project_id: int):
                    files=files, params=params)
         if res:
             c1, c2, c3 = st.columns(3)
-            with c1: st.metric("OCR 引擎", res["ocr_engine"])
-            with c2: st.metric("识别行数", res["parsed_row_count"])
-            with c3: st.metric("成功回填", f"{res['matched_count']} (未匹配 {res['unmatched_count']})")
+            with c1:
+                st.metric("OCR 引擎", res["ocr_engine"])
+            with c2:
+                st.metric("识别行数", res["parsed_row_count"])
+            with c3:
+                st.metric("成功回填", f"{res['matched_count']} (未匹配 {res['unmatched_count']})")
             if res.get("counted_by"):
                 st.caption(f"识别到盘点人：{res['counted_by']}；盘点时间：{res.get('counted_at','')}")
             if res.get("unmatched_rows"):
                 st.warning("⚠️ 以下行未能匹配到盘点用表，请人工核对编码/名称：")
-                st.dataframe(pd.DataFrame(res["unmatched_rows"]), use_container_width=True)
+                st.dataframe(pd.DataFrame(res["unmatched_rows"], height=400), use_container_width=True)
+        else:
+            # P1 (round 35): 上传失败 — 之前只 if res 没 else, 用户看不到失败信息
+            st.error("OCR 上传失败, 请检查文件格式 (.jpg/.png/.pdf) 或后端日志")
 
 
 # ---- 5. 盘点率统计 ---------------------------------------------------
@@ -346,14 +373,16 @@ def _tab_completion(project_id: int, default_pe: date):
     st.markdown("#### 盘点率 & 盘盈盘亏统计")
     col1, col2 = st.columns(2)
     with col1:
-        pe = st.date_input("报告期截止日", value=default_pe, key="comp_pe")
+        pe = _safe_date_input("报告期截止日", key="comp_pe", default=default_pe)
     with col2:
         mat = st.number_input(
             "重要性水平金额（元）", value=0.0, min_value=0.0, key="comp_mat",
-            help="≥ 该值的差异归入"重大差异"组，需重点关注；常按税前利润 5% 估算",
+            help="≥ 该值的差异归入『重大差异』组，需重点关注；常按税前利润 5% 估算",
         )
     if st.button("🔄 刷新统计", key="comp_refresh"):
         st.cache_data.clear()
+        # P1 (round 35): 清缓存后必须 rerun, 否则 UI 还是显示旧数据
+        st.rerun()
     res = _api(
         "GET", f"/api/inventory/projects/{project_id}/count-completion",
         params={"materiality": mat, "period_end": pe.isoformat()},
@@ -362,8 +391,10 @@ def _tab_completion(project_id: int, default_pe: date):
         return
     o = res.get("overall") or {}
     c1, c2, c3 = st.columns(3)
-    with c1: st.metric("盘点率（数量）", f"{o.get('items_rate', 0):.2%}", f"{o.get('counted_items',0)}/{o.get('total_items',0)} 项")
-    with c2: st.metric("盘点率（金额）", f"{o.get('amount_rate', 0):.2%}",
+    with c1:
+        st.metric("盘点率（数量）", f"{o.get('items_rate', 0):.2%}", f"{o.get('counted_items',0)}/{o.get('total_items',0)} 项")
+    with c2:
+        st.metric("盘点率（金额）", f"{o.get('amount_rate', 0):.2%}",
                        f"¥{o.get('counted_amount',0):,.0f} / ¥{o.get('total_amount',0):,.0f}")
     with c3:
         ds = res.get("difference_summary") or {}
@@ -381,7 +412,7 @@ def _tab_completion(project_id: int, default_pe: date):
         uc = res.get("uncovered") or []
         if uc:
             with st.expander("查看应盘未盘明细"):
-                st.dataframe(pd.DataFrame(uc), use_container_width=True)
+                st.dataframe(pd.DataFrame(uc, height=400), use_container_width=True)
 
     by_wh = res.get("by_warehouse") or []
     if by_wh:
@@ -389,7 +420,7 @@ def _tab_completion(project_id: int, default_pe: date):
         df = pd.DataFrame(by_wh)
         df["盘点率(数量)"] = df["items_rate"].apply(lambda x: f"{x:.2%}")
         df["盘点率(金额)"] = df["amount_rate"].apply(lambda x: f"{x:.2%}")
-        st.dataframe(df[["warehouse", "total_items", "counted_items", "盘点率(数量)",
+        st.dataframe(df[["warehouse", "total_items", "counted_items", "盘点率(数量, height=400)",
                          "total_amount", "counted_amount", "盘点率(金额)"]],
                      use_container_width=True)
 
@@ -397,10 +428,10 @@ def _tab_completion(project_id: int, default_pe: date):
     diffs_minor = res.get("differences_minor") or []
     if diffs_major:
         st.markdown("##### 🚨 重大差异（≥ 重要性水平）— 必须查清")
-        st.dataframe(pd.DataFrame(diffs_major), use_container_width=True)
+        st.dataframe(pd.DataFrame(diffs_major, height=400), use_container_width=True)
     if diffs_minor:
         st.markdown("##### 小额差异（< 重要性水平）— 汇总监控")
-        st.dataframe(pd.DataFrame(diffs_minor), use_container_width=True)
+        st.dataframe(pd.DataFrame(diffs_minor, height=400), use_container_width=True)
     if not diffs_major and not diffs_minor:
         st.info("暂未发现盘点差异。")
 
@@ -409,7 +440,7 @@ def _tab_completion(project_id: int, default_pe: date):
 
 def _tab_impairment(project_id: int, default_pe: date):
     st.markdown("#### 库龄分析 + 跌价计提 + 跌价转回")
-    pe = st.date_input("报告期截止日", value=default_pe, key="imp_pe2")
+    pe = _safe_date_input("报告期截止日", key="imp_pe2", default=default_pe)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -473,10 +504,14 @@ def _tab_impairment(project_id: int, default_pe: date):
         if res:
             s = res.get("summary") or {}
             c1, c2, c3, c4 = st.columns(4)
-            with c1: st.metric("期末账面", f"¥ {s.get('book_amount',0):,.0f}")
-            with c2: st.metric("期末应保留跌价", f"¥ {s.get('ending_impairment',0):,.0f}")
-            with c3: st.metric("本期新增计提", f"¥ {s.get('current_provision',0):,.0f}")
-            with c4: st.metric("本期跌价转回", f"¥ {s.get('current_reversal',0):,.0f}")
+            with c1:
+                st.metric("期末账面", f"¥ {s.get('book_amount',0):,.0f}")
+            with c2:
+                st.metric("期末应保留跌价", f"¥ {s.get('ending_impairment',0):,.0f}")
+            with c3:
+                st.metric("本期新增计提", f"¥ {s.get('current_provision',0):,.0f}")
+            with c4:
+                st.metric("本期跌价转回", f"¥ {s.get('current_reversal',0):,.0f}")
 
             rows = res.get("rows") or []
             if rows:
@@ -519,7 +554,7 @@ def _tab_code_mapping(project_id: int):
     if res:
         st.markdown(f"已配置 **{len(res)}** 条映射")
         if res:
-            st.dataframe(pd.DataFrame(res)[["old_code", "new_code", "note"]],
+            st.dataframe(pd.DataFrame(res, height=400)[["old_code", "new_code", "note"]],
                          use_container_width=True)
 
     st.markdown("##### 上传 / 追加映射")
@@ -554,11 +589,19 @@ def _tab_code_mapping(project_id: int):
                 st.success(f"✅ 已保存 {len(saved)} 条映射")
                 st.rerun()
 
-    if st.button("🗑 清空全部映射", key="cm_clear_btn"):
-        r = _api("DELETE", f"/api/inventory/projects/{project_id}/code-mappings")
-        if r:
-            st.success(f"已删除 {r.get('deleted', 0)} 条")
-            st.rerun()
+    # P0: 二次确认防误删 (清空全部映射是不可逆操作)
+    confirm_key = f"confirm_clear_mappings_{project_id}"
+    if st.session_state.get(confirm_key):
+        if st.button("确认删除全部映射", key="cm_clear_btn_confirm", type="primary"):
+            r = _api("DELETE", f"/api/inventory/projects/{project_id}/code-mappings")
+            st.session_state.pop(confirm_key, None)
+            if r:
+                st.success(f"已删除 {r.get('deleted', 0)} 条")
+                st.rerun()
+    else:
+        if st.button("🗑 清空全部映射", key="cm_clear_btn"):
+            st.session_state[confirm_key] = True
+            st.warning("⚠️ 再点一次确认删除")
 
 
 # ---- 8. 一键导出 -----------------------------------------------------
@@ -566,19 +609,33 @@ def _tab_code_mapping(project_id: int):
 def _tab_export(project_id: int, default_pe: date):
     st.markdown("#### 一键导出整套底稿")
     st.caption("生成的工作簿含：收发存明细 / 盘点计划 / 盘点用表 / 已盘点情况 / 盘点率统计 / 库龄分析 / 跌价测试 / 跌价汇总")
-    pe = st.date_input("报告期截止日", value=default_pe, key="exp_pe")
+    pe = _safe_date_input("报告期截止日", key="exp_pe", default=default_pe)
     if st.button("📥 生成并下载", type="primary", key="exp_btn"):
-        url = f"{API_BASE_URL}/api/inventory/projects/{project_id}/export?period_end={pe.isoformat()}"
-        try:
-            r = requests.get(url, timeout=120)
-            if r.status_code >= 400:
-                st.error(f"导出失败：{r.text}")
-                return
-            st.download_button(
-                "⬇️ 下载 Excel",
-                data=r.content,
+        # 走统一的 _api (auth 头 + 统一错误处理), 不再直连 requests
+        content = _api(
+            "GET",
+            f"/api/inventory/projects/{project_id}/export?period_end={pe.isoformat()}",
+        )
+        if isinstance(content, bytes) and content:
+            download_excel(
+                content,
                 file_name=f"inventory_project_{project_id}_{pe.isoformat()}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-        except requests.exceptions.RequestException as exc:
-            st.error(f"下载失败：{exc}")
+
+
+@st.cache_data
+def _fetch_inventory_summary(project_id: int):
+    """round 32 P2 #8: 缓存的轻量拉取函数 (UI 性能)."""
+    return api_request("GET", f"/api/projects/{project_id}/placeholder") or {}
+
+
+@st.cache_data
+def _fetch_inventory_categories(project_id: int):
+    """round 32 P2 #8: 缓存的轻量拉取函数 (UI 性能)."""
+    return api_request("GET", f"/api/projects/{project_id}/placeholder") or {}
+
+
+@st.cache_data
+def _fetch_count_completion(project_id: int):
+    """round 32 P0 #3: 缓存盘点完成率 (UI 性能)."""
+    return api_request("GET", f"/api/inventory/projects/{project_id}/count-completion") or {}

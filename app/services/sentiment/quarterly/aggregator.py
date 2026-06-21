@@ -47,6 +47,10 @@ async def aggregate_window(
             SentimentEvent.publish_date.is_not(None),
             SentimentEvent.publish_date >= ws,
             SentimentEvent.publish_date <= we,
+            # P0-5 (2026-06-19): 排除上年同期数据 (误归到本季度) + 审计师已标记 ignored 的事件.
+            # 审计师标记 ignored 的事件不应进入季报 (避免 "已剔除噪声" 又被回写).
+            SentimentEvent.is_prior_year == False,  # noqa: E712
+            SentimentEvent.review_status != "ignored",
         )
         .order_by(SentimentEvent.publish_date.asc())
     )
@@ -70,6 +74,10 @@ async def lock_references(
     events: list[SentimentEvent],
 ) -> None:
     """把引用的 briefing_id / event_id 写回 report (锁定快照)."""
+    # ALG-04 (round32, 2026-06-20): 报告已锁定后, 引用快照不应被重写
+    # (会破坏审计痕迹). 抛出 ValueError 由调用方捕获处理.
+    if getattr(report, "is_locked", False):
+        raise ValueError("报告已锁定, 不可重新写入引用快照")
     report.referenced_briefing_ids_json = json.dumps([b.id for b in briefings], ensure_ascii=False)
     report.referenced_event_ids_json = json.dumps([e.id for e in events], ensure_ascii=False)
     await db.commit()

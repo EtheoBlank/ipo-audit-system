@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import ast
 import logging
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Optional
 
 from app.services.comprehensive.field_mapper import (
     FieldMapper,
@@ -173,20 +174,25 @@ def _eval_node(node: ast.AST, namespace: dict[str, Any]) -> Any:
         left = _eval_node(node.left, namespace)
         right = _eval_node(node.right, namespace)
         if isinstance(node.op, ast.Add):
-            return left + right
-        if isinstance(node.op, ast.Sub):
-            return left - right
-        if isinstance(node.op, ast.Mult):
-            return left * right
-        if isinstance(node.op, ast.Div):
-            return left / right
-        if isinstance(node.op, ast.FloorDiv):
-            return left // right
-        if isinstance(node.op, ast.Mod):
-            return left % right
-        if isinstance(node.op, ast.Pow):
-            return left**right
-        raise _SafeEvalError(f"不支持的二元运算: {type(node.op).__name__}")
+            result = left + right
+        elif isinstance(node.op, ast.Sub):
+            result = left - right
+        elif isinstance(node.op, ast.Mult):
+            result = left * right
+        elif isinstance(node.op, ast.Div):
+            result = left / right
+        elif isinstance(node.op, ast.FloorDiv):
+            result = left // right
+        elif isinstance(node.op, ast.Mod):
+            result = left % right
+        elif isinstance(node.op, ast.Pow):
+            result = left**right
+        else:
+            raise _SafeEvalError(f"不支持的二元运算: {type(node.op).__name__}")
+        # P0 资源: 限制数值结果大小, 防内存爆 (pow(2, 1<<10000) 之类)
+        if isinstance(result, (int, float)) and abs(result) > 1e15:
+            raise ValueError(f"表达式结果过大: {result}")
+        return result
     if isinstance(node, ast.Compare):
         # 仅支持单层比较 (a < b)
         left = _eval_node(node.left, namespace)
@@ -232,6 +238,113 @@ def _apply_compare(op: ast.AST, left: Any, right: Any) -> bool:
 # ============================== 编排器 ==============================
 
 
+def _SOURCES_ALL(_f: Any) -> bool:
+    """默认 predicate: 所有字段都参与 (workpaper/rule 跨所有 source)."""
+    return True
+
+
+# 单个阶段: predicate 决定哪些字段参与, runner 真正执行填充逻辑.
+StageRunner = Callable[["_FillState"], Awaitable[None]]
+Predicate = Callable[[Any], bool]
+
+
+@dataclass
+class _Stage:
+    name: str
+    predicate: Predicate  # 字段级 filter
+    runner: StageRunner  # 实际填充/汇总逻辑
+
+    async def run(self, state: "_FillState") -> None:
+        await self.runner(state)
+
+
+@dataclass
+class _FillState:
+    """fill 阶段的共享状态 (filled / context / engine / 当前 predicate / 阶段产物)."""
+
+    schema: Any  # TemplateSchema
+    ctx: Any  # WorkpaperDataContext
+    engine: "ComprehensiveFillEngine"
+    filled: dict[str, Any]  # field_id -> FillResult
+    context: dict[str, Any]  # 命名空间 (filled 的扁平 view)
+    predicate: Predicate = _SOURCES_ALL  # 当前阶段的字段过滤
+    questions: list[Any] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.questions is None:
+            self.questions = []
+
+
+# ---------- 阶段 runner (签名统一: 只接 _FillState) ----------
+
+async def _run_workpaper(state: _FillState) -> None:
+    """阶段 1: 从基础底稿直接抽取 (最高置信度)."""
+    for r in state.engine.mapper.map_all(state.schema.fields, state.ctx):
+        if r.value is not None:
+            state.filled[r.field_id] = r
+            state.context[r.field_id] = r.value
+
+
+async def _run_rule(state: _FillState) -> None:
+    """阶段 2/5: 规则引擎 — 仅在更高置信度时覆盖."""
+    for r in state.engine.rules.evaluate_all(state.schema.fields, state.context):
+        if r.field_id not in state.filled or state.filled[r.field_id].confidence < r.confidence:
+            state.filled[r.field_id] = r
+            state.context[r.field_id] = r.value
+
+
+async def _run_web_search(state: _FillState) -> None:
+    """阶段 3: 联网/知识库检索 (predicate 已限定 source=web_search:*)."""
+    for f in state.schema.fields:
+        if not state.predicate(f):
+            continue
+        if f.field_id in state.filled:
+            continue
+        r = await state.engine.web.fill_field(f, state.context)
+        if r.value is not None:
+            state.filled[r.field_id] = r
+            state.context[r.field_id] = r.value
+
+
+async def _run_calculated(state: _FillState) -> None:
+    """阶段 4: 在前面填充之上求值 (predicate 已限定 source=calculated:*)."""
+    for f in state.schema.fields:
+        if not state.predicate(f):
+            continue
+        expr = f.source.split(":", 1)[1]
+        try:
+            value = _safe_eval(expr, state.context)
+        except ValueError as exc:
+            logger.warning("字段 '%s' 表达式求值失败: %s", f.field_id, exc)
+            continue
+        if value is None:
+            continue
+        state.filled[f.field_id] = FillResult(
+            field_id=f.field_id,
+            value=value,
+            source_used=f"calculated:{expr}",
+            confidence=0.99,
+            citation=f"表达式: {expr}",
+        )
+        state.context[f.field_id] = value
+
+
+async def _run_open_questions(state: _FillState) -> None:
+    """阶段 6: 聚类未填字段为问号, 留待人工."""
+    state.questions = await state.engine.qa.generate_questions(
+        fields=state.schema.fields,
+        filled_field_ids={fid for fid, r in state.filled.items() if r.value is not None},
+        context={
+            "company_name": getattr(state.ctx.project, "company_name", None),
+            "audit_period": getattr(state.ctx.project, "fiscal_year", None),
+            "industry": getattr(state.ctx.project, "industry", None),
+        },
+    )
+
+
+# ---------- 公共 API ----------
+
+
 class ComprehensiveFillEngine:
     """综合底稿自动填写编排器。"""
 
@@ -247,8 +360,6 @@ class ComprehensiveFillEngine:
         self.web = web_engine or WebSearchEngine()
         self.qa = qa_engine or QAEngine()
 
-    # ---------- 公共 API ----------
-
     async def fill(
         self,
         schema: TemplateSchema,
@@ -256,75 +367,24 @@ class ComprehensiveFillEngine:
     ) -> FillReport:
         """对一份模板跑完整填充流程。
 
-        顺序：
-          workpaper → rule → web_search → calculated
-        问号字段（human_qa）由 ``generate_open_questions`` 单独生成。
+        顺序（按声明的 ``self._stages``）：
+          workpaper → rule → web_search → calculated → rule-again → open_questions
+        新增阶段只改 ``_stages`` 配置，不动主循环。
         """
-        filled: dict[str, FillResult] = {}
         # context 既是"已填值字典"，也是 calculated 表达式的命名空间
         # 预先把 ctx.extra 注入，使 calculated: 365*ar_balance/revenue 能找到 revenue
         context: dict[str, Any] = dict(getattr(ctx, "extra", {}) or {})
-
-        # 1) workpaper
-        for r in self.mapper.map_all(schema.fields, ctx):
-            if r.value is not None:
-                filled[r.field_id] = r
-                context[r.field_id] = r.value
-
-        # 2) rule
-        for r in self.rules.evaluate_all(schema.fields, context):
-            if r.field_id not in filled or filled[r.field_id].confidence < r.confidence:
-                filled[r.field_id] = r
-                context[r.field_id] = r.value
-
-        # 3) web_search
-        for f in schema.fields:
-            if f.field_id in filled:
-                continue
-            if not f.source.startswith("web_search:"):
-                continue
-            r = await self.web.fill_field(f, context)
-            if r.value is not None:
-                filled[r.field_id] = r
-                context[r.field_id] = r.value
-
-        # 4) calculated（在前面填充之上求值；可读其他 field 的值）
-        for f in schema.fields:
-            if not f.source.startswith("calculated:"):
-                continue
-            expr = f.source.split(":", 1)[1]
-            try:
-                value = _safe_eval(expr, context)
-            except ValueError as exc:
-                logger.warning("字段 '%s' 表达式求值失败: %s", f.field_id, exc)
-                continue
-            if value is None:
-                continue
-            filled[f.field_id] = FillResult(
-                field_id=f.field_id,
-                value=value,
-                source_used=f"calculated:{expr}",
-                confidence=0.99,
-                citation=f"表达式: {expr}",
-            )
-            context[f.field_id] = value
-
-        # 5) 重新跑一遍规则（级联：上一轮 calculated 可能解锁新规则）
-        for r in self.rules.evaluate_all(schema.fields, context):
-            if r.field_id not in filled or filled[r.field_id].confidence < r.confidence:
-                filled[r.field_id] = r
-                context[r.field_id] = r.value
-
-        # 6) 生成问号
-        questions = await self.qa.generate_questions(
-            fields=schema.fields,
-            filled_field_ids={fid for fid, r in filled.items() if r.value is not None},
-            context={
-                "company_name": getattr(ctx.project, "company_name", None),
-                "audit_period": getattr(ctx.project, "fiscal_year", None),
-                "industry": getattr(ctx.project, "industry", None),
-            },
+        filled: dict[str, FillResult] = {}
+        state = _FillState(
+            schema=schema,
+            ctx=ctx,
+            engine=self,
+            filled=filled,
+            context=context,
         )
+        for stage in self._stages():
+            state.predicate = stage.predicate
+            await stage.run(state)
 
         total = len(schema.fields)
         filled_count = sum(1 for r in filled.values() if r.value is not None)
@@ -334,8 +394,19 @@ class ComprehensiveFillEngine:
             filled=filled_count,
             pending=total - filled_count,
             results=list(filled.values()),
-            open_questions=questions,
+            open_questions=state.questions,
         )
+
+    def _stages(self) -> list["_Stage"]:
+        """声明式阶段列表。新增阶段：写一个 _Stage 进来即可。"""
+        return [
+            _Stage("workpaper", _SOURCES_ALL, _run_workpaper),
+            _Stage("rule", _SOURCES_ALL, _run_rule),
+            _Stage("web_search", lambda f: f.source.startswith("web_search:"), _run_web_search),
+            _Stage("calculated", lambda f: f.source.startswith("calculated:"), _run_calculated),
+            _Stage("rule_again", _SOURCES_ALL, _run_rule),
+            _Stage("open_questions", _SOURCES_ALL, _run_open_questions),
+        ]
 
     async def apply_qa_answers(
         self,

@@ -11,11 +11,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,10 +23,12 @@ from app.core.database import AsyncSessionLocal, get_db
 from app.models.db_models import Regulation, RegulationFavorite
 from app.models.db.auth import User
 from app.services.auth import get_current_user, get_current_user_optional
+from app.services.auth.tenant import ensure_project_in_firm, _is_admin, _user_firm_id
 from app.services.regulation_scraper import (
     RegulationScraperService,
     item_to_dict,
 )
+from app.utils.like_helpers import escape_like
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/regulations", tags=["法律法规"])
@@ -53,8 +55,7 @@ class RegulationOut(BaseModel):
     source_url: Optional[str] = None
     fetched_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ScrapeRequest(BaseModel):
@@ -88,8 +89,7 @@ class FavoriteOut(BaseModel):
     created_at: datetime
     regulation: RegulationOut
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ----------------------------------------------------------------------
@@ -110,7 +110,7 @@ async def _persist_items(items: list) -> dict:
             existing = await db.execute(select(Regulation).where(Regulation.content_hash == ch))
             row = existing.scalar_one_or_none()
             if row:
-                row.fetched_at = datetime.utcnow()
+                row.fetched_at = datetime.now(timezone.utc)
                 # 补完缺失字段（首次抓只拿到标题，第二次拿到详情）
                 for k, v in payload.items():
                     if k == "content_hash":
@@ -134,14 +134,14 @@ async def scrape_regulations(
 
     同步返回结果（适合手动触发）。如果要在后台跑，前端用 ``/scrape/async``。
     """
-    start = datetime.utcnow()
+    start = datetime.now(timezone.utc)
     service = RegulationScraperService()
     try:
         items = await service.scrape(sources=req.sources, max_pages=req.max_pages)
     finally:
         await service.close()
     stats = await _persist_items(items)
-    duration = (datetime.utcnow() - start).total_seconds()
+    duration = (datetime.now(timezone.utc) - start).total_seconds()
     requested = req.sources or service.SUPPORTED_SOURCES
     return ScrapeResult(
         requested_sources=requested,
@@ -209,13 +209,14 @@ async def list_regulations(
     if publish_before:
         conditions.append(Regulation.publish_date <= publish_before)
     if keyword:
-        like = f"%{keyword}%"
+        # 转义 LIKE 通配符 % _ \, 防止用户输入破坏搜索意图
+        like = f"%{escape_like(keyword)}%"
         conditions.append(
             or_(
-                Regulation.title.like(like),
-                Regulation.full_text.like(like),
-                Regulation.keywords.like(like),
-                Regulation.document_no.like(like),
+                Regulation.title.like(like, escape="\\"),
+                Regulation.full_text.like(like, escape="\\"),
+                Regulation.keywords.like(like, escape="\\"),
+                Regulation.document_no.like(like, escape="\\"),
             )
         )
     if conditions:
@@ -288,11 +289,11 @@ async def search_regulations(
 
     field_matches = [
         or_(
-            Regulation.title.like(f"%{kw}%"),
-            Regulation.full_text.like(f"%{kw}%"),
-            Regulation.keywords.like(f"%{kw}%"),
-            Regulation.document_no.like(f"%{kw}%"),
-            Regulation.summary.like(f"%{kw}%"),
+            Regulation.title.like(f"%{escape_like(kw)}%", escape="\\"),
+            Regulation.full_text.like(f"%{escape_like(kw)}%", escape="\\"),
+            Regulation.keywords.like(f"%{escape_like(kw)}%", escape="\\"),
+            Regulation.document_no.like(f"%{escape_like(kw)}%", escape="\\"),
+            Regulation.summary.like(f"%{escape_like(kw)}%", escape="\\"),
         )
         for kw in keywords
     ]
@@ -342,6 +343,9 @@ async def favorite_regulation(
     ).scalar_one_or_none()
     if not reg:
         raise HTTPException(status_code=404, detail="法规不存在")
+    # P0 多租户 (2026-06-19): 收藏到 project 时, 校验 project 属于当前 firm
+    if req.project_id is not None:
+        await ensure_project_in_firm(db, req.project_id, current_user)
     fav = RegulationFavorite(
         regulation_id=regulation_id,
         project_id=req.project_id,
@@ -367,6 +371,9 @@ async def unfavorite(
     ).scalar_one_or_none()
     if not fav:
         raise HTTPException(status_code=404, detail="收藏记录不存在")
+    # P0 多租户 (2026-06-19): 删除前校验 favorite 关联的 project 属于当前 firm
+    if fav.project_id is not None:
+        await ensure_project_in_firm(db, fav.project_id, current_user)
     await db.delete(fav)
     await db.commit()
     return {"message": "已取消收藏"}
@@ -379,9 +386,23 @@ async def list_favorites(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    # P0 多租户 (2026-06-19): 非 admin + 显式传 project_id 时, 校验 project 属于当前 firm;
+    # 未传 project_id 时, 通过 join Project + firm_id 过滤
+    from app.models.db_models import Project
     q = select(RegulationFavorite)
     if project_id is not None:
+        await ensure_project_in_firm(db, project_id, current_user)
         q = q.where(RegulationFavorite.project_id == project_id)
+    else:
+        if not _is_admin(current_user):
+            firm_id = _user_firm_id(current_user)
+            if firm_id is not None:
+                q = q.join(Project, Project.id == RegulationFavorite.project_id).where(
+                    or_(Project.firm_id == firm_id, Project.firm_id.is_(None))
+                )
+            else:
+                # 无 firm 的用户 (AUTH_ENABLED=false / 匿名 / 无 firm) — 软隔离放过
+                pass
     if tag:
         q = q.where(RegulationFavorite.tag == tag)
     q = q.order_by(RegulationFavorite.created_at.desc())

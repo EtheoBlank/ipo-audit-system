@@ -27,6 +27,11 @@ class OCRError(RuntimeError):
 class ContractOCR:
     """Image / PDF → (engine_name, plain_text)."""
 
+    # P1 性能 (2026-06-19): OCR 引擎模块级单例, 避免每次调用都冷启动
+    # paddleocr / easyocr 初始化耗时 5-15s, 多文件并发上传瓶颈
+    _paddle_ocr_cache: dict = {}
+    _easyocr_reader_cache: dict = {}
+
     @staticmethod
     def is_image(filename: str) -> bool:
         ext = Path(filename).suffix.lower()
@@ -37,8 +42,25 @@ class ContractOCR:
         return Path(filename).suffix.lower() == ".pdf"
 
     @classmethod
-    def run(cls, file_path: Path, filename: str) -> Tuple[str, str]:
-        """Return (engine_name, text). Raises OCRError on failure."""
+    def run(cls, file_path: Path, filename: str, allowed_base: Path | None = None) -> Tuple[str, str]:
+        """Return (engine_name, text). Raises OCRError on failure.
+
+        P0 安全修复: 若传入 allowed_base, 校验 file_path 在 allowed_base 内,
+        防攻击者通过 file_path='/etc/passwd' 之类读取任意文件 (虽 OCR 不会泄露内容,
+        但读取行为本身违反最小权限)。
+        """
+        file_path = Path(file_path)
+        # P2 修复 (2026-06-19): file_path.resolve() 在 Windows 不存在路径上抛
+        # FileNotFoundError (WinError 3), 之前裸抛到 500. 现兜底 OCRError
+        try:
+            file_path = file_path.resolve()
+        except (OSError, ValueError) as exc:
+            raise OCRError(f"无法解析文件路径: {file_path} ({exc})") from exc
+        if allowed_base is not None:
+            allowed_resolved = Path(allowed_base).resolve()
+            target_resolved = file_path  # 上面已 resolve 过
+            if not target_resolved.is_relative_to(allowed_resolved):
+                raise OCRError(f"file_path 不在允许目录内: {file_path}")
         # Fast path: PDFs often have a text layer
         if cls.is_pdf(filename):
             try:
@@ -50,7 +72,8 @@ class ContractOCR:
                 if text and len(text) > 20:
                     return "pdfplumber", text
             except Exception as exc:  # noqa: BLE001
-                logger.info("pdfplumber failed for %s: %s", filename, exc)
+                # round 36 P1: info 留不下 traceback, 改 exception
+                logger.exception("pdfplumber failed for %s: %s", filename, exc)
             # Fall through to OCR if PDF has no text layer
 
         if not cls.is_image(filename) and not cls.is_pdf(filename):
@@ -60,7 +83,12 @@ class ContractOCR:
         try:
             from paddleocr import PaddleOCR  # type: ignore
 
-            ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+            cache_key = ("paddleocr", "ch")
+            if cache_key not in cls._paddle_ocr_cache:
+                cls._paddle_ocr_cache[cache_key] = PaddleOCR(
+                    use_angle_cls=True, lang="ch", show_log=False
+                )
+            ocr = cls._paddle_ocr_cache[cache_key]
             result = ocr.ocr(str(file_path), cls=True)
             lines = []
             for page in result or []:
@@ -72,34 +100,42 @@ class ContractOCR:
         except ImportError:
             logger.info("paddleocr not installed, falling back")
         except Exception as exc:  # noqa: BLE001
-            logger.warning("paddleocr failed for %s: %s", filename, exc)
+            # round 36 P1: warning 留不下 traceback, 改 exception
+            logger.exception("paddleocr failed for %s: %s", filename, exc)
 
         # 2) easyocr
         try:
             import easyocr  # type: ignore
 
-            reader = easyocr.Reader(["ch_sim", "en"], gpu=False, verbose=False)
+            cache_key = ("easyocr", "ch_sim+en")
+            if cache_key not in cls._easyocr_reader_cache:
+                cls._easyocr_reader_cache[cache_key] = easyocr.Reader(
+                    ["ch_sim", "en"], gpu=False, verbose=False
+                )
+            reader = cls._easyocr_reader_cache[cache_key]
             result = reader.readtext(str(file_path), detail=0, paragraph=True)
             if result:
                 return "easyocr", "\n".join(result)
         except ImportError:
             logger.info("easyocr not installed, falling back")
         except Exception as exc:  # noqa: BLE001
-            logger.warning("easyocr failed for %s: %s", filename, exc)
+            # round 36 P1: warning 留不下 traceback, 改 exception
+            logger.exception("easyocr failed for %s: %s", filename, exc)
 
         # 3) tesseract
         try:
             import pytesseract  # type: ignore
             from PIL import Image  # type: ignore
 
-            img = Image.open(str(file_path))
-            text = pytesseract.image_to_string(img, lang="chi_sim+eng")
+            with Image.open(str(file_path)) as img:
+                text = pytesseract.image_to_string(img, lang="chi_sim+eng")
             if text.strip():
                 return "tesseract", text
         except ImportError:
             logger.info("pytesseract not installed, falling back")
         except Exception as exc:  # noqa: BLE001
-            logger.warning("tesseract failed for %s: %s", filename, exc)
+            # round 36 P1: warning 留不下 traceback, 改 exception
+            logger.exception("tesseract failed for %s: %s", filename, exc)
 
         raise OCRError(
             "OCR 失败：未安装任何 OCR 引擎（paddleocr / easyocr / pytesseract）。"

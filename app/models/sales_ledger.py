@@ -125,10 +125,21 @@ class SynthesisRequest(BaseModel):
     extra_hint: str = ""
 
 
+class SynthesisErrorItem(BaseModel):
+    """P0-13: 单行 AI 抽取失败的明细 — 供前端 '待复核' 列表使用."""
+
+    idx: int = Field(..., description="原始 batch 中的索引位置")
+    row_summary: str = Field(..., description="失败行的精简摘要 (最多 200 字符)")
+    error: str = Field(..., description="校验错误详情")
+
+
 class SynthesisResponse(BaseModel):
     project_id: int
     synthesized_count: int
     records: list[SalesRecordResponse]
+    # P0-13: 部分失败时, 把失败行 + 错误信息回传前端, 不再整批 500
+    error_count: int = 0
+    errors: list[SynthesisErrorItem] = Field(default_factory=list)
 
 
 class AnalysisRequest(BaseModel):

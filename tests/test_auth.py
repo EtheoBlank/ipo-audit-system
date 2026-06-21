@@ -120,9 +120,13 @@ class TestJWT:
         """直接走 stdlib 路径, 确保 jose 不可用时仍工作."""
         from app.services.auth.jwt import _stdlib_decode, _stdlib_encode
 
-        token = _stdlib_encode({"sub": "1", "exp": int(time.time()) + 60})
+        # iss 是必填 (P0 安全修复: 防止 token 重放)
+        token = _stdlib_encode(
+            {"sub": "1", "exp": int(time.time()) + 60, "iss": "ipo-audit-system"}
+        )
         payload = _stdlib_decode(token)
         assert payload["sub"] == "1"
+        assert payload["iss"] == "ipo-audit-system"
 
     def test_stdlib_expired_rejected(self):
         """stdlib 直接解码已过期 token, 应抛 JWTError.

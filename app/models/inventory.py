@@ -54,6 +54,10 @@ class InventoryImportResponse(BaseModel):
     is_prior_year: bool
     imported_count: int
     total_ending_amount: float
+    # round 28 P1-9: 入库日期解析失败行数 — 0 表示无解析失败, >0 提示前端展示
+    date_parse_failed_count: int = 0
+    # round 28 P1-9: 详细失败行 (row_idx, raw_value) 列表 — 默认空, 失败时供前端展示
+    date_parse_failed_rows: list[list] = Field(default_factory=list)
 
 
 # ---- 盘点用表 ----------------------------------------------------------
@@ -196,6 +200,11 @@ class ImpairmentComputeRequest(BaseModel):
     sell_cost_rate: Optional[float] = Field(None, ge=0.0, le=0.50)
     # 完工口径：原材料/在产品的 NRV 要扣这部分（占售价的比例）。默认 0 = 不启用完工口径
     completion_cost_rate: float = Field(0.0, ge=0.0, le=0.90)
+    # P0-B (2026-06-19): 完工成本是绝对值 (元/吨), 优先于 rate 模型.
+    # 缺失物料仍用 completion_cost_rate 兜底.
+    manual_completion_cost: dict[str, float] = Field(
+        default_factory=dict, max_length=10_000
+    )
     manual_nrv: dict[str, float] = Field(default_factory=dict, max_length=10_000)
     persist: bool = True
     include_reversal: bool = True  # 自动结合上年期初已计提做跌价转回

@@ -3,44 +3,22 @@
 from __future__ import annotations
 
 import io
+import re as _re_aa
 from datetime import date
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import pandas as pd
-import requests
 import streamlit as st
 
-from frontend._http import API_BASE_URL, api_request, auth_headers
+from frontend._components import apply_feishu_theme, page_header
+from frontend._http import api_request
+from frontend._components.project_picker import pick_project
+from frontend._components.data_grid import edit_df as _edit_df
 
 
 def _api(method: str, endpoint: str, *, expect_bytes: bool = False, **kwargs):
     """薄封装 — 复用共享 _http.api_request."""
     return api_request(method, endpoint, expect_bytes=expect_bytes, timeout=60, **kwargs)
-
-
-@st.cache_data(ttl=60)
-def _get_projects():
-    """注: cache key 不区分用户, 多用户多事务所部署需注意 — 见 Pack A 复查 C4.
-    本期通过 auth 后端跨所隔离 + Streamlit session 隔离规避, 暂不在前端 cache 加 user_id."""
-    try:
-        r = requests.get(f"{API_BASE_URL}/api/projects/", timeout=10, headers=auth_headers())
-        if r.status_code == 200:
-            return r.json() or []
-    except Exception:
-        pass
-    return []
-
-
-def _pick_project() -> Optional[int]:
-    projects = _get_projects()
-    if not projects:
-        st.warning("尚未创建项目, 请先在 '📁 项目管理' 创建")
-        return None
-    options = {
-        f"{p['id']} - {p.get('name', '')} / {p.get('company_name', '')}": p["id"] for p in projects
-    }
-    label = st.selectbox("选择项目", list(options.keys()), key="aa_pick_project")
-    return options[label]
 
 
 def _tab_scope(project_id: int) -> None:
@@ -66,9 +44,9 @@ def _tab_scope(project_id: int) -> None:
     with st.expander("➕ 追加 / 排除", expanded=False):
         with st.form("scope_form"):
             cc = st.columns(3)
-            prefix = cc[0].text_input("科目前缀 (例如 6602)")
-            action = cc[1].selectbox("动作", ["include", "exclude"])
-            reason = cc[2].text_input("原因")
+            prefix = cc[0].text_input("科目前缀 (例如 6602)", key="aa_scope_prefix")
+            action = cc[1].selectbox("动作", ["include", "exclude"], key="aa_scope_action")
+            reason = cc[2].text_input("原因", key="aa_scope_reason")
             ok = st.form_submit_button("提交", type="primary")
         if ok and prefix:
             r = _api(
@@ -81,6 +59,25 @@ def _tab_scope(project_id: int) -> None:
                 st.rerun()
 
 
+def _date_input(label: str, *, key: str = "", default: str = "") -> str:
+    """统一期末日期输入 — P1 修复 (2026-06-19).
+
+    旧 5 处 text_input('期末日期') 都没校验, 用户清空就发空字符串
+    到后端触发 500. 新版带正则校验, 不通过显示 warning + return ''
+    让上层函数提前 return, 不发请求.
+    """
+    val = st.text_input(
+        label,
+        value=default or str(date.today()),
+        key=key,
+        help="格式 YYYY-MM-DD, 例如 2024-12-31",
+    )
+    if val and not _re_aa.match(r"^\d{4}-\d{2}-\d{2}$", val):
+        st.warning(f"日期格式不合法: {val!r}, 应为 YYYY-MM-DD")
+        return ""
+    return val
+
+
 def _tab_initialize(project_id: int) -> None:
     st.markdown("### 🔄 从序时账初始化审定记录")
     st.caption(
@@ -89,13 +86,14 @@ def _tab_initialize(project_id: int) -> None:
     )
 
     cols = st.columns(3)
-    period_end = cols[0].text_input("期末日期 YYYY-MM-DD", value=str(date.today()))
-    replace_pending = cols[1].checkbox("替换 pending 行", value=True)
+    period_end = _date_input("期末日期 YYYY-MM-DD", default=str(date.today()))
+    replace_pending = cols[1].checkbox("替换 pending 行", value=True, key="aa_init_replace")
     cols[2].markdown("&nbsp;")
 
-    if st.button("🚀 立即初始化", type="primary"):
-        if not period_end or len(period_end) < 8:
-            st.error("请输入期末日期 (YYYY-MM-DD)")
+    if st.button("🚀 立即初始化", type="primary", key="aa_init_run"):
+        # P0: 严格日期校验 (YYYY-MM-DD 格式)
+        if not period_end or not _re_aa.match(r'^\d{4}-\d{2}-\d{2}$', period_end):
+            st.error("请输入 YYYY-MM-DD 格式的日期")
             return
         r = _api(
             "POST",
@@ -110,10 +108,10 @@ def _tab_initialize(project_id: int) -> None:
 
 def _tab_overview(project_id: int) -> None:
     st.markdown("### 📊 项目总览 (按科目)")
-    period_end = st.text_input("期末日期", value=str(date.today()), key="aa_ov_pe")
+    period_end = _date_input("期末日期", key="aa_ov_pe")
     if not period_end:
         return
-    if st.button("🔍 刷新"):
+    if st.button("🔍 刷新", key="aa_ov_refresh"):
         st.session_state["aa_overview_pe"] = period_end
     pe = st.session_state.get("aa_overview_pe", period_end)
     res = _api(
@@ -173,11 +171,11 @@ def _tab_overview(project_id: int) -> None:
 def _tab_movements(project_id: int) -> None:
     st.markdown("### 📝 发生额逐笔审定")
     cols = st.columns(5)
-    account_code = cols[0].text_input("科目编码 (留空查全部)", value="")
-    period_end = cols[1].text_input("期末日期", value=str(date.today()), key="aa_mov_pe")
-    direction = cols[2].selectbox("方向", ["全部", "debit", "credit"])
-    status = cols[3].selectbox("状态", ["全部", "pending", "audited", "disputed", "skipped"])
-    keyword = cols[4].text_input("摘要关键词")
+    account_code = cols[0].text_input("科目编码 (留空查全部)", value="", key="aa_mov_acct")
+    period_end = _date_input("期末日期", key="aa_mov_pe")
+    direction = cols[2].selectbox("方向", ["全部", "debit", "credit"], key="aa_mov_dir")
+    status = cols[3].selectbox("状态", ["全部", "pending", "audited", "disputed", "skipped"], key="aa_mov_status")
+    keyword = cols[4].text_input("摘要关键词", key="aa_mov_kw")
 
     params: Dict[str, Any] = {"limit": 500}
     if account_code:
@@ -220,8 +218,11 @@ def _tab_movements(project_id: int) -> None:
             for i in items
         ]
     )
-    edited = st.data_editor(
+    edited = _edit_df(
         edit_df,
+        key="aa_editor",
+        height=520,
+        width="stretch",
         column_config={
             "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
             "科目": st.column_config.TextColumn(disabled=True),
@@ -237,14 +238,10 @@ def _tab_movements(project_id: int) -> None:
                 options=["pending", "audited", "disputed", "skipped"],
             ),
         },
-        hide_index=True,
-        width="stretch",
-        height=520,
-        key="aa_editor",
     )
 
     # 检查改动 → 提交
-    if st.button("💾 保存改动", type="primary"):
+    if st.button("💾 保存改动", type="primary", key="aa_mov_save"):
         old_by_id = {r["id"]: r for r in edit_df.to_dict(orient="records")}
         changes = []
         for r in edited.to_dict(orient="records"):
@@ -268,15 +265,27 @@ def _tab_movements(project_id: int) -> None:
         if not changes:
             st.info("没有改动")
         else:
-            ok = 0
-            fail = 0
-            for c in changes:
+            # P1 性能 (2026-06-19): 旧版串行 for c in changes: PUT 50 条要 50×RTT
+            # 改 ThreadPoolExecutor(5) 5 路并发, 不引后端依赖
+            # 旧 c.pop("id") mutate 原 dict → 现在 copy 后 pop, 不污染原数据
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            def _one_put(change: dict) -> bool:
+                c = dict(change)
                 mid = c.pop("id")
                 r = _api("PUT", f"/api/account-audit/movements/{mid}", json=c)
-                if r:
-                    ok += 1
-                else:
-                    fail += 1
+                return bool(r)
+
+            results: list[bool] = []
+            with ThreadPoolExecutor(max_workers=5) as ex:
+                futs = [ex.submit(_one_put, c) for c in changes]
+                for fut in as_completed(futs):
+                    try:
+                        results.append(fut.result())
+                    except Exception:  # noqa: BLE001
+                        results.append(False)
+            ok = sum(1 for x in results if x)
+            fail = len(results) - ok
             st.success(f"已提交 {ok} 条修改, 失败 {fail} 条")
             if ok:
                 st.rerun()
@@ -288,7 +297,7 @@ def _tab_bulk_upload(project_id: int) -> None:
         "上传 Excel/CSV, 必填列: account_code, voucher_no, direction (debit/credit), audited_amount; "
         "可选: voucher_line_no(默认1) / adjustment_reason / working_paper_ref / note"
     )
-    period_end = st.text_input("期末日期", value=str(date.today()), key="aa_bulk_pe")
+    period_end = _date_input("期末日期", key="aa_bulk_pe")
     f = st.file_uploader("选择文件", type=["xlsx", "xls", "csv"], key="aa_bulk_file")
 
     # 提供模板下载
@@ -313,7 +322,7 @@ def _tab_bulk_upload(project_id: int) -> None:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-    if f and st.button("🚀 上传并审定", type="primary"):
+    if f and st.button("🚀 上传并审定", type="primary", key="aa_bulk_run"):
         files = {"file": (f.name, f.read(), f.type or "application/octet-stream")}
         res = _api(
             "POST",
@@ -335,10 +344,10 @@ def _tab_bulk_upload(project_id: int) -> None:
 def _tab_export(project_id: int) -> None:
     st.markdown("### 📥 导出审定明细 Excel")
     cols = st.columns(2)
-    period_end = cols[0].text_input("期末日期", value=str(date.today()), key="aa_exp_pe")
-    account_code = cols[1].text_input("科目编码 (留空导出全部)", value="")
+    period_end = _date_input("期末日期", key="aa_exp_pe")
+    account_code = cols[1].text_input("科目编码 (留空导出全部)", value="", key="aa_exp_acct")
 
-    if st.button("📥 导出", type="primary"):
+    if st.button("📥 导出", type="primary", key="aa_exp_run"):
         params = {"period_end": period_end}
         if account_code:
             params["account_code"] = account_code
@@ -362,6 +371,9 @@ def _tab_export(project_id: int) -> None:
 
 
 def show_account_audit() -> None:
+    apply_feishu_theme()
+    page_header('📑', '长期资产发生额审定', '固定资产/在建工程/无形资产/长投/商誉/使用权资产 逐笔发生额审定 + 底稿恒等式校验')
+
     st.markdown(
         '<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">📑 长期资产发生额审定</p>',
         unsafe_allow_html=True,
@@ -371,7 +383,7 @@ def show_account_audit() -> None:
         "不只期初期末出审定数, 本期借/贷方发生额逐笔出审定数 + 审计调整, 底稿自动恒等式校验。"
     )
 
-    project_id = _pick_project()
+    project_id = pick_project(key="aa_pick_project")
     if not project_id:
         return
 

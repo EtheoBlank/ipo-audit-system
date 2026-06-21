@@ -30,6 +30,7 @@ from app.models.db_models import (
     TASK_STATUS_IN_PROGRESS,
     TASK_STATUS_CANCELLED,
 )
+from sqlalchemy import func  # round 28 P1-12 SQL 聚合
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,13 @@ logger = logging.getLogger(__name__)
 # ============================================================
 #  占位 — WorkPlanItem 已包含 status，实际不需 Task
 # ============================================================
+
+
+# Round 35 P1: NULL member_id 的 WorkPlanItem 用这个 sentinel 标识.
+# 与已有 member.id=0 的合法记录区分 (避免无声吞 unassigned 任务).
+UNASSIGNED_MEMBER_ID = -1
+_UNASSIGNED_NAME = "(未分配)"
+_UNASSIGNED_LEVEL = "—"
 
 
 @dataclass
@@ -54,6 +62,8 @@ class MemberProgressData:
     hours_logged_7d: float
     open_blockers: int
     last_report_date: Optional[str]
+    # Round 35 P1: 显式 flag — 调用方能区分"该成员真的没任务" vs "全部任务未分配".
+    is_unassigned: bool = False
 
 
 # 兼容旧名字 — 上面已定义
@@ -84,64 +94,82 @@ class ProgressTracker:
         if not members:
             return []
 
-        # 3) 拉所有 WorkPlanItem
-        items_q = await db.execute(
-            select(WorkPlanItem)
+        # 3) 拉所有 WorkPlanItem — P1 性能 (2026-06-19): 旧版拉全表 + Python O(M×N) 计数
+        # 新版: SQL GROUP BY member_id, status 一次拿 count, dict lookup O(1)
+        items_agg_q = await db.execute(
+            select(
+                WorkPlanItem.member_id,
+                WorkPlanItem.status,
+                func.count(WorkPlanItem.id),
+            )
             .join(WorkPlan, WorkPlan.id == WorkPlanItem.plan_id)
             .where(WorkPlan.project_id == project_id)
+            .group_by(WorkPlanItem.member_id, WorkPlanItem.status)
         )
-        items = items_q.scalars().all()
-        items_by_member: dict[Optional[int], list[WorkPlanItem]] = {}
-        for it in items:
-            items_by_member.setdefault(it.member_id, []).append(it)
+        # {(member_id, status): count} + {(member_id): total}
+        # Round 35 P1: NULL member_id 之前被 int(...) 当 0, 与合法 member.id=0 撞车,
+        # 且这些任务 "消失" 在 0 桶里. 改成单独 UNASSIGNED_MEMBER_ID=-1 桶 + 后续产出
+        # is_unassigned=True 的伪成员行.
+        status_count_by_member: dict[int, dict[str, int]] = {}
+        total_by_member: dict[int, int] = {}
+        unassigned_total: int = 0
+        unassigned_status_count: dict[str, int] = {}
+        for mid, st, cnt in items_agg_q.all():
+            cnt = int(cnt)
+            if mid is None:
+                unassigned_total += cnt
+                unassigned_status_count[st] = unassigned_status_count.get(st, 0) + cnt
+                continue
+            mid_int = int(mid)
+            status_count_by_member.setdefault(mid_int, {})[st] = cnt
+            total_by_member[mid_int] = total_by_member.get(mid_int, 0) + cnt
 
-        # 4) 拉近 7 天 DailyReport
+        # 4) 拉近 7 天 DailyReport — P1 (2026-06-19): 同理 GROUP BY member_id 一次性聚合
         from datetime import date, timedelta as _td
 
         seven_days_ago = (date.today() - _td(days=7)).isoformat()
-        reports_q = await db.execute(
-            select(DailyReport)
+        reports_agg_q = await db.execute(
+            select(
+                DailyReport.member_id,
+                func.sum(DailyReport.hours_logged),
+                func.max(DailyReport.report_date),
+            )
             .where(
                 DailyReport.project_id == project_id,
                 DailyReport.report_date >= seven_days_ago,
             )
-            .order_by(DailyReport.report_date.desc())
-            .limit(500)
+            .group_by(DailyReport.member_id)
         )
-        reports = reports_q.scalars().all()
-
         hours_by_member: dict[int, float] = {}
         last_report_by_member: dict[int, str] = {}
-        for r in reports:
-            # 严格 7 天过滤 — 与字段名 hours_logged_7d 保持一致
-            hours_by_member[r.member_id] = hours_by_member.get(r.member_id, 0.0) + float(
-                r.hours_logged or 0
-            )
-            key = r.member_id
-            if key not in last_report_by_member:
-                last_report_by_member[key] = r.report_date
+        for mid, hours_sum, max_date in reports_agg_q.all():
+            mid = int(mid)
+            hours_by_member[mid] = float(hours_sum or 0)
+            if max_date is not None:
+                last_report_by_member[mid] = max_date
 
-        # 5) 拉卡点
-        blockers_q = await db.execute(
-            select(Blocker).where(
+        # 5) 拉卡点 — 同理 GROUP BY
+        blockers_agg_q = await db.execute(
+            select(Blocker.member_id, func.count(Blocker.id))
+            .where(
                 Blocker.project_id == project_id,
                 Blocker.status.in_(
                     [BLOCKER_STATUS_OPEN, BLOCKER_STATUS_IN_PROGRESS, BLOCKER_STATUS_ESCALATED]
                 ),
             )
+            .group_by(Blocker.member_id)
         )
-        blockers = blockers_q.scalars().all()
-        open_blockers_by_member: dict[int, int] = {}
-        for b in blockers:
-            open_blockers_by_member[b.member_id] = open_blockers_by_member.get(b.member_id, 0) + 1
+        open_blockers_by_member: dict[int, int] = {
+            int(mid): int(cnt) for mid, cnt in blockers_agg_q.all()
+        }
 
         out: list[MemberProgressData] = []
         for m in members:
-            mi = items_by_member.get(m.id, [])
-            total = len(mi)
-            done = sum(1 for x in mi if x.status == TASK_STATUS_DONE)
-            inprog = sum(1 for x in mi if x.status == TASK_STATUS_IN_PROGRESS)
-            blocked = sum(1 for x in mi if x.status == TASK_STATUS_BLOCKED)
+            sc = status_count_by_member.get(m.id, {})
+            total = total_by_member.get(m.id, 0)
+            done = sc.get(TASK_STATUS_DONE, 0)
+            inprog = sc.get(TASK_STATUS_IN_PROGRESS, 0)
+            blocked = sc.get(TASK_STATUS_BLOCKED, 0)
             rate = (done / total) if total > 0 else 0.0
             out.append(
                 MemberProgressData(
@@ -158,30 +186,92 @@ class ProgressTracker:
                     last_report_date=last_report_by_member.get(m.id),
                 )
             )
+        # Round 35 P1: 即使没人分配, 也要把 unassigned 桶暴露出来, 否则这些任务
+        # 在 Dashboard 完全消失, 项目经理看不到 "有 N 个任务没分配".
+        if unassigned_total > 0:
+            done_u = unassigned_status_count.get(TASK_STATUS_DONE, 0)
+            inprog_u = unassigned_status_count.get(TASK_STATUS_IN_PROGRESS, 0)
+            blocked_u = unassigned_status_count.get(TASK_STATUS_BLOCKED, 0)
+            rate_u = (done_u / unassigned_total) if unassigned_total > 0 else 0.0
+            out.append(
+                MemberProgressData(
+                    member_id=UNASSIGNED_MEMBER_ID,
+                    full_name=_UNASSIGNED_NAME,
+                    level=_UNASSIGNED_LEVEL,
+                    total_items=unassigned_total,
+                    completed_items=done_u,
+                    in_progress_items=inprog_u,
+                    blocked_items=blocked_u,
+                    completion_rate=round(rate_u, 3),
+                    hours_logged_7d=0.0,
+                    open_blockers=0,
+                    last_report_date=None,
+                    is_unassigned=True,
+                )
+            )
         return out
 
     @staticmethod
     async def collect_project_summary(db: AsyncSession, project_id: int) -> dict[str, Any]:
-        """聚合项目级摘要（不展开人员）。"""
-        items_q = await db.execute(
-            select(WorkPlanItem)
+        """聚合项目级摘要（不展开人员）。
+
+        round 28 P1-12 沿用 round 12 模式, 项目级也 SQL 聚合:
+          - WorkPlanItem GROUP BY status: 状态计数 + 工时
+          - ProjectAssignment GROUP BY project_id: 成员计数
+          - DailyReport GROUP BY project_id: 日报计数
+        替代 Python 循环 + len() 累加, 大项目从 O(N) Python 全扫降到 O(1) SQL.
+        """
+        # 1) 项目任务状态聚合 — 一次拿全
+        items_status_q = await db.execute(
+            select(
+                WorkPlanItem.status,
+                func.count(WorkPlanItem.id),
+                func.coalesce(func.sum(WorkPlanItem.estimated_hours), 0),
+                func.coalesce(func.sum(WorkPlanItem.actual_hours), 0),
+            )
             .join(WorkPlan, WorkPlan.id == WorkPlanItem.plan_id)
             .where(WorkPlan.project_id == project_id)
+            .group_by(WorkPlanItem.status)
         )
-        items = items_q.scalars().all()
+        total = 0
+        done = 0
+        inprog = 0
+        blocked = 0
+        est_hours = 0.0
+        act_hours = 0.0
+        by_status: dict[str, int] = {}
+        for status, cnt, est_sum, act_sum in items_status_q.all():
+            cnt = int(cnt or 0)
+            est_sum = float(est_sum or 0)
+            act_sum = float(act_sum or 0)
+            total += cnt
+            est_hours += est_sum
+            act_hours += act_sum
+            by_status[status] = cnt
+            if status == TASK_STATUS_DONE:
+                done = cnt
+            elif status == TASK_STATUS_IN_PROGRESS:
+                inprog = cnt
+            elif status == TASK_STATUS_BLOCKED:
+                blocked = cnt
 
-        total = len(items)
-        done = sum(1 for x in items if x.status == TASK_STATUS_DONE)
-        inprog = sum(1 for x in items if x.status == TASK_STATUS_IN_PROGRESS)
-        blocked = sum(1 for x in items if x.status == TASK_STATUS_BLOCKED)
-        est_hours = sum(float(x.estimated_hours or 0) for x in items)
-        act_hours = sum(float(x.actual_hours or 0) for x in items)
+        # 2) by_module — 需要相关模块字段, 仍走一次轻量查询 (枚举维度, 一次性)
+        #    大多数项目模块数 < 20, GROUP BY 一把梭
+        by_module_q = await db.execute(
+            select(WorkPlanItem.related_module, func.count(WorkPlanItem.id))
+            .join(WorkPlan, WorkPlan.id == WorkPlanItem.plan_id)
+            .where(
+                WorkPlan.project_id == project_id,
+                WorkPlanItem.status != TASK_STATUS_CANCELLED,
+            )
+            .group_by(WorkPlanItem.related_module)
+        )
+        by_module: dict[str, int] = {}
+        for mod, cnt in by_module_q.all():
+            key = mod or "其他"
+            by_module[key] = int(cnt or 0)
+
         rate = (done / total) if total > 0 else 0.0
-
-        by_module = Counter(
-            (x.related_module or "其他") for x in items if x.status != TASK_STATUS_CANCELLED
-        )
-        by_status = Counter(x.status for x in items)
 
         return {
             "total_items": total,
@@ -191,8 +281,8 @@ class ProgressTracker:
             "completion_rate": round(rate, 3),
             "total_estimated_hours": round(est_hours, 1),
             "total_actual_hours": round(act_hours, 1),
-            "by_module": dict(by_module),
-            "by_status": dict(by_status),
+            "by_module": by_module,
+            "by_status": by_status,
         }
 
     @staticmethod
@@ -226,17 +316,25 @@ class ProgressTracker:
         )
 
         c = Counter(b.severity for b in blockers)
-        now = datetime.now(timezone.utc)
+        # raised_at 字段在项目中统一为 naive UTC (utc_now()), 这里用 naive now 保持一致
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         ages: list[float] = []
         for b in blockers:
             raised = b.raised_at
             if raised is None:
                 continue
-            # raised_at 是 tz-aware utc
+            # 兼容历史数据: 若 raised_at 是 tz-aware, 转 naive
+            if raised.tzinfo is not None:
+                raised = raised.replace(tzinfo=None)
             try:
                 delta = (now - raised).total_seconds() / 3600.0
                 ages.append(delta)
             except Exception:  # noqa: BLE001
+                # round 36 P1: 之前静默 continue, 卡点存续时长算错也不知道
+                logger.exception(
+                    "progress_tracker: blocker age 计算失败 blocker_id=%s",
+                    getattr(b, "id", None),
+                )
                 continue
         avg_age = sum(ages) / len(ages) if ages else 0.0
 

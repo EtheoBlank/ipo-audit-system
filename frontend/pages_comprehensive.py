@@ -12,13 +12,12 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-from dataclasses import dataclass
-from typing import Any, Optional
+from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
 
 from app.services.comprehensive.builtin_rules import default_rule_book
 from app.services.comprehensive.fill_engine import ComprehensiveFillEngine
@@ -34,13 +33,13 @@ from app.services.comprehensive.schemas import (
 )
 from app.services.comprehensive.template_parser import TemplateParser
 from app.services.comprehensive.web_search_engine import (
-    SearchHit,
     WebSearchEngine,
 )
+from frontend._components import apply_feishu_theme, page_header
+from frontend._components.project_picker import pick_project_dict
+from frontend._components.safe_render import safe_inline_text
 
 logger = logging.getLogger(__name__)
-
-API_BASE_URL = "http://localhost:8000"
 
 
 # ============================================================
@@ -57,6 +56,16 @@ def _load_template_schema(uploaded_file) -> Optional[TemplateSchema]:
     """解析用户上传的模板。"""
     try:
         data = uploaded_file.read()
+        return TemplateParser().parse(data)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"模板解析失败：{exc}")
+        return None
+
+
+def _load_template_schema_path(template_path: "Path") -> Optional[TemplateSchema]:
+    """从磁盘临时文件路径解析模板 (避免重复读取 uploaded)."""
+    try:
+        data = template_path.read_bytes()
         return TemplateParser().parse(data)
     except Exception as exc:  # noqa: BLE001
         st.error(f"模板解析失败：{exc}")
@@ -117,7 +126,7 @@ def _render_schema_summary(schema: TemplateSchema) -> None:
         by_source[prefix] = by_source.get(prefix, 0) + 1
     df = pd.DataFrame([{"来源类型": k, "字段数": v} for k, v in by_source.items()])
     st.markdown("##### 字段来源分布")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
 
 def _render_fill_report(report: FillReport) -> None:
@@ -140,7 +149,7 @@ def _render_fill_report(report: FillReport) -> None:
         }
         for r in report.results
     ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows, height=400), use_container_width=True, hide_index=True)
 
 
 def _render_questions(report: FillReport, key_prefix: str) -> dict[str, str]:
@@ -161,7 +170,7 @@ def _render_questions(report: FillReport, key_prefix: str) -> dict[str, str]:
             f"问题 {i + 1} · 主题：{q.topic}（覆盖 {len(q.field_ids)} 个字段）",
             expanded=True,
         ):
-            st.markdown(f"**{q.prompt}**")
+            st.markdown(f"**{safe_inline_text(q.prompt)}**")
             with st.container():
                 st.caption("上下文：")
                 st.code(q.context, language="text")
@@ -182,11 +191,12 @@ def _export_to_excel(schema: TemplateSchema, report: FillReport) -> bytes:
     - 来源/置信度/引用写入独立的 ``_log`` 工作表，避免与值列冲突
     - 原模板的公式、合并、格式、其它单元格内容完全保留
     """
-    # 从 session_state 取原文件
-    raw: bytes = st.session_state.get("__comprehensive_template_bytes__", b"")
-    if not raw:
+    # P1 修复 (2026-06-19): 旧读 __comprehensive_template_bytes__ 永远空 (未存)
+    # 实际写到 tempfile, path 存在 __comprehensive_template_path__
+    tmp_path = st.session_state.get("__comprehensive_template_path__", "")
+    if not tmp_path or not Path(tmp_path).exists():
         return b""
-
+    raw = Path(tmp_path).read_bytes()
     wb = load_workbook(filename=io.BytesIO(raw))
     by_id = {r.field_id: r for r in report.results}
 
@@ -252,7 +262,11 @@ def _truncate(s: str, n: int) -> str:
 
 
 def show_comprehensive_workpaper():
-    st.markdown("## 📑 综合底稿自动生成")
+    apply_feishu_theme()
+    page_header('📑', '综合底稿自动生成', '事务所模板上传 → 字段映射 → AI 填充 → QA 引擎')
+
+    # [飞书化]     st.markdown("## 📑 综合底稿自动生成")  # 已被 page_header() 替代
+
     st.caption(
         "上传事务所的 Excel 综合底稿模板 → 选项目 → 系统自动调用 "
         "「基础底稿 + 审计手册规则 + 权威信息检索 + 一次性问答」"
@@ -270,11 +284,23 @@ def show_comprehensive_workpaper():
         st.info("请先上传模板。")
         return
 
-    # 暂存到 session
-    st.session_state["__comprehensive_template_bytes__"] = uploaded.getvalue()
+    # P0 安全: 不在 session_state 长期保存大文件 bytes (内存压力). 临时存路径
+    # P0 修复: 多用户并发 anon 文件名互相覆盖; 用 username + project_id + ts
+    import tempfile
+    import time as _time
+    _uname = (st.session_state.get("auth_user") or {}).get("username", "anon")
+
+    # 项目 ID: 从 number_input 的 key="selected_project_id" 读 (Streamlit 自动同步)
+    _pid = st.session_state.get("selected_project_id", "x")
+    _fname = f"comp_template_{_uname}_{_pid}_{int(_time.time())}.xlsx"
+    tmp = Path(tempfile.gettempdir()) / _fname
+    tmp.write_bytes(uploaded.getvalue())
+    st.session_state["__comprehensive_template_path__"] = str(tmp)
 
     # 2) 解析
-    schema = _load_template_schema(uploaded)
+    # P0 安全: 用保存的 path 而不是重复读 uploaded
+    template_path = Path(st.session_state.get("__comprehensive_template_path__", ""))
+    schema = _load_template_schema_path(template_path)
     if schema is None:
         return
     _render_schema_summary(schema)
@@ -282,17 +308,24 @@ def show_comprehensive_workpaper():
 
     # 3) 选项目并跑填充
     st.markdown("### 第 2 步：选择项目并自动填充")
-    project_id = st.number_input("项目ID", min_value=1, value=1, step=1)
-    if st.button("🚀 开始自动填充", type="primary"):
+    # P1 (round 35): 替换手填 number_input, 用 pick_project_dict 防手填错
+    proj = pick_project_dict("选择项目", key="compr_proj", fmt="name_only")
+    if proj is None:
+        st.info("请先在『项目管理』中创建项目, 再回到此页面")
+        return
+    project_id = int(proj["id"])
+    if st.button("🚀 开始自动填充", type="primary", key="compr_start_fill"):  # round 31 widget key
         with st.spinner("正在调用四路数据源..."):
-            ctx = _build_context(int(project_id))
+            ctx = _build_context(project_id)
             engine = _build_engine()
             try:
                 report = _run_async(engine.fill(schema, ctx))
             except Exception as exc:  # noqa: BLE001
+                # P1 (round 35): 错误处理补全 — detail 暴露
                 st.error(f"填充失败：{exc}")
                 return
         st.session_state["__comprehensive_report__"] = report
+        st.session_state["__comprehensive_project_id__"] = project_id
         st.success(
             f"自动填充完成：{report.filled}/{report.total_fields}，待补全 {report.pending} 项。"
         )
@@ -306,7 +339,7 @@ def show_comprehensive_workpaper():
     answers = _render_questions(report, key_prefix="qa")
 
     # 5) 提交回答
-    if report.open_questions and st.button("📥 提交所有回答", type="primary"):
+    if report.open_questions and st.button("📥 提交所有回答", type="primary", key="compr_submit_qa"):  # round 31 widget key
         if not any(v.strip() for v in answers.values()):
             st.warning("请至少回答一个问题。")
         else:
@@ -319,7 +352,7 @@ def show_comprehensive_workpaper():
 
     # 6) 导出
     st.markdown("### 第 3 步：导出最终 Excel")
-    if st.button("💾 生成 .xlsx"):
+    if st.button("💾 生成 .xlsx", key="compr_export_xlsx"):  # round 31 widget key
         xlsx_bytes = _export_to_excel(schema, report)
         if xlsx_bytes:
             st.download_button(

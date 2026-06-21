@@ -131,8 +131,24 @@ def validate_password_strength(password: str) -> Optional[str]:
         return "密码必须含至少 1 个字母"
     if not has_digit:
         return "密码必须含至少 1 个数字"
-    # 弱密码黑名单 (前 100 大常见)
-    weak = {"password", "12345678", "qwerty12", "admin123", "Admin@1234"}
+    # 弱密码黑名单 — P2 (2026-06-19) 扩到 30+ 条, 含常见键盘序列 + 默认账号
+    # 中文用户常用拼音 / 数字组合 + 默认密码 + 季节/年度后缀
+    weak = {
+        # 纯键盘
+        "password", "12345678", "qwerty12", "qwertyuiop",
+        "asdfghjk", "zxcvbnm1", "1qaz2wsx",
+        # 数字序列
+        "123456", "1234567", "123456789", "1234567890",
+        "00000000", "11111111", "66666666", "88888888",
+        # 默认/常见
+        "admin123", "Admin@1234", "root123", "test123",
+        "changeme", "welcome1", "letmein1", "iloveyou",
+        # 中文拼音 (拼音用户)
+        "woaini1", "nihao123", "woaini520", "aiaini1314",
+        # 季节/年份
+        "spring2024", "summer2024", "winter2024", "autumn2024",
+        "p@ssw0rd",
+    }
     if password.lower() in {w.lower() for w in weak}:
         return "密码过于常见, 请用更复杂的组合"
     return None

@@ -15,6 +15,7 @@ from app.models.db.notification import (
     NOTIF_SEVERITY_INFO,
     Notification,
 )
+from app.utils.datetime_helpers import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +83,12 @@ class NotificationService:
             logger.exception("推送通知失败 (module=%s, type=%s): %s", module, type, exc)
             try:
                 await db.rollback()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as rollback_exc:  # noqa: BLE001
+                # round23: 推送失败 + rollback 失败 = 双重失明, 必须留痕
+                logger.warning(
+                    "推送通知 rollback 也失败 (module=%s, type=%s): commit_exc=%s, rollback_exc=%s",
+                    module, type, exc, rollback_exc,
+                )
             return None
 
     @staticmethod
@@ -99,8 +104,19 @@ class NotificationService:
                 count += 1
         try:
             await db.commit()
-        except Exception:  # noqa: BLE001
-            await db.rollback()
+        except Exception as commit_exc:  # noqa: BLE001
+            # round23: push_many 批量 commit 失败不应 silent drop, 至少 logger.exception 留 traceback
+            logger.exception(
+                "push_many commit 失败 (items=%d, 已 push 成功的也被回滚): %s",
+                count, commit_exc,
+            )
+            try:
+                await db.rollback()
+            except Exception as rollback_exc:  # noqa: BLE001
+                logger.warning(
+                    "push_many rollback 也失败: commit_exc=%s, rollback_exc=%s",
+                    commit_exc, rollback_exc,
+                )
             count = 0
         return count
 
@@ -209,10 +225,21 @@ class NotificationService:
         module: Optional[str] = None,
         mark_all: bool = False,
     ) -> int:
-        """标记已读, 返回更新行数. 仅影响当前用户可见的通知."""
+        """标记已读, 返回更新行数. 仅影响当前用户可见的通知.
+
+        安全约束: 当 ``ids`` 提供时, 必须有 user_id 过滤; 否则可能跨用户
+        标记 (通知 ID 唯一但归属不同用户). ``mark_all=True`` 模式严格要求
+        user_id 不能为 None.
+        """
         if not ids and not module and not mark_all:
             return 0
-        conds = [Notification.is_read == False]  # noqa: E712
+        # 防御: mark_all=True 时, user_id 必填, 避免误标记所有用户的通知
+        if mark_all and user_id is None:
+            return 0
+        # 防御: ids 模式必须先限定 user_id, 防止跨用户读
+        if ids and user_id is None:
+            return 0
+        conds = [Notification.is_read.is_(False)]
         if user_id is not None:
             conds.append(or_(Notification.user_id == user_id, Notification.user_id.is_(None)))
         if ids:
@@ -220,7 +247,7 @@ class NotificationService:
         if module:
             conds.append(Notification.module == module)
         stmt = (
-            update(Notification).where(and_(*conds)).values(is_read=True, read_at=_utcnow_naive())
+            update(Notification).where(and_(*conds)).values(is_read=True, read_at=utc_now())
         )
         result = await db.execute(stmt)
         await db.commit()

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -27,6 +28,22 @@ _DDE_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 # in saved filenames.  Anything else becomes "_".
 _FILENAME_KEEP = re.compile(r"[^\w.\-一-龥]+")
 
+# round 31 P1-5: 文件 magic bytes 白名单 — 防止 evil.xlsx.exe / evil.pdf.js
+# 这种"双扩展名绕过"攻击. 扩展名易伪造, 文件头 magic bytes 难伪造.
+# CSV/TXT 等纯文本格式无固定 magic, 跳过.
+_MAGIC_BYTES: dict[str, Optional[bytes]] = {
+    ".xlsx": b"PK\x03\x04",          # ZIP (OOXML 本质)
+    ".xls":  b"\xD0\xCF\x11\xE0",   # OLE2 Compound Document
+    ".docx": b"PK\x03\x04",          # ZIP
+    ".doc":  b"\xD0\xCF\x11\xE0",   # OLE2
+    ".pdf":  b"%PDF",                # PDF signature
+    ".png":  b"\x89PNG\r\n\x1a\n",   # PNG signature
+    ".jpg":  b"\xff\xd8\xff",        # JPEG SOI marker
+    ".jpeg": b"\xff\xd8\xff",        # JPEG SOI marker
+    ".csv":  None,                   # 纯文本, 不查
+    ".txt":  None,                   # 纯文本, 不查
+}
+
 
 def sanitize_filename(name: Optional[str], default: str = "upload") -> str:
     """Return a path-safe basename (no separators, no NUL, length <= 240)."""
@@ -37,6 +54,34 @@ def sanitize_filename(name: Optional[str], default: str = "upload") -> str:
     base = _FILENAME_KEEP.sub("_", base)
     base = base.strip("._") or default
     return base[:240]
+
+
+def check_magic_bytes(content: bytes, ext: str) -> bool:
+    """round 31 P1-5: 验证 content 头部与 ext 期望一致.
+
+    防止 ``evil.xlsx.exe`` / ``evil.pdf.js`` 等"双扩展名绕过" — 仅校验
+    文件名扩展名易被构造, 文件头 magic bytes 难伪造. CSV/TXT 等纯文本格式
+    无固定 magic, 跳过检查 (返 True).
+
+    Args:
+        content: 文件原始字节 (至少前 4-8 字节, 短文件也算)
+        ext: 文件扩展名, 带或不带 ``.`` 都可 (例: ``".xlsx"`` / ``"xlsx"``)
+
+    Returns:
+        True 表示通过 (无 magic 检查要求 / 内容与扩展名匹配);
+        False 表示拒绝 (内容与扩展名不符, 可能为伪造).
+    """
+    norm = (ext or "").lower().strip()
+    if norm and not norm.startswith("."):
+        norm = "." + norm
+    expected = _MAGIC_BYTES.get(norm)
+    if expected is None:
+        # 未在白名单 (csv / txt / 未知扩展) — 跳过检查
+        return True
+    # content 短于 magic 长度: 文件过小, 拒绝
+    if len(content) < len(expected):
+        return False
+    return content[: len(expected)] == expected
 
 
 async def read_upload_capped(
@@ -82,8 +127,6 @@ def unique_save_path(base_dir: Path, safe_name: str) -> Path:
     Returns ``base_dir / "<ts>_<uuid8>_<safe_name>"``.  Caller must have
     already created ``base_dir``.
     """
-    from datetime import datetime
-
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     uniq = uuid.uuid4().hex[:8]
     target = base_dir / f"{ts}_{uniq}_{safe_name}"
@@ -111,10 +154,19 @@ def neutralize_formula(value: object) -> object:
 
 
 def neutralize_dataframe_strings(df, columns: Optional[Iterable[str]] = None):
-    """In-place neutralise DDE prefixes in selected string columns."""
-    cols = (
-        list(columns) if columns is not None else [c for c in df.columns if df[c].dtype == object]
-    )
+    """In-place neutralise DDE prefixes in selected string columns.
+
+    round23 修复: pandas 2.x 默认 StringDtype (kind='O') 与 numpy object dtype
+    不严格相等, 旧版 `df[c].dtype == object` 会漏掉 StringDtype 列,
+    导致中性化静默失效. 改用 kind in ('O','U','S') 同时覆盖两种 string 表示.
+    """
+    def _is_string_col(c: str) -> bool:
+        if c not in df.columns:
+            return False
+        kind = df[c].dtype.kind
+        return kind in ("O", "U", "S")  # object / unicode / bytes
+
+    cols = list(columns) if columns is not None else [c for c in df.columns if _is_string_col(c)]
     for c in cols:
         if c in df.columns:
             df[c] = df[c].apply(neutralize_formula)

@@ -19,7 +19,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
+from app.utils.datetime_helpers import utc_now
 from typing import Optional
 
 from sqlalchemy import (
@@ -52,11 +53,6 @@ __all__ = [
     "MOVEMENT_DIRECTION_DEBIT",
     "MOVEMENT_DIRECTION_CREDIT",
 ]
-
-
-def _utcnow() -> datetime:
-    """与 db_models 一致 — naive UTC."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # === 默认长期资产科目前缀清单 ===
@@ -179,9 +175,9 @@ class AccountMovementAudit(Base):
     audited_by_display: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     audited_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
     )
 
 
@@ -208,4 +204,4 @@ class LongTermAssetScopeOverride(Base):
     action: Mapped[str] = mapped_column(String(10), nullable=False)  # include / exclude
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

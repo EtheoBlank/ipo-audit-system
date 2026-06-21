@@ -16,22 +16,22 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import and_, desc, func, or_, select  # noqa: F401
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db.related_parties import (
     DISCLOSURE_GAP_CRITICAL,
-    DISCLOSURE_GAP_OK,
+    DISCLOSURE_GAP_OK,  # noqa: F401
     DISCLOSURE_GAP_REVIEW,
     PeerCompetitionAssessment,
     ProspectusDisclosureGap,
-    RP_SOURCE_AI,
+    RP_SOURCE_AI,  # noqa: F401
     RP_SOURCE_CHRONO_SCAN,
     RP_SOURCE_CUSTOMER_OVERLAP,
     RP_TYPE_OTHER,
     RelatedParty,
-    RelatedPartyCapitalOccupation,
-    RelatedPartyRelation,
+    RelatedPartyCapitalOccupation,  # noqa: F401
+    RelatedPartyRelation,  # noqa: F401
     RelatedPartyTransaction,
 )
 from app.models.db_models import ChronologicalAccount, SalesRecord
@@ -43,8 +43,8 @@ from app.models.related_parties import (
     DisclosureGapResponse,
     FairnessCheckRequest,
     FairnessCheckResponse,
-    RelatedPartyCreate,
-    RelatedPartyResponse,
+    RelatedPartyCreate,  # noqa: F401
+    RelatedPartyResponse,  # noqa: F401
 )
 
 logger = logging.getLogger(__name__)
@@ -388,7 +388,11 @@ class CapitalOccupationService:
         if rp is None:
             return {"max_amount": 0, "max_date": None, "ending_balance": 0}
 
-        like = f"%{rp.name}%"
+        # P1 (round 32): 转义 LIKE 通配符, 防 name 含 % 或 _ 误匹配.
+        # 例如关联方名 "100%" 不转义会被 ilike 当通配符, 错误匹配所有 "100X" 摘要.
+        from app.services.auth.audit_log import _escape_like
+
+        like = f"%{_escape_like(rp.name)}%"
         rows = list(
             (
                 await db.execute(
@@ -398,8 +402,8 @@ class CapitalOccupationService:
                         ChronologicalAccount.voucher_date >= period_start,
                         ChronologicalAccount.voucher_date <= period_end,
                         or_(
-                            ChronologicalAccount.summary.ilike(like),
-                            ChronologicalAccount.auxiliary_accounting.ilike(like),
+                            ChronologicalAccount.summary.ilike(like, escape="\\"),
+                            ChronologicalAccount.auxiliary_accounting.ilike(like, escape="\\"),
                         ),
                     )
                     .order_by(ChronologicalAccount.voucher_date)
@@ -431,18 +435,89 @@ class CapitalOccupationService:
 # ============================================================
 
 
+# round 28 P0-7 加白名单 + 拒绝通用词
+# 同业竞争关键词白名单 — 审计师常用的 40+ 行业/业务/关系类型种子词。
+# 拒绝通用词 (公司/集团/企业/业务/服务) 单独出现; 拒绝单字符; 拒绝纯数字。
+_KEYWORD_WHITELIST: Set[str] = {
+    # 行业 (17)
+    "金融", "银行", "证券", "保险", "信托", "基金",
+    "制造", "生产", "加工", "装配",
+    "医疗", "医药", "医院", "生物",
+    "教育", "培训",
+    "科技", "信息", "互联网", "软件", "硬件", "芯片", "半导体", "集成电路",
+    "房地产", "建筑", "施工", "工程",
+    "能源", "电力", "新能源", "光伏", "储能",
+    "化工", "材料", "金属", "钢铁",
+    "零售", "商贸", "物流", "运输", "仓储",
+    "农业", "牧业", "渔业",
+    "传媒", "文化", "出版", "影视",
+    "汽车", "机械", "装备",
+    "食品", "饮料", "餐饮", "酒店", "旅游",
+    # 业务类型 (12)
+    "贷款", "存款", "投资", "理财",
+    "研发", "设计", "咨询", "顾问",
+    "销售", "采购", "供应",
+    "运营", "维护", "维修",
+    "管理",
+    # 关系类型 (10)
+    "母", "子", "兄弟", "姐妹", "合资", "联营", "合作", "合营", "关联", "控股",
+    # 常见英文缩写 (2-3 字符的) — 审计常见行业术语
+    "EDA", "AI", "BI", "ERP", "CRM", "SaaS", "PaaS", "IaaS",
+    "IoT", "5G", "B2B", "B2C", "IPO",
+}
+
+
+def _is_valid_keyword(kw: str) -> bool:
+    """round 28 P0-7: 拒绝通用词 / 单字符 / 纯数字 / 不在白名单中的词."""
+    if not kw:
+        return False
+    k = kw.strip()
+    if not k:
+        return False
+    # 拒绝单字符
+    if len(k) <= 1:
+        return False
+    # 拒绝纯数字
+    if k.isdigit():
+        return False
+    # 拒绝通用词 (单独出现 — 必须搭配白名单词)
+    _generic = {"公司", "集团", "企业", "业务", "服务", "产品", "项目", "工作"}
+    if k in _generic:
+        return False
+    # 必须在白名单中
+    return k in _KEYWORD_WHITELIST
+
+
+def filter_keywords(keywords: List[str]) -> tuple[List[str], List[str]]:
+    """Filter keywords against whitelist. Returns (valid, rejected)."""
+    valid: List[str] = []
+    rejected: List[str] = []
+    for k in keywords or []:
+        if _is_valid_keyword(k):
+            valid.append(k.strip())
+        else:
+            rejected.append(k)
+    return valid, rejected
+
+
 class PeerCompetitionService:
     @staticmethod
     def overlap_score(
         issuer_keywords: List[str],
         peer_business_scope: Optional[str],
     ) -> float:
-        """主业关键词重合度评分 — 简单 Jaccard 相似度."""
+        """主业关键词重合度评分 — 简单 Jaccard 相似度.
+
+        round 28 P0-7: 输入关键词先过白名单, 拒绝通用词/单字符/纯数字.
+        """
         if not issuer_keywords or not peer_business_scope:
             return 0.0
+        valid_kws, _rej = filter_keywords(issuer_keywords)
+        if not valid_kws:
+            return 0.0
         peer_text = peer_business_scope.lower()
-        hits = sum(1 for k in issuer_keywords if k.lower() in peer_text)
-        return round(100.0 * hits / max(1, len(issuer_keywords)), 2)
+        hits = sum(1 for k in valid_kws if k.lower() in peer_text)
+        return round(100.0 * hits / max(1, len(valid_kws)), 2)
 
     @staticmethod
     def risk_level_for_score(score: float) -> str:
@@ -472,9 +547,15 @@ class PeerCompetitionService:
 
         score = PeerCompetitionService.overlap_score(issuer_keywords, rp.business_scope)
         risk = PeerCompetitionService.risk_level_for_score(score)
+        valid_kws, rejected = filter_keywords(issuer_keywords)
+        if rejected:
+            logger.info(
+                "PeerCompetition.assess rejected generic keywords: %s (project=%s party=%s)",
+                rejected, project_id, party_id,
+            )
         matched = [
             k
-            for k in issuer_keywords
+            for k in valid_kws
             if rp.business_scope and k.lower() in rp.business_scope.lower()
         ]
 
@@ -554,17 +635,27 @@ class DisclosureChecker:
         prospectus_only: List[DisclosureGapResponse] = []
         matched = 0
 
+        # P0 性能修复 (2026-06-19): 原 N+1 — 每 party_id 单独 COUNT/SUM
+        # 新: 一次性 GROUP BY 拿所有 party_id 的 (count, sum) 字典
+        sys_party_ids = [rp.id for rp in sys_norm.values()]
+        tx_agg: dict[int, tuple[int, float]] = {}
+        if sys_party_ids:
+            agg_stmt = select(
+                RelatedPartyTransaction.party_id,
+                func.count(RelatedPartyTransaction.id),
+                func.coalesce(func.sum(RelatedPartyTransaction.amount), 0),
+            ).where(
+                RelatedPartyTransaction.party_id.in_(sys_party_ids)
+            ).group_by(RelatedPartyTransaction.party_id)
+            for pid, cnt, amt in (await db.execute(agg_stmt)).all():
+                tx_agg[int(pid)] = (int(cnt or 0), float(amt or 0))
+
         # 系统有 + 招股书没有 = critical
         for norm, rp in sys_norm.items():
             if norm in prospectus_norm:
                 matched += 1
                 continue
-            # 算这个关联方的交易数和金额
-            tx_stmt = select(
-                func.count(RelatedPartyTransaction.id),
-                func.coalesce(func.sum(RelatedPartyTransaction.amount), 0),
-            ).where(RelatedPartyTransaction.party_id == rp.id)
-            cnt, amt = (await db.execute(tx_stmt)).one()
+            cnt, amt = tx_agg.get(rp.id, (0, 0.0))
             gap = ProspectusDisclosureGap(
                 project_id=project_id,
                 party_id=rp.id,
@@ -572,8 +663,8 @@ class DisclosureChecker:
                 party_name=rp.name,
                 in_system=True,
                 in_prospectus=False,
-                transaction_count=int(cnt or 0),
-                total_amount=float(amt or 0),
+                transaction_count=cnt,
+                total_amount=amt,
                 suggested_action=(
                     "招股书未披露此关联方, 请补充至 '关联方及关联交易' 章节;"
                     "若交易金额重大需说明定价依据 + 必要性"

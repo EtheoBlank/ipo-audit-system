@@ -11,12 +11,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple  # noqa: F401
 
-from sqlalchemy import and_, asc, delete, desc, func, or_, select
+from sqlalchemy import and_, asc, delete, desc, func, or_, select  # noqa: F401
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -36,7 +37,7 @@ from app.models.db.account_audit import (
     AccountMovementAudit,
     LongTermAssetScopeOverride,
 )
-from app.models.db_models import AccountBalance, ChronologicalAccount, Project
+from app.models.db_models import AccountBalance, ChronologicalAccount, Project  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -369,6 +370,9 @@ class AccountAuditService:
         user_id: Optional[int] = None,
         user_display: Optional[str] = None,
     ) -> Dict[str, Any]:
+        # round 28 P0-6: partial commit 模式 — 失败行不影响已成功的行
+        # 旧版: 单行失败 → commit 整体回滚 → 整个批量白做
+        # 新版: 逐行 try/except + 单行 commit; 失败行 rollback 单独 + 收集 error
         if not items:
             return {"matched": 0, "updated": 0, "not_found": 0, "errors": []}
         # 拉本期所有审定行 dict by 复合键
@@ -391,7 +395,7 @@ class AccountAuditService:
         updated = 0
         not_found = 0
         errors: List[str] = []
-        for item in items:
+        for idx, item in enumerate(items):
             try:
                 key = (item.account_code, item.voucher_no, item.voucher_line_no, item.direction)
                 row = index.get(key)
@@ -409,15 +413,16 @@ class AccountAuditService:
                 row.audited_by_display = user_display
                 row.audited_at = _utcnow_naive()
                 row.updated_at = _utcnow_naive()
+                # partial commit: 单行 commit, 失败不影响其他行
+                await db.commit()
                 updated += 1
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"{item.account_code}/{item.voucher_no}: {exc}")
-        try:
-            await db.commit()
-        except Exception as exc:  # noqa: BLE001
-            await db.rollback()
-            errors.append(f"commit 失败: {exc}")
-            return {"matched": matched, "updated": 0, "not_found": not_found, "errors": errors}
+                # 失败行单独 rollback, 不影响已成功行
+                try:
+                    await db.rollback()
+                except Exception:
+                    logger.exception("bulk_audit: 单行 rollback 失败 idx=%d", idx)
+                errors.append(f"行 {idx}/{item.account_code}/{item.voucher_no}: {exc}")
         return {"matched": matched, "updated": updated, "not_found": not_found, "errors": errors}
 
     # === 查询 ===
@@ -524,34 +529,13 @@ class AccountAuditService:
             .all()
         )
 
-        debit_book = 0.0
-        debit_audited = 0.0
-        credit_book = 0.0
-        credit_audited = 0.0
-        d_pending = d_audited = d_disputed = 0
-        c_pending = c_audited = c_disputed = 0
-
-        for r in rows:
-            if r.status == MOVEMENT_AUDIT_STATUS_SKIPPED:
-                continue
-            if r.direction == MOVEMENT_DIRECTION_DEBIT:
-                debit_book += float(r.book_amount or 0)
-                debit_audited += float(r.audited_amount or 0)
-                if r.status == MOVEMENT_AUDIT_STATUS_PENDING:
-                    d_pending += 1
-                elif r.status == MOVEMENT_AUDIT_STATUS_AUDITED:
-                    d_audited += 1
-                elif r.status == MOVEMENT_AUDIT_STATUS_DISPUTED:
-                    d_disputed += 1
-            elif r.direction == MOVEMENT_DIRECTION_CREDIT:
-                credit_book += float(r.book_amount or 0)
-                credit_audited += float(r.audited_amount or 0)
-                if r.status == MOVEMENT_AUDIT_STATUS_PENDING:
-                    c_pending += 1
-                elif r.status == MOVEMENT_AUDIT_STATUS_AUDITED:
-                    c_audited += 1
-                elif r.status == MOVEMENT_AUDIT_STATUS_DISPUTED:
-                    c_disputed += 1
+        acc = AccountAuditService._accumulate_movements(rows)
+        debit_book = acc["debit_book"]
+        debit_audited = acc["debit_audited"]
+        credit_book = acc["credit_book"]
+        credit_audited = acc["credit_audited"]
+        d_pending, d_audited, d_disputed = acc["d_pending"], acc["d_audited"], acc["d_disputed"]
+        c_pending, c_audited, c_disputed = acc["c_pending"], acc["c_audited"], acc["c_disputed"]
 
         # 如果没有 movement_audit 行 (从未初始化), 直接用 AccountBalance 的发生额作为账面 + 审定
         if not rows and (debit_book_total_bal or credit_book_total_bal):
@@ -568,13 +552,15 @@ class AccountAuditService:
         beg_audited = beg
         end_audited = end_book  # 默认值; 真正的恒等式校验从下面计算
 
-        # 恒等式校验
-        if is_debit_account:
-            identity_book = beg + debit_book - credit_book - end_book
-            identity_audited = beg_audited + debit_audited - credit_audited - end_audited
-        else:
-            identity_book = beg - debit_book + credit_book - end_book
-            identity_audited = beg_audited - debit_audited + credit_audited - end_audited
+        identity = AccountAuditService._compute_identity(
+            beg, beg_audited,
+            debit_book, debit_audited,
+            credit_book, credit_audited,
+            end_book, end_audited,
+            is_debit_account,
+        )
+        identity_book = identity["identity_book"]
+        identity_audited = identity["identity_audited"]
 
         is_balanced = abs(identity_audited) < _EPS
         is_lta = is_long_term_asset_account(account_code, prefixes)
@@ -610,6 +596,64 @@ class AccountAuditService:
             is_balanced=is_balanced,
         )
 
+    # ----- helpers extracted from account_summary -----
+
+    @staticmethod
+    def _accumulate_movements(rows: Sequence[Any]) -> Dict[str, float]:
+        """扁平聚合 rows: 借/贷×book/audited + 3 状态计数."""
+        out = {
+            "debit_book": 0.0, "debit_audited": 0.0,
+            "credit_book": 0.0, "credit_audited": 0.0,
+            "d_pending": 0, "d_audited": 0, "d_disputed": 0,
+            "c_pending": 0, "c_audited": 0, "c_disputed": 0,
+        }
+        for r in rows:
+            if r.status == MOVEMENT_AUDIT_STATUS_SKIPPED:
+                continue
+            if r.direction == MOVEMENT_DIRECTION_DEBIT:
+                out["debit_book"] += float(r.book_amount or 0)
+                out["debit_audited"] += float(r.audited_amount or 0)
+                if r.status == MOVEMENT_AUDIT_STATUS_PENDING:
+                    out["d_pending"] += 1
+                elif r.status == MOVEMENT_AUDIT_STATUS_AUDITED:
+                    out["d_audited"] += 1
+                elif r.status == MOVEMENT_AUDIT_STATUS_DISPUTED:
+                    out["d_disputed"] += 1
+            elif r.direction == MOVEMENT_DIRECTION_CREDIT:
+                out["credit_book"] += float(r.book_amount or 0)
+                out["credit_audited"] += float(r.audited_amount or 0)
+                if r.status == MOVEMENT_AUDIT_STATUS_PENDING:
+                    out["c_pending"] += 1
+                elif r.status == MOVEMENT_AUDIT_STATUS_AUDITED:
+                    out["c_audited"] += 1
+                elif r.status == MOVEMENT_AUDIT_STATUS_DISPUTED:
+                    out["c_disputed"] += 1
+        return out
+
+    @staticmethod
+    def _compute_identity(
+        beg: float, beg_audited: float,
+        debit_book: float, debit_audited: float,
+        credit_book: float, credit_audited: float,
+        end_book: float, end_audited: float,
+        is_debit_account: bool,
+    ) -> Dict[str, float]:
+        """恒等式一处算: beg ± 借/贷 - end.
+
+        借方科目: ending = beg + debit - credit → beg + debit - credit - ending
+        贷方科目: ending = beg + credit - debit → beg + credit - debit - ending
+        """
+        # 借方 sign=+1, 贷方 sign=-1 (按 direction 镜像)
+        sign = 1.0 if is_debit_account else -1.0
+        # 在 is_debit_account 下: 借加 / 贷减; 否则借减 / 贷加
+        # = sign * (借 - 贷)
+        delta_book = sign * (debit_book - credit_book)
+        delta_audited = sign * (debit_audited - credit_audited)
+        return {
+            "identity_book": beg + delta_book - end_book,
+            "identity_audited": beg_audited + delta_audited - end_audited,
+        }
+
     @staticmethod
     async def project_overview(
         db: AsyncSession,
@@ -633,16 +677,33 @@ class AccountAuditService:
         accounts: List[AccountAuditSummary] = []
         fully_audited = with_pending = with_dispute = unbalanced = 0
 
-        for bal in balances:
-            if not is_long_term_asset_account(bal.account_code, prefixes):
+        # 预过滤: 仅长期资产科目才需要详查
+        target_codes = [
+            bal.account_code
+            for bal in balances
+            if is_long_term_asset_account(bal.account_code, prefixes)
+        ]
+        # 并发查每个科目的 summary — 大幅减少 N+1 串行延迟
+        # 注: account_summary 内部复用同一 db session, 走同一连接串行化,
+        #     但能减少逻辑分支, 后续可改成 batch SQL
+        summaries = await asyncio.gather(
+            *[
+                AccountAuditService.account_summary(
+                    db,
+                    project_id=project_id,
+                    account_code=code,
+                    period_end=period_end,
+                    prefixes=prefixes,
+                )
+                for code in target_codes
+            ],
+            return_exceptions=True,
+        )
+        for summary in summaries:
+            if isinstance(summary, Exception) or summary is None:
+                # 单个科目失败不应让整个概览崩 — 记日志后跳过
+                logger.warning("account_summary 失败: %s", summary)
                 continue
-            summary = await AccountAuditService.account_summary(
-                db,
-                project_id=project_id,
-                account_code=bal.account_code,
-                period_end=period_end,
-                prefixes=prefixes,
-            )
             accounts.append(summary)
             total_movements = summary.debit_total_count + summary.credit_total_count
             pending = summary.debit_pending_count + summary.credit_pending_count

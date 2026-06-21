@@ -1,0 +1,165 @@
+"""Team Management (项目组管理) ORM namespace — 人员/计划/会议/日报/卡点/建议.
+
+本文件是**逻辑分组 / re-export 容器**, 不再重复定义 ORM 类.
+所有类仍由 ``app.models.db_models`` 统一定义, 本模块只把它们按"项目组管理"汇总.
+
+包含 11 张表 + 状态机常量:
+  - ``TeamMember`` / ``ProjectAssignment``
+  - ``WorkPlan`` / ``WorkPlanItem``
+  - ``Meeting`` / ``MeetingRecord``
+  - ``DailyReport`` / ``Blocker`` / ``ProgressSnapshot``
+  - ``ManagementRecommendation``
+
+调用约定 (推荐):
+  >>> from app.models.db_models import TeamMember  # 老式, 仍兼容
+  >>> from app.models.db.team_management import TeamMember  # 新式, 语义化
+  >>> from app.models.db.team_management import TASK_STATUS_DONE  # 状态常量
+"""
+
+from app.models.db_models import (  # noqa: F401  re-export
+    TeamMember,
+    ProjectAssignment,
+    WorkPlan,
+    WorkPlanItem,
+    Meeting,
+    MeetingRecord,
+    DailyReport,
+    Blocker,
+    ProgressSnapshot,
+    ManagementRecommendation,
+    # 人员级别
+    MEMBER_LEVEL_LEAD,
+    MEMBER_LEVEL_SENIOR_MANAGER,
+    MEMBER_LEVEL_MANAGER,
+    MEMBER_LEVEL_SENIOR_AUDITOR,
+    MEMBER_LEVEL_AUDITOR,
+    MEMBER_LEVEL_INTERN,
+    MEMBER_LEVEL_LABELS,
+    MEMBER_LEVEL_ORDER,
+    # 人员状态
+    MEMBER_STATUS_ACTIVE,
+    MEMBER_STATUS_INACTIVE,
+    MEMBER_STATUS_LABELS,
+    # 任务状态
+    TASK_STATUS_PENDING,
+    TASK_STATUS_IN_PROGRESS,
+    TASK_STATUS_BLOCKED,
+    TASK_STATUS_DONE,
+    TASK_STATUS_CANCELLED,
+    TASK_STATUS_LABELS,
+    # 任务优先级
+    TASK_PRIORITY_HIGH,
+    TASK_PRIORITY_MEDIUM,
+    TASK_PRIORITY_LOW,
+    TASK_PRIORITY_LABELS,
+    # 计划状态
+    WORK_PLAN_STATUS_DRAFT,
+    WORK_PLAN_STATUS_ACTIVE,
+    WORK_PLAN_STATUS_COMPLETED,
+    WORK_PLAN_STATUS_ARCHIVED,
+    WORK_PLAN_STATUS_LABELS,
+    # 会议
+    MEETING_TYPE_DAILY,
+    MEETING_TYPE_WEEKLY,
+    MEETING_TYPE_KICKOFF,
+    MEETING_TYPE_REVIEW,
+    MEETING_TYPE_ADHOC,
+    MEETING_TYPE_LABELS,
+    MEETING_STATUS_SCHEDULED,
+    MEETING_STATUS_ONGOING,
+    MEETING_STATUS_COMPLETED,
+    MEETING_STATUS_CANCELLED,
+    MEETING_STATUS_LABELS,
+    # 卡点
+    BLOCKER_SEVERITY_LOW,
+    BLOCKER_SEVERITY_MEDIUM,
+    BLOCKER_SEVERITY_HIGH,
+    BLOCKER_SEVERITY_CRITICAL,
+    BLOCKER_SEVERITY_LABELS,
+    BLOCKER_STATUS_OPEN,
+    BLOCKER_STATUS_IN_PROGRESS,
+    BLOCKER_STATUS_RESOLVED,
+    BLOCKER_STATUS_ESCALATED,
+    BLOCKER_STATUS_LABELS,
+    # 项目内角色
+    PROJECT_ROLE_LEAD,
+    PROJECT_ROLE_DEPUTY,
+    PROJECT_ROLE_REVIEWER,
+    PROJECT_ROLE_MEMBER,
+    PROJECT_ROLE_LABELS,
+    # 数据导入事件
+    IMPORT_KIND_ACCOUNT_BALANCES,
+    IMPORT_KIND_CHRONOLOGICAL,
+    IMPORT_KIND_BANK_STATEMENTS,
+    IMPORT_KIND_LABELS,
+)
+
+
+__all__ = [
+    "TeamMember",
+    "ProjectAssignment",
+    "WorkPlan",
+    "WorkPlanItem",
+    "Meeting",
+    "MeetingRecord",
+    "DailyReport",
+    "Blocker",
+    "ProgressSnapshot",
+    "ManagementRecommendation",
+    "MEMBER_LEVEL_LEAD",
+    "MEMBER_LEVEL_SENIOR_MANAGER",
+    "MEMBER_LEVEL_MANAGER",
+    "MEMBER_LEVEL_SENIOR_AUDITOR",
+    "MEMBER_LEVEL_AUDITOR",
+    "MEMBER_LEVEL_INTERN",
+    "MEMBER_LEVEL_LABELS",
+    "MEMBER_LEVEL_ORDER",
+    "MEMBER_STATUS_ACTIVE",
+    "MEMBER_STATUS_INACTIVE",
+    "MEMBER_STATUS_LABELS",
+    "TASK_STATUS_PENDING",
+    "TASK_STATUS_IN_PROGRESS",
+    "TASK_STATUS_BLOCKED",
+    "TASK_STATUS_DONE",
+    "TASK_STATUS_CANCELLED",
+    "TASK_STATUS_LABELS",
+    "TASK_PRIORITY_HIGH",
+    "TASK_PRIORITY_MEDIUM",
+    "TASK_PRIORITY_LOW",
+    "TASK_PRIORITY_LABELS",
+    "WORK_PLAN_STATUS_DRAFT",
+    "WORK_PLAN_STATUS_ACTIVE",
+    "WORK_PLAN_STATUS_COMPLETED",
+    "WORK_PLAN_STATUS_ARCHIVED",
+    "WORK_PLAN_STATUS_LABELS",
+    "MEETING_TYPE_DAILY",
+    "MEETING_TYPE_WEEKLY",
+    "MEETING_TYPE_KICKOFF",
+    "MEETING_TYPE_REVIEW",
+    "MEETING_TYPE_ADHOC",
+    "MEETING_TYPE_LABELS",
+    "MEETING_STATUS_SCHEDULED",
+    "MEETING_STATUS_ONGOING",
+    "MEETING_STATUS_COMPLETED",
+    "MEETING_STATUS_CANCELLED",
+    "MEETING_STATUS_LABELS",
+    "BLOCKER_SEVERITY_LOW",
+    "BLOCKER_SEVERITY_MEDIUM",
+    "BLOCKER_SEVERITY_HIGH",
+    "BLOCKER_SEVERITY_CRITICAL",
+    "BLOCKER_SEVERITY_LABELS",
+    "BLOCKER_STATUS_OPEN",
+    "BLOCKER_STATUS_IN_PROGRESS",
+    "BLOCKER_STATUS_RESOLVED",
+    "BLOCKER_STATUS_ESCALATED",
+    "BLOCKER_STATUS_LABELS",
+    "PROJECT_ROLE_LEAD",
+    "PROJECT_ROLE_DEPUTY",
+    "PROJECT_ROLE_REVIEWER",
+    "PROJECT_ROLE_MEMBER",
+    "PROJECT_ROLE_LABELS",
+    "IMPORT_KIND_ACCOUNT_BALANCES",
+    "IMPORT_KIND_CHRONOLOGICAL",
+    "IMPORT_KIND_BANK_STATEMENTS",
+    "IMPORT_KIND_LABELS",
+]

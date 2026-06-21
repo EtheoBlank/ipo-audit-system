@@ -429,7 +429,7 @@ class TestLlmClientFactory:
         assert _is_real_key("placeholder") is False
         assert _is_real_key("a") is False  # 长度过短
         assert _is_real_key("a" * 32) is True  # 真实 key 长度
-        assert _is_real_key("sk-1234567890abcdefghij") is True  # 真实 key 格式
+        assert _is_real_key("sk-1234567890abcdefghij1234567890ab") is True  # 真实 key 格式 (>=32 字符)
 
     def test_prefer_raises_when_all_placeholder(self):
         """DEEPSEEK 占位符 + MINIMAX 占位符 → NoLlmConfigured (P0-6 修复)."""

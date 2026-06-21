@@ -170,7 +170,7 @@ async def regulation_db_search(query: str, top_k: int) -> list[SearchHit]:
       - 数量限制 + 简单打分（title 命中权重高）
     """
     try:
-        from sqlalchemy import func, or_, select
+        from sqlalchemy import or_, select
         from app.core.database import AsyncSessionLocal
         from app.models.db_models import Regulation
     except ImportError:
@@ -236,7 +236,8 @@ async def knowledge_base_search(query: str, top_k: int) -> list[SearchHit]:
         svc = KnowledgeBaseService()
         rows = await svc.search(query=query, top_k=top_k)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("知识库检索失败: %s", exc)
+        # round 36 P1: warning 留不下 traceback, 改 exception
+        logger.exception("知识库检索失败: %s", exc)
         return []
 
     hits: list[SearchHit] = []
@@ -273,7 +274,8 @@ async def live_web_search(query: str, top_k: int) -> list[SearchHit]:
     try:
         results = await web_search(query, top_k=top_k)  # type: ignore[misc]
     except Exception as exc:  # noqa: BLE001
-        logger.warning("WebSearch 失败: %s", exc)
+        # round 36 P1: warning 留不下 traceback, 改 exception
+        logger.exception("WebSearch 失败: %s", exc)
         return []
 
     return [

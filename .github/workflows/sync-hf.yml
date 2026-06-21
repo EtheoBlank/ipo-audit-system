@@ -69,18 +69,20 @@ jobs:
 
       - name: Safety check 1/2 — tracked files must not contain secrets
         run: |
-          echo "检查 sk- 字面量..."
+          KEY_PATTERN='(sk-[a-f0-9]{20,}|ark-[a-f0-9-]{20,})'
+          echo "检查 API key 字面量 (sk-/ark-)..."
           if grep -RIn --include='*.py' --include='*.md' --include='*.toml' --include='*.example' \
-              -E 'sk-[a-f0-9]{20,}' . \
+              -E "$KEY_PATTERN" . \
               | grep -v '\.venv/' \
               | grep -v 'node_modules/' \
               | grep -v 'CLAUDE\.md' \
               | grep -v 'HF_SYNC' \
-              | grep -v 'sync-hf\.yml'; then
+              | grep -v 'sync-hf\.yml' \
+              | grep -v 'sync\.sh'; then
             echo "❌ 检测到疑似真实 API key" >&2
             exit 1
           fi
-          echo "✅ 无 sk- 字面量"
+          echo "✅ 无 API key 字面量"
 
       - name: Safety check 2/2 — git history must never contain .env
         run: |

@@ -11,28 +11,25 @@ The page walks the auditor through:
 
 from __future__ import annotations
 
-import json
-from datetime import date, datetime
+from datetime import date
 from typing import Any, Optional
 
 import pandas as pd
-import requests
 import streamlit as st
 
-from frontend.app import API_BASE_URL, api_request, get_projects
+from frontend._components import apply_feishu_theme, page_header
+from frontend._http import api_request
+from frontend._components.project_picker import pick_project_dict
+from frontend._components.data_grid import edit_df as _edit_df
+from frontend._components.download import download_excel
 
 
 # ---------- helpers ------------------------------------------------------
 
 
 def _projects_selectbox(label: str = "选择项目") -> Optional[dict[str, Any]]:
-    projects = get_projects() or []
-    if not projects:
-        st.warning("⚠️ 请先在『项目管理』中创建一个项目。")
-        return None
-    options = {f"#{p['id']} {p['name']} ({p.get('company_name', '')})": p for p in projects}
-    label_chosen = st.selectbox(label, list(options.keys()))
-    return options.get(label_chosen)
+    """包装 pick_project_dict, 保留历史 API 兼容 (show_sales_ledger 仍调它)."""
+    return pick_project_dict(label=label, fmt="team_mgmt")
 
 
 def _format_df_for_editor(records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -51,7 +48,11 @@ def _format_df_for_editor(records: list[dict[str, Any]]) -> pd.DataFrame:
 
 
 def show_sales_ledger() -> None:
-    st.markdown("## 📦 销售清单整理")
+    apply_feishu_theme()
+    page_header('📦', '销售清单整理', '散乱文档 → AI 合成结构化销售清单 → 毛利率/截止性/单价波动分析')
+
+    # [飞书化]     st.markdown("## 📦 销售清单整理")  # 已被 page_header() 替代
+
     st.caption(
         "上传散乱文档（合同 / 发票 / 发货单 / 报关单）→ AI 自动合成结构化销售清单"
         "→ 收入循环分析（毛利率、截止性、单价波动、收发存对账、同行业参考）"
@@ -84,10 +85,11 @@ def show_sales_ledger() -> None:
             "选择文档（可多选）",
             type=["docx", "pdf", "xlsx", "xls"],
             accept_multiple_files=True,
+            key="sales_ledger_doc_upload",
         )
-        note = st.text_input("可选备注（例如：'2024年第一季度销售合同汇总'）", "")
+        note = st.text_input("可选备注（例如：'2024年第一季度销售合同汇总'）", "", key="sl_upload_note")
 
-        if st.button("📤 上传并解析", type="primary"):
+        if st.button("📤 上传并解析", type="primary", key="sl_upload_submit"):
             if not files:
                 st.warning("请先选择文件。")
             else:
@@ -138,9 +140,10 @@ def show_sales_ledger() -> None:
             "可选提示词（追加到 system prompt）",
             "",
             placeholder="例如：'只关心 2024 年的出口订单'",
+            key="sl_synth_hint",
         )
 
-        if st.button("🤖 开始合成", type="primary"):
+        if st.button("🤖 开始合成", type="primary", key="sl_synth_submit"):
             with st.spinner("DeepSeek 正在解析文档……"):
                 payload = {"project_id": project_id, "document_ids": [], "extra_hint": extra_hint}
                 result = api_request(
@@ -158,13 +161,15 @@ def show_sales_ledger() -> None:
                 )
             else:
                 st.success(f"✅ 已合成 {result['synthesized_count']} 条记录")
-                st.session_state["sl_records"] = result["records"]
+                # P0: 用 project_id 作 key 前缀防跨项目污染
+                st.session_state[f"sl_records_{project_id}"] = result["records"]
                 st.rerun()
 
         st.divider()
         st.subheader("当前销售记录（数据库中）")
         records = api_request("GET", f"/api/sales-ledger/projects/{project_id}/sales-records") or []
-        st.session_state["sl_records"] = records
+        # P0: 用 project_id 作 key 前缀防跨项目污染
+        st.session_state[f"sl_records_{project_id}"] = records
         if records:
             df = _format_df_for_editor(records)
             st.dataframe(df, use_container_width=True, hide_index=True)
@@ -176,7 +181,7 @@ def show_sales_ledger() -> None:
     with tab_review:
         st.subheader("核对 / 修改销售记录")
         records = (
-            st.session_state.get("sl_records")
+            st.session_state.get(f"sl_records_{project_id}")
             or api_request("GET", f"/api/sales-ledger/projects/{project_id}/sales-records")
             or []
         )
@@ -217,11 +222,9 @@ def show_sales_ledger() -> None:
             for c in keep_cols:
                 if c not in df.columns:
                     df[c] = None
-            edited = st.data_editor(
+            edited = _edit_df(
                 df[keep_cols],
-                use_container_width=True,
-                hide_index=True,
-                num_rows="fixed",
+                key="sl_editor",
                 column_config={
                     "is_verified": st.column_config.CheckboxColumn("已核对"),
                     "ship_date": st.column_config.DateColumn("发货日期"),
@@ -232,10 +235,9 @@ def show_sales_ledger() -> None:
                         options=["未发函", "已发函", "已回函", "未回函", "作废"],
                     ),
                 },
-                key="sl_editor",
             )
 
-            if st.button("💾 保存修改", type="primary"):
+            if st.button("💾 保存修改", type="primary", key="sl_review_save"):
                 changed = _diff_and_save(project_id, records, edited)
                 if changed:
                     st.success(f"✅ 已保存 {changed} 条修改")
@@ -248,14 +250,14 @@ def show_sales_ledger() -> None:
         st.subheader("收入循环分析")
         col1, col2 = st.columns(2)
         with col1:
-            period_end = st.date_input("期末日期（截止性测试用）", value=date.today())
+            period_end = st.date_input("期末日期（截止性测试用）", value=date.today(), key="sl_an_pe")
         with col2:
-            window = st.number_input("截止性测试窗口（天）", min_value=1, max_value=60, value=10)
-        price_vol = st.slider("单价波动报警阈值", 0.05, 0.80, 0.20, 0.05)
-        run_bench = st.checkbox("生成同行业 AI 参考值（需要 DeepSeek）", value=False)
-        use_industry = st.text_input("行业（用于行业参考）", value=industry)
+            window = st.number_input("截止性测试窗口（天）", min_value=1, max_value=60, value=10, key="sl_an_window")
+        price_vol = st.slider("单价波动报警阈值", 0.05, 0.80, 0.20, 0.05, key="sl_an_vol")
+        run_bench = st.checkbox("生成同行业 AI 参考值（需要 DeepSeek）", value=False, key="sl_an_bench")
+        use_industry = st.text_input("行业（用于行业参考）", value=industry, key="sl_an_industry")
 
-        if st.button("📊 开始分析", type="primary"):
+        if st.button("📊 开始分析", type="primary", key="sl_an_run"):
             payload = {
                 "project_id": project_id,
                 "period_end": period_end.isoformat(),
@@ -286,7 +288,7 @@ def show_sales_ledger() -> None:
             m3.metric("总成本", f"{s.get('total_cost', 0):,.2f}")
             m4.metric("毛利率", f"{s.get('gross_margin', 0) * 100:.2f}%")
 
-            with st.expander("👥 客户毛利率", expanded=True):
+            with st.expander("👥 客户毛利率", expanded=False):
                 st.dataframe(pd.DataFrame(result.get("by_customer", [])), use_container_width=True)
             with st.expander("📦 产品毛利率"):
                 st.dataframe(pd.DataFrame(result.get("by_product", [])), use_container_width=True)
@@ -342,21 +344,21 @@ def show_sales_ledger() -> None:
     with tab_export:
         st.subheader("导出销售清单 + 收入分析")
         st.write("生成多 Sheet Excel 工作簿（销售清单、毛利率、异常、行业参考等）。")
-        if st.button("📥 生成 Excel", type="primary"):
+        if st.button("📥 生成 Excel", type="primary", key="sl_exp_gen"):
             with st.spinner("生成中……"):
-                url = f"{API_BASE_URL}/api/sales-ledger/projects/{project_id}/export?run_analysis=true"
-                r = requests.get(url, timeout=60)
-                if r.status_code != 200:
-                    st.error(f"导出失败：{r.status_code} {r.text[:300]}")
-                else:
-                    st.session_state["sl_xlsx"] = r.content
+                # 走统一 api_request (带 auth 头, 统一错误)
+                content = api_request(
+                    "GET",
+                    f"/api/sales-ledger/projects/{project_id}/export?run_analysis=true",
+                    expect_bytes=True,
+                )
+                if isinstance(content, bytes) and content:
+                    st.session_state["sl_xlsx"] = content
                     st.success("✅ 已生成，可点击下方下载")
         if st.session_state.get("sl_xlsx"):
-            st.download_button(
-                "⬇️ 下载 Excel",
-                data=st.session_state["sl_xlsx"],
+            download_excel(
+                st.session_state["sl_xlsx"],
                 file_name=f"sales_ledger_project_{project_id}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
 
@@ -447,8 +449,11 @@ def _coerce_for_api(value: Any, col: str):
         "gross_amount",
         "confirmation_diff",
     ):
+        # P0 正确性: 解析失败 fallback 0.0 静默丢值 (财务数据错), 改为返回 None 让后端校验
+        if value is None or value == "":
+            return None
         try:
             return float(value)
         except (TypeError, ValueError):
-            return 0.0
+            return None  # 不静默兜底 0.0
     return value

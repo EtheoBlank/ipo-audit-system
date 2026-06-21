@@ -55,7 +55,6 @@ from app.models.db.auth import (
     ROLE_ASSISTANT,
     User,
 )
-from app.api._helpers import get_project_or_404
 from app.services.account_audit import (
     AccountAuditService,
     get_effective_prefixes,
@@ -65,6 +64,7 @@ from app.services.auth import (
     record_audit_log,
     require_role,
 )
+from app.services.auth.tenant import ensure_project_in_firm
 from app.services.notification import NotificationService
 from app.models.db.notification import (
     NOTIF_MODULE_ACCOUNT_AUDIT,
@@ -92,7 +92,7 @@ async def get_effective_prefixes_api(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     overrides = await AccountAuditService.list_scope_overrides(db, project_id)
     effective = await get_effective_prefixes(db, project_id)
     return EffectivePrefixesResponse(
@@ -113,7 +113,7 @@ async def add_scope_override(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     ov = await AccountAuditService.add_scope_override(
         db,
         project_id=project_id,
@@ -144,6 +144,9 @@ async def remove_scope_override(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
+    # round 31 修 round 29 xfail 捕到的 P0 IDOR: scope-override DELETE 缺 firm 校验,
+    # 跨所 user 可删别所 scope override → 改 ensure_project_in_firm 先校验 firm_id.
+    await ensure_project_in_firm(db, project_id, current_user)
     ok = await AccountAuditService.remove_scope_override(
         db, project_id=project_id, override_id=override_id
     )
@@ -177,7 +180,7 @@ async def initialize_from_chronological(
     db: AsyncSession = Depends(get_db),
 ):
     """从序时账抽长期资产发生额, 初始化审定记录."""
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     try:
         result = await AccountAuditService.initialize_from_chronological(
             db,
@@ -234,7 +237,7 @@ async def list_movements(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     result = await AccountAuditService.list_movements(
         db,
         project_id=project_id,
@@ -260,6 +263,18 @@ async def update_movement(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
+    # P0 修复 (2026-06-18): ensure_project_in_firm 必须先于 service.audit_row,
+    # 否则 service 已 commit, 跨所用户已改写他人数据, ensure 抛 403 也晚了.
+    # 先 SELECT 拿 project_id 做 firm 校验, 再调 service.
+    from sqlalchemy import select
+    from app.models.db.account_audit import AccountMovementAudit
+    _r = (await db.execute(
+        select(AccountMovementAudit.project_id).where(AccountMovementAudit.id == movement_id)
+    )).scalar_one_or_none()
+    if _r is None:
+        raise HTTPException(status_code=404, detail=f"长期资产发生额 {movement_id} 不存在")
+    await ensure_project_in_firm(db, _r, current_user)
+
     try:
         row = await AccountAuditService.audit_row(
             db,
@@ -274,6 +289,7 @@ async def update_movement(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # IDOR fix (P0): 校验 row 所属 project 在 user 事务所内 — 否则 403
     await record_audit_log(
         db,
         user_id=current_user.id,
@@ -296,6 +312,16 @@ async def dispute_movement(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
+    # P0 修复: 同 update_movement, firm 校验必须先于 service
+    from sqlalchemy import select
+    from app.models.db.account_audit import AccountMovementAudit
+    _r = (await db.execute(
+        select(AccountMovementAudit.project_id).where(AccountMovementAudit.id == movement_id)
+    )).scalar_one_or_none()
+    if _r is None:
+        raise HTTPException(status_code=404, detail=f"长期资产发生额 {movement_id} 不存在")
+    await ensure_project_in_firm(db, _r, current_user)
+
     try:
         row = await AccountAuditService.dispute_row(
             db,
@@ -342,7 +368,7 @@ async def bulk_audit(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     result = await AccountAuditService.bulk_audit(
         db,
         project_id=project_id,
@@ -384,7 +410,7 @@ async def bulk_audit_upload(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     content, safe_name, suffix = await read_upload_capped(
         file, allowed_exts={".xlsx", ".xls", ".csv"}
     )
@@ -392,7 +418,9 @@ async def bulk_audit_upload(
         if suffix == ".csv":
             df = pd.read_csv(io.BytesIO(content), encoding="utf-8-sig")
         else:
-            df = pd.read_excel(io.BytesIO(content))
+            # P0 安全 (2026-06-19): 上传 .xlsx 加 nrows 上限, 防恶意 zip 解压炸弹
+            # 50MB .xlsx 解压可达 100x, 解析后内存爆; 限制 5w 行保底
+            df = pd.read_excel(io.BytesIO(content), nrows=settings.MAX_EXCEL_ROWS)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Excel/CSV 解析失败: {exc}") from exc
 
@@ -462,7 +490,7 @@ async def account_summary(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     summary = await AccountAuditService.account_summary(
         db,
         project_id=project_id,
@@ -482,7 +510,7 @@ async def project_overview(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     overview = await AccountAuditService.project_overview(
         db, project_id=project_id, period_end=period_end
     )
@@ -514,7 +542,7 @@ async def export_movements(
     db: AsyncSession = Depends(get_db),
 ):
     """导出长期资产审定明细 Excel."""
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     result = await AccountAuditService.list_movements(
         db,
         project_id=project_id,
@@ -554,9 +582,13 @@ async def export_movements(
                 writer, sheet_name="发生额审定", index=False
             )
     buf.seek(0)
+    # P0 安全 (2026-06-19): account_code / period_end 都从 query 传入, 文件名防注入
+    import re as _re_fn
+    _safe_code = _re_fn.sub(r"[^A-Za-z0-9_.\-]", "_", account_code) if account_code else ""
+    _safe_pe = _re_fn.sub(r"[^0-9\-]", "_", period_end)
     fname = (
         f"long_term_asset_audit_p{project_id}"
-        f"{('_' + account_code) if account_code else ''}_{period_end}.xlsx"
+        f"{('_' + _safe_code) if _safe_code else ''}_{_safe_pe}.xlsx"
     )
     return StreamingResponse(
         buf,

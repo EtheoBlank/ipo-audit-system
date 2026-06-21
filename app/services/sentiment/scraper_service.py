@@ -20,6 +20,11 @@ from app.models.db_models import (
     SentimentSubject,
     PaidSourceMissingKey,
 )
+from app.services.notification import NotificationService
+from app.models.db.notification import (
+    NOTIF_MODULE_SENTIMENT,
+    NOTIF_SEVERITY_WARN,
+)
 from app.services.sentiment.dedup import RawSentimentItem
 from app.services.sentiment.http_client import SentimentHttpClient
 from app.services.sentiment.notifier import create_notification
@@ -40,56 +45,51 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# 信源注册表 — code → (provider_type, display_name, is_paid, api_key_ref, factory)
+# 信源注册表 — code → (provider_type, display_name, api_key_ref, adapter_cls)
+# is_paid 由 api_key_ref 是否非空派生, 避免双源真相.
+# adapter_cls 直接存类本身 (类本就 callable), 替代 lambda: AdapterClass 多余包装.
 _PROVIDER_REGISTRY: dict[str, dict] = {
     "rss": {
         "provider_type": "free_rss",
         "display_name": "RSS 订阅",
-        "is_paid": False,
         "api_key_ref": None,
-        "factory": lambda: RssAdapter,
+        "adapter_cls": RssAdapter,
     },
     "cninfo_announce": {
         "provider_type": "free_scrape",
         "display_name": "巨潮公告",
-        "is_paid": False,
         "api_key_ref": None,
-        "factory": lambda: CninfoAnnounceAdapter,
+        "adapter_cls": CninfoAnnounceAdapter,
     },
     "regulator": {
         "provider_type": "free_scrape",
         "display_name": "监管/交易所披露",
-        "is_paid": False,
         "api_key_ref": None,
-        "factory": lambda: RegulatorAdapter,
+        "adapter_cls": RegulatorAdapter,
     },
     "tavily": {
         "provider_type": "paid_api",
         "display_name": "Tavily 搜索",
-        "is_paid": True,
         "api_key_ref": "TAVILY_API_KEY",
-        "factory": lambda: TavilyAdapter,
+        "adapter_cls": TavilyAdapter,
     },
     "bocha": {
         "provider_type": "paid_api",
         "display_name": "博查搜索",
-        "is_paid": True,
         "api_key_ref": "BOCHA_API_KEY",
-        "factory": lambda: BochaAdapter,
+        "adapter_cls": BochaAdapter,
     },
     "serpapi": {
         "provider_type": "paid_api",
         "display_name": "SerpAPI",
-        "is_paid": True,
         "api_key_ref": "SERPAPI_API_KEY",
-        "factory": lambda: SerpAPIAdapter,
+        "adapter_cls": SerpAPIAdapter,
     },
     "manual": {
         "provider_type": "manual",
         "display_name": "手工录入",
-        "is_paid": False,
         "api_key_ref": None,
-        "factory": lambda: ManualAdapter,
+        "adapter_cls": ManualAdapter,
     },
 }
 
@@ -126,7 +126,7 @@ class SentimentScraperService:
                     code=code,
                     provider_type=meta["provider_type"],
                     display_name=meta["display_name"],
-                    is_paid=meta["is_paid"],
+                    is_paid=meta["api_key_ref"] is not None,
                     api_key_ref=meta["api_key_ref"],
                     is_enabled=True,
                 )
@@ -158,7 +158,7 @@ class SentimentScraperService:
             date_to = _utcnow().strftime("%Y-%m-%d")
         if not date_from:
             # 默认 7 天前
-            d = datetime.now() - timedelta(days=7)
+            d = _utcnow() - timedelta(days=7)
             date_from = d.strftime("%Y-%m-%d")
 
         # 收集要跑的信源
@@ -167,35 +167,47 @@ class SentimentScraperService:
 
         # 信源状态收集
         source_status: dict[str, str] = {}
+        # P0-4 (2026-06-19): 收集被跳过的付费信源 (无 API key), run_daily_scan 末尾汇总时
+        # 推红点 (NotificationService.push), 提醒管理员配置. 仅付费源, 免费源不通知.
+        skipped_paid_codes: list[str] = []
 
         # 抓取 + 入库
         async with SentimentHttpClient() as http:
-            tasks = []
+            tasks: list[asyncio.Task] = []
+            # 记录任务与 source code 的对应关系, 避免 zip 错位 (跳过 unknown/skipped 源)
+            task_code_pairs: list[tuple[str, asyncio.Task]] = []
             for code in source_codes:
                 meta = _PROVIDER_REGISTRY.get(code)
                 if not meta:
                     source_status[code] = "unknown_source"
                     continue
                 # 付费源无 key → skip
-                if meta["is_paid"]:
-                    key = getattr(settings, meta["api_key_ref"], "") if meta["api_key_ref"] else ""
+                api_key_ref = meta["api_key_ref"]
+                if api_key_ref:
+                    key = getattr(settings, api_key_ref, "")
                     if not key:
                         source_status[code] = "skipped"
+                        skipped_paid_codes.append(code)
                         logger.debug("信源 %s 无 API key, 跳过", code)
                         continue
-                    adapter_cls = meta["factory"]()
+                    adapter_cls = meta["adapter_cls"]
                     adapter = adapter_cls(http, api_key=key)
                 else:
-                    adapter_cls = meta["factory"]()
+                    adapter_cls = meta["adapter_cls"]
                     adapter = adapter_cls(http)
-                tasks.append(self._run_one_source(adapter, project, subjects, date_from, date_to))
+                task = asyncio.create_task(
+                    self._run_one_source(adapter, project, subjects, date_from, date_to)
+                )
+                task_code_pairs.append((code, task))
 
             # 限频: 单项目最多 max_events 条入库
             results: list[list[RawSentimentItem]] = []
-            if tasks:
+            if task_code_pairs:
                 # 单个信源超时用 gather, 单个失败不阻断
+                codes = [c for c, _ in task_code_pairs]
+                tasks = [t for _, t in task_code_pairs]
                 gathered = await asyncio.gather(*tasks, return_exceptions=True)
-                for code, result in zip(source_codes, gathered):
+                for code, result in zip(codes, gathered):
                     if isinstance(result, Exception):
                         source_status[code] = "failed"
                         logger.warning("信源 %s 抓取失败: %s", code, result)
@@ -214,18 +226,22 @@ class SentimentScraperService:
         all_items = all_items[:max_events]
 
         # 入库
+        # P0 (round 32) 性能: 批量入库替代 N+1
+        # 之前每条都跑 _persist_event (3 次 DB round-trip): content_hash 去重 +
+        # source_code 查 source_id + INSERT. 200 条事件 = 600 次 round-trip.
+        # 现在: 1) 预拉所有 SentimentSource → dict
+        #      2) content_hash 一次性 WHERE IN (...) 查重
+        #      3) 剩下的 add_all + flush 一次 INSERT
+        # 200 条事件从 600 round-trips → 3 round-trips.
         added = 0
-        for item in all_items:
+        if all_items:
             try:
-                ev = await self._persist_event(db, item)
-                if ev is not None:
-                    added += 1
+                added = await self._bulk_persist_events(db, all_items)
             except IntegrityError:
-                # content_hash 冲突 (并发), 跳过
                 await db.rollback()
-                continue
+                logger.warning("scrape_project: 批量入库 IntegrityError, 项目=%s", project.id)
             except Exception as exc:
-                logger.warning("入库失败 %s: %s", item.title, exc)
+                logger.warning("scrape_project: 批量入库失败 项目=%s: %s", project.id, exc)
                 await db.rollback()
 
         if added > 0:
@@ -238,6 +254,10 @@ class SentimentScraperService:
                 link_url=f"/sentiment?project_id={project.id}",
             )
 
+        # P0-4 (2026-06-19): 付费信源无 key → 推红点 (管理员可感知 "信源配置缺失")
+        if skipped_paid_codes:
+            await self._notify_missing_paid_sources(db, project, skipped_paid_codes)
+
         await db.commit()
         logger.info(
             "scrape_project: project=%s 命中 %d 条 (新增 %d) 各源状态=%s",
@@ -247,6 +267,69 @@ class SentimentScraperService:
             source_status,
         )
         return added, source_status
+
+    async def _first_time_missing(self, db: AsyncSession, source_code: str) -> bool:
+        """返回 True 当 source_code 在最近 30 天没出现过 source_missing_key 通知.
+        P0-4 (2026-06-19): 30 天内已通知过 → 不重复推, 避免噪声刷屏.
+        """
+        from sqlalchemy import and_, func, select
+
+        from app.models.db.notification import Notification
+
+        cutoff = _utcnow() - timedelta(days=30)
+        stmt = (
+            select(func.count(Notification.id))
+            .where(
+                and_(
+                    Notification.module == NOTIF_MODULE_SENTIMENT,
+                    Notification.type == "source_missing_key",
+                    Notification.resource_type == "sentiment_source",
+                    Notification.resource_id == source_code,
+                    Notification.created_at >= cutoff,
+                )
+            )
+        )
+        n = int((await db.execute(stmt)).scalar_one() or 0)
+        return n == 0
+
+    async def _notify_missing_paid_sources(
+        self,
+        db: AsyncSession,
+        project: Project,
+        skipped_codes: list[str],
+    ) -> None:
+        """对每个跳过的付费信源, 30 天内首次发现就推一条 source_missing_key 通知."""
+        for code in skipped_codes:
+            meta = _PROVIDER_REGISTRY.get(code) or {}
+            display = meta.get("display_name", code)
+            api_key_ref = meta.get("api_key_ref") or ""
+            try:
+                first = await self._first_time_missing(db, code)
+            except Exception as exc:
+                logger.warning("查 source_missing_key 历史失败 %s: %s", code, exc)
+                first = True  # 兜底: 失败就当首次, 至少推一条
+            if not first:
+                continue
+            body = (
+                f"项目 {project.company_name}: 付费信源 {display} ({code}) 未配置 API key. "
+                f"请在环境变量 {api_key_ref} 设置密钥后重启扫描. "
+                f"重复出现将不再提示 (30 天内)."
+            )
+            try:
+                await NotificationService.push(
+                    db,
+                    module=NOTIF_MODULE_SENTIMENT,
+                    type="source_missing_key",
+                    title=f"舆情信源缺密钥: {display}",
+                    body=body,
+                    severity=NOTIF_SEVERITY_WARN,
+                    resource_type="sentiment_source",
+                    resource_id=code,
+                    project_id=project.id,
+                    commit=False,  # 留给 scrape_project 末尾统一 commit
+                )
+            except Exception as exc:
+                logger.warning("推 source_missing_key 通知失败 %s: %s", code, exc)
 
     async def _run_one_source(
         self,
@@ -310,37 +393,129 @@ class SentimentScraperService:
             return None
         return ev
 
+    async def _bulk_persist_events(
+        self,
+        db: AsyncSession,
+        items: list,
+    ) -> int:
+        """P0 (round 32): 批量入库 SentimentEvent — 替代 N+1.
+
+        流程:
+          1) 一次 SELECT 拉所有 SentimentSource → dict[code → id]
+          2) 一次 SELECT WHERE content_hash IN (hashes) → 已有 hash 集合
+          3) 构造 SentimentEvent 列表, 过滤已存在的, db.add_all + flush
+          4) 兜底: flush 阶段若仍撞 IntegrityError (并发), 全 rollback + 退回逐条
+
+        Returns: 实际新增条数.
+        """
+        # 1) 预拉 source 字典 (1 round-trip)
+        src_res = await db.execute(select(SentimentSource))
+        src_map: dict[str, int] = {s.code: s.id for s in src_res.scalars().all()}
+
+        # 2) 一次性查重 (1 round-trip)
+        hashes = [it.content_hash for it in items if it.content_hash]
+        existing_hashes: set[str] = set()
+        if hashes:
+            # 避免 IN 子句过长, 分批
+            CHUNK = 500
+            for i in range(0, len(hashes), CHUNK):
+                batch = hashes[i : i + CHUNK]
+                r = await db.execute(
+                    select(SentimentEvent.content_hash).where(
+                        SentimentEvent.content_hash.in_(batch)
+                    )
+                )
+                existing_hashes.update(r.scalars().all())
+
+        # 3) 构造新事件
+        new_events: list[SentimentEvent] = []
+        for it in items:
+            if it.content_hash and it.content_hash in existing_hashes:
+                continue
+            source_id = src_map.get(it.source_code or "") if it.source_code else None
+            new_events.append(
+                SentimentEvent(
+                    project_id=it.project_id,
+                    source_id=source_id,
+                    source_code=it.source_code,
+                    event_kind=it.event_kind,
+                    severity=it.severity,
+                    title=it.title,
+                    url=it.url,
+                    publisher=it.publisher,
+                    publish_date=it.publish_date,
+                    content_text=it.content_text,
+                    content_hash=it.content_hash,
+                    matched_alias=it.matched_alias,
+                    raw_payload=it.raw_payload,
+                )
+            )
+        if not new_events:
+            return 0
+
+        # 4) 批量 INSERT (1 round-trip)
+        db.add_all(new_events)
+        try:
+            await db.flush()
+        except IntegrityError:
+            # 兜底: 并发场景下 hash 冲突无法在 SELECT 时发现
+            # 全 rollback 后退回逐条 (保证数据不丢)
+            await db.rollback()
+            logger.warning(
+                "_bulk_persist_events: flush 撞 IntegrityError, 退回逐条 fallback"
+            )
+            fallback_added = 0
+            for it in items:
+                try:
+                    ev = await self._persist_event(db, it)
+                    if ev is not None:
+                        fallback_added += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("入库 fallback 失败 %s: %s", it.title, exc)
+                    await db.rollback()
+            return fallback_added
+        return len(new_events)
+
     # ---- 全量扫描 -------------------------------------------------------
 
     async def run_daily_scan(self) -> dict:
         """调度入口: 扫描所有 active 项目. 返回汇总 dict.
 
         使用独立的 AsyncSessionLocal() — 不能复用 request-scoped session.
+
+        P0 (round 32): 项目循环内用独立 session, 单项目失败不影响其他项目,
+        同时避免 1 个慢项目拖长事务锁住所有数据.
         """
         summary = {"projects_scanned": 0, "events_added": 0, "errors": []}
         async with AsyncSessionLocal() as db:
             res = await db.execute(select(Project).where(Project.status == "active"))
             projects = res.scalars().all()
-            # 收集所有项目的 subjects (一次查完)
-            for p in projects:
-                try:
-                    sub_res = await db.execute(
+            project_ids = [p.id for p in projects]
+        for project_id in project_ids:
+            try:
+                async with AsyncSessionLocal() as session:
+                    p = (
+                        await session.execute(
+                            select(Project).where(Project.id == project_id)
+                        )
+                    ).scalar_one_or_none()
+                    if p is None:
+                        continue
+                    sub_res = await session.execute(
                         select(SentimentSubject).where(
                             SentimentSubject.project_id == p.id,
                             SentimentSubject.is_active == True,  # noqa: E712
                         )
                     )
                     subjects = sub_res.scalars().all()
-                    # 若没有 subject, 用公司名 + 股票简称 + 实控人 + 股票代码合成一个
                     if not subjects:
                         subjects = self._synthesize_subjects(p)
-
-                    added, _ = await self.scrape_project(db, p, subjects)
+                    added, _ = await self.scrape_project(session, p, subjects)
                     summary["projects_scanned"] += 1
                     summary["events_added"] += added
-                except Exception as exc:
-                    logger.exception("扫描项目 %s 失败: %s", p.id, exc)
-                    summary["errors"].append({"project_id": p.id, "error": str(exc)})
+            except Exception as exc:
+                logger.exception("扫描项目 %s 失败: %s", project_id, exc)
+                summary["errors"].append({"project_id": project_id, "error": str(exc)})
         return summary
 
     def _synthesize_subjects(self, project: Project) -> list[SentimentSubject]:
@@ -360,7 +535,8 @@ class SentimentScraperService:
         if project.legal_representative:
             names.append(("person", project.legal_representative))
         if project.keywords_extra:
-            for kw in project.keywords_extra.splitlines():
+            # 防 None: ORM 上可空, 即使 if Truthy 仍建议加防护
+            for kw in (project.keywords_extra or "").splitlines():
                 kw = kw.strip()
                 if kw:
                     names.append(("extra", kw))

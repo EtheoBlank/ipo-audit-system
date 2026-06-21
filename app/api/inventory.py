@@ -35,6 +35,7 @@ Routes:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -47,7 +48,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.api._helpers import get_project_or_404
+from app.api._helpers import deepseek_client, get_project_or_404
 from app.core.database import get_db
 from app.models.db_models import (
     InventoryCodeMapping,
@@ -92,6 +93,7 @@ from app.services.inventory import (
 from app.services.auth import get_current_user, get_current_user_optional
 from app.services.sales_ledger.deepseek_client import DeepSeekClient
 from app.utils.upload_safety import (
+    check_magic_bytes,
     read_upload_capped,
     unique_save_path,
 )
@@ -105,11 +107,14 @@ router = APIRouter(prefix="/api/inventory", tags=["收发存盘点&减值"])
 
 
 def _deepseek_client() -> DeepSeekClient:
-    return DeepSeekClient(
-        api_key=settings.DEEPSEEK_API_KEY,
-        base_url=settings.DEEPSEEK_API_BASE,
-        model=settings.DEEPSEEK_MODEL,
-    )
+    # 兼容旧名; 实际实现统一到 app.api._helpers.deepseek_client
+    return deepseek_client()
+
+
+def _write_bytes(path, data: bytes) -> None:
+    """同步写文件, 供 asyncio.to_thread 调用."""
+    with open(path, "wb") as f:
+        f.write(data)
 
 
 def _default_period_end(proj: Project) -> date:
@@ -137,7 +142,7 @@ async def upload_movements(
     current_user: User = Depends(get_current_user),
 ):
     """上传收发存 Excel/CSV。自动识别金蝶/用友/SAP/手工模板。"""
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = period_end or _default_period_end(proj)
     pe_str = pe.isoformat()
 
@@ -150,6 +155,13 @@ async def upload_movements(
         df = InventoryImporter.parse_bytes(content, safe_name)
     except InventoryImportError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # round 28 P1-9: 收集入库日期解析失败行 — 不能静默
+    from app.services.inventory.importer import get_date_parse_failures
+
+    date_failures = get_date_parse_failures()
+    date_fail_count = len(date_failures)
+    date_fail_rows = [[idx, raw] for idx, raw in date_failures[:50]]  # 至多 50 行防 payload 爆
 
     if replace:
         await db.execute(
@@ -196,6 +208,8 @@ async def upload_movements(
         is_prior_year=is_prior_year,
         imported_count=inserted,
         total_ending_amount=round(total_ending, 2),
+        date_parse_failed_count=date_fail_count,
+        date_parse_failed_rows=date_fail_rows,
     )
 
 
@@ -210,7 +224,7 @@ async def list_movements(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     q = select(InventoryMovement).where(InventoryMovement.project_id == project_id)
     if period_end:
         q = q.where(InventoryMovement.period_end == period_end.isoformat())
@@ -228,7 +242,7 @@ async def clear_movements(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     stmt = delete(InventoryMovement).where(InventoryMovement.project_id == project_id)
     if period_end:
         stmt = stmt.where(InventoryMovement.period_end == period_end.isoformat())
@@ -268,7 +282,7 @@ async def generate_count_sheet(
     current_user: User = Depends(get_current_user),
 ):
     """生成盘点用表（金额优先 + 阈值覆盖）。"""
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = req.period_end or _default_period_end(proj)
     movements = await _fetch_period_movements(db, project_id, pe)
     if not movements:
@@ -390,7 +404,7 @@ async def simulate_count_sheet(
     current_user: User = Depends(get_current_user),
 ):
     """对多档阈值做平行测算，方便用户在前端拉滑条选择。"""
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = req.period_end or _default_period_end(proj)
     movements = await _fetch_period_movements(db, project_id, pe)
     if not movements:
@@ -419,7 +433,7 @@ async def list_count_sheets(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     q = select(InventoryCountSheet).where(InventoryCountSheet.project_id == project_id)
     if plan_id is not None:
         q = q.where(InventoryCountSheet.plan_id == plan_id)
@@ -437,7 +451,7 @@ async def clear_count_sheets(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     stmt = delete(InventoryCountSheet).where(InventoryCountSheet.project_id == project_id)
     if plan_id is not None:
         stmt = stmt.where(InventoryCountSheet.plan_id == plan_id)
@@ -463,6 +477,8 @@ async def update_count_sheet(
     s = res.scalar_one_or_none()
     if not s:
         raise HTTPException(status_code=404, detail="盘点行不存在")
+    # P0 IDOR 修复 (2026-06-19): 按 sheet_id 直查时无 firm 校验, 跨所可写实盘数
+    await get_project_or_404(db, s.project_id, current_user=current_user)
     if counted_qty is not None:
         s.counted_qty = counted_qty
         # DateTime 列是 naive — 去掉 tz 以兼容 SQLite/PG
@@ -491,7 +507,7 @@ async def generate_count_plan(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = req.period_end or _default_period_end(proj)
     industry = (req.industry or proj.industry or "").strip()
 
@@ -539,6 +555,8 @@ async def revise_count_plan(
     plan = res.scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail="盘点计划不存在")
+    # P0 IDOR 修复 (2026-06-19): 按 plan_id 直查时无 firm 校验, 跨所可改他人盘点计划
+    await get_project_or_404(db, plan.project_id, current_user=current_user)
 
     # 解开 DB 字段 → CountPlanDraft
     from app.services.inventory.count_plan import CountPlanDraft
@@ -591,7 +609,7 @@ async def get_count_plan(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = period_end or _default_period_end(proj)
     res = await db.execute(
         select(InventoryCountPlan).where(
@@ -621,7 +639,7 @@ async def upload_count_photo(
     current_user: User = Depends(get_current_user),
 ):
     """上传盘点照片，OCR 后 AI 解析实盘数量并回填到盘点用表。"""
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
 
     settings.ensure_dirs()
     target_dir = settings.UPLOAD_DIR / f"inventory_photos/project_{project_id}"
@@ -632,9 +650,15 @@ async def upload_count_photo(
         file,
         allowed_exts={".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".pdf"},
     )
+    # P1 (round 32): magic bytes 校验 — 防 'evil.pdf.exe' / 双扩展名绕过
+    if not check_magic_bytes(content, suffix):
+        raise HTTPException(
+            status_code=400,
+            detail=f"文件内容与扩展名 {suffix} 不符 (疑似伪造)",
+        )
     target = unique_save_path(target_dir, safe_name)
-    with open(target, "wb") as f:
-        f.write(content)
+    # P1 性能 (2026-06-19): 写文件用 asyncio.to_thread 释放事件循环
+    await asyncio.to_thread(_write_bytes, target, content)
 
     media_type = "application/pdf" if suffix == ".pdf" else f"image/{suffix.lstrip('.') or 'jpeg'}"
 
@@ -642,14 +666,22 @@ async def upload_count_photo(
 
     # OCR — 失败时**不允许**静默吞掉，必须 422 让用户重传清晰图
     try:
-        engine, ocr_text = processor.ocr(str(target), safe_name)
+        # P1 (round 32) 性能: OCR (paddleocr / easyocr / pdfplumber) 全部是 CPU 密集,
+        # 在 async 端点内同步调用会阻塞事件循环. 包 to_thread 释放 worker.
+        engine, ocr_text = await asyncio.to_thread(
+            processor.ocr, str(target), safe_name
+        )
     except Exception as exc:  # OCRError or unexpected
         logger.warning("OCR 失败 (photo) project=%s file=%s: %s", project_id, safe_name, exc)
         # 删除已写入的文件，避免 orphan
         try:
             target.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as unlink_exc:
+            # unlink 失败也不阻塞 OCR 错误向上抛 — 但留痕便于排查
+            logger.warning(
+                "清理 OCR 失败照片 orphan 失败 (photo) project=%s file=%s: %s",
+                project_id, safe_name, unlink_exc,
+            )
         raise HTTPException(
             status_code=422,
             detail=f"OCR 失败，无法识别该盘点照片：{exc}。请重新拍摄更清晰、对焦正确的照片，或先安装 OCR 引擎 (paddleocr 推荐)。",
@@ -732,7 +764,7 @@ async def count_completion(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = period_end or _default_period_end(proj)
     q = select(InventoryCountSheet).where(InventoryCountSheet.project_id == project_id)
     if plan_id is not None:
@@ -765,7 +797,7 @@ async def compute_impairments(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = req.period_end or _default_period_end(proj)
 
     movements = await _fetch_period_movements(db, project_id, pe)
@@ -822,6 +854,7 @@ async def compute_impairments(
         industry=industry,
         sell_cost_rate=sc_rate,
         completion_cost_rate=req.completion_cost_rate,
+        manual_completion_cost=req.manual_completion_cost or None,
     )
     result = engine.compute(
         movements,
@@ -830,6 +863,10 @@ async def compute_impairments(
         prior_impairments=prior_map,
         prior_qty=prior_qty_map,
         manual_nrv=req.manual_nrv,
+        prior_period_end={
+            k: datetime.fromisoformat(v) for k, v in prior_period.items()
+        } if prior_period else None,
+        manual_completion_cost=req.manual_completion_cost or None,
     )
 
     if req.persist:
@@ -861,7 +898,7 @@ async def list_impairments(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     q = select(InventoryImpairment).where(InventoryImpairment.project_id == project_id)
     if period_end:
         q = q.where(InventoryImpairment.period_end == period_end.isoformat())
@@ -912,7 +949,7 @@ async def upload_prior_impairments(
 
     每个 material_code → 已计提金额。
     """
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     pe_str = period_end.isoformat()
     # 清空相同期间
     await db.execute(
@@ -960,7 +997,7 @@ async def upload_code_mappings(
     翻译为本年的新编码后再去匹配本年期末数据。这样物料编码变更后，
     上年期末跌价不会"凭空消失"。
     """
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     if req.replace:
         await db.execute(
             delete(InventoryCodeMapping).where(InventoryCodeMapping.project_id == project_id)
@@ -996,7 +1033,7 @@ async def list_code_mappings(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     res = await db.execute(
         select(InventoryCodeMapping)
         .where(InventoryCodeMapping.project_id == project_id)
@@ -1011,7 +1048,7 @@ async def clear_code_mappings(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    await get_project_or_404(db, project_id)
+    await get_project_or_404(db, project_id, current_user=current_user)
     res = await db.execute(
         delete(InventoryCodeMapping).where(InventoryCodeMapping.project_id == project_id)
     )
@@ -1031,7 +1068,7 @@ async def export_inventory(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    proj = await get_project_or_404(db, project_id)
+    proj = await get_project_or_404(db, project_id, current_user=current_user)
     pe = period_end or _default_period_end(proj)
 
     movements = (

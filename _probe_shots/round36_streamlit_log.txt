@@ -1,0 +1,42 @@
+[sentiment wait i=10] mainText: keyboard_double_arrow_left
+功能菜单
+⚠️
+
+当前 AUTH_ENABLED=false (开发模式无认证)
+
+✅
+
+后端服务已连接
+
+选择功能
+
+🏠 首页概览
+
+📁 项目管理
+
+📤 数据导入
+
+📊 底稿生成
+
+📑 长期资产发生额审定
+
+⚖️ 试算平衡
+
+🔍 监管案例库
+
+🤖 AI风险分析
+
+📋异常检测
+
+📄 综合报告
+
+📦 销售清单整理
+
+📄 收入
+
+========== Streamlit smoke results ==========
+[ok            ] home_load              sidebar 舆情跟踪 hits=1 collapseBtn=0 sidebarText=[功能菜单 | ⚠️ |  | 当前 AUTH_ENABLED=false (开发模式无认证) |  | ✅ |  | 后端服务已连接 |  | 选择功能 |  | 🏠 首页概览 |  | 📁 项目管理 |  | 📤 数据导入 |  | 📊 底稿生成 |  | 📑 长期资产发生额审定 |  | ⚖️ 试算平衡 |  | 🔍 监管案例库 |  | 🤖 AI风险分析 |  | 📋异常检测 |  | 📄 综合报告 |  | 📦 销售清单整理 |  | 📄 收入合同分析 |  | 🏷️ 收发存盘点&减值 |  | 📬 函证管理 |  | ⚖️ 法律法规库 |  | 📚 自助知识库 |  | 📑 综合底稿自动生成 |  | 👥 项目组管理 |  | 📡 舆情跟踪 |  | 🎨 报告模板 |  | 🔔 通知中心 |  | 🤝 关联方专项 |  | 🔄 审计循环 (Pack C) |  | 🎯 IPO 专属 (Pack D) |  | 🔐 系统管理] 
+[ok            ] sentiment_c4_fix       sentiment radio count=1 clicked-label c1=1 c2=1 c3=1 NameError=0 stException=0 mainText=[keyboard_double_arrow_left | 功能菜单 | ⚠️ |  | 当前 AUTH_ENABLED=false (开发模式无认证) |  | ✅ |  | 后端服务已连接 |  | 选择功能 |  | 🏠 首页概览 |  | 📁 项目管理 |  | 📤 数据导入 |  | 📊 底稿生成 |  | 📑 长期资产发生额审定 |  | ⚖️ 试算平衡 |  | 🔍 监管案例库 |  | 🤖 AI风险分析 |  | 📋异常检测 |  | 📄 综合报告 |  | 📦 销售清单整理 |  | 📄 收入合同分析 |  | 🏷️ 收发存盘点&减值 |  | 📬 函] c4={"found":false,"lastColText":"","colCount":0} 
+
+shots → D:/ipo_audit_link/_probe_shots
+json  → D:/ipo_audit_link/_probe_shots/round36_streamlit.json

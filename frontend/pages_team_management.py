@@ -9,18 +9,15 @@ from typing import Any, Optional
 import pandas as pd
 import streamlit as st
 
-from frontend.app import API_BASE_URL, api_request, get_projects
+from frontend._components import apply_feishu_theme, page_header
+from frontend._http import api_request
+from frontend._components.project_picker import pick_project_dict
+from frontend._components.safe_render import safe_inline_text
 
 
-# 复用其它页面的项目选择器
 def _projects_selectbox(label: str = "选择项目") -> Optional[dict]:
-    projects = get_projects() or []
-    if not projects:
-        st.warning("⚠️ 请先在『项目管理』中创建一个项目。")
-        return None
-    options = {f"#{p['id']} {p['name']} ({p.get('company_name', '')})": p for p in projects}
-    sel = st.selectbox(label, list(options.keys()))
-    return options.get(sel) if sel else None
+    """包装 pick_project_dict, 保留历史 API 兼容 (各 tab 仍调 _projects_selectbox)."""
+    return pick_project_dict(label=label, fmt="team_mgmt")
 
 
 # ============================================================
@@ -76,7 +73,7 @@ def _tab_members() -> None:
     with col_r:
         st.markdown("##### ➕ 新增人员")
         with st.form("add_member", clear_on_submit=True):
-            full_name = st.text_input("姓名 *")
+            full_name = st.text_input("姓名 *", key="add_member_name")
             col1, col2 = st.columns(2)
             with col1:
                 level = st.selectbox(
@@ -92,29 +89,54 @@ def _tab_members() -> None:
                 )
             with col2:
                 status = st.selectbox("状态", ["active", "inactive"], index=0)
-            email = st.text_input("邮箱")
-            phone = st.text_input("电话")
-            specialties = st.text_input('专长 (JSON 数组, 例 ["收入循环","存货盘点"])')
-            joined_at = st.date_input("入职日期", value=None)
-            notes = st.text_area("备注")
+            email = st.text_input("邮箱", key="add_member_email")
+            phone = st.text_input("电话", key="add_member_phone")
+            specialties = st.text_input('专长 (JSON 数组, 例 ["收入循环","存货盘点"])', key="add_member_spec")
+            joined_at = st.date_input("入职日期", value=None, key="add_member_joined")
+            notes = st.text_area("备注", key="add_member_notes")
             submitted = st.form_submit_button("添加")
             if submitted:
                 if not full_name.strip():
                     st.error("请填写姓名")
                 else:
+                    # P1 (round 35): 邮箱 / 电话基本格式校验, 后端若要求更严 (RFC 5322)
+                    # 在此基础上二次校验. 空值允许.
+                    if email.strip() and "@" not in email.strip():
+                        st.error("邮箱格式错误, 应包含 '@'")
+                        return
+                    if phone.strip() and not any(ch.isdigit() for ch in phone.strip()):
+                        st.error("电话应至少包含 1 位数字")
+                        return
+                    # P1 (round 35): specialties 是 JSON 数组, 用户输入非 JSON 后端 422.
+                    # 这里加客户端预解析, 失败给提示不阻塞.
+                    specs_val: Any = None
+                    spec_raw = specialties.strip()
+                    if spec_raw:
+                        try:
+                            parsed = json.loads(spec_raw)
+                            if not isinstance(parsed, list):
+                                st.error("专长必须是 JSON 数组 (例 [\"收入循环\",\"存货盘点\"])")
+                                return
+                            specs_val = parsed
+                        except json.JSONDecodeError as exc:
+                            st.error(f"专长 JSON 解析失败: {exc}. 应为数组, 例 [\"收入循环\",\"存货盘点\"]")
+                            return
                     payload = {
                         "full_name": full_name.strip(),
                         "level": level,
                         "status": status,
                         "email": email.strip() or None,
                         "phone": phone.strip() or None,
-                        "specialties": specialties.strip() or None,
+                        "specialties": specs_val,
                         "joined_at": joined_at.isoformat() if joined_at else None,
                         "notes": notes.strip() or None,
                     }
                     res = api_request("POST", "/api/team-management/members", json=payload)
                     if res:
                         st.success(f"已添加人员 #{res.get('id')} {res.get('full_name')}")
+                    else:
+                        # P1 (round 35): 错误处理补全 — 后端 422 / 401 / 403 详情暴露
+                        st.error("新增人员失败, 请检查字段或权限")
 
 
 # ============================================================
@@ -395,7 +417,7 @@ def _tab_meetings() -> None:
     with col_l:
         st.markdown("##### ➕ 排期会议")
         with st.form("create_meeting", clear_on_submit=True):
-            title = st.text_input("会议标题 *")
+            title = st.text_input("会议标题 *", key="mt_title")
             mtype = st.selectbox(
                 "类型",
                 list(_MEETING_TYPE_LABELS.keys()),
@@ -404,7 +426,7 @@ def _tab_meetings() -> None:
             d = st.date_input("日期", value=date.today())
             t = st.time_input("时间", value=None)
             duration = st.number_input("时长(分钟)", 15, 480, 60, step=15)
-            location = st.text_input("地点")
+            location = st.text_input("地点", key="mt_location")
             agenda = st.text_area("议程")
             if st.form_submit_button("创建"):
                 if title.strip():
@@ -649,7 +671,7 @@ def _tab_recommendations() -> None:
             if not r.get("is_confirmed"):
                 with st.form(f"confirm_{r['id']}", clear_on_submit=True):
                     notes = st.text_area("负责人备注")
-                    cb = st.text_input("确认人 *")
+                    cb = st.text_input("确认人 *", key=f"confirm_cb_{r['id']}")
                     if st.form_submit_button("确认采纳") and cb.strip():
                         res = api_request(
                             "POST",
@@ -661,7 +683,7 @@ def _tab_recommendations() -> None:
             else:
                 st.caption(f"由 {r.get('confirmed_by')} 于 {r.get('confirmed_at')} 确认")
                 if r.get("manager_notes"):
-                    st.markdown(f"**负责人备注**: {r['manager_notes']}")
+                    st.markdown(f"**负责人备注**: {safe_inline_text(r.get('manager_notes', ''), max_len=500)}")
 
 
 # ============================================================
@@ -670,7 +692,11 @@ def _tab_recommendations() -> None:
 
 
 def show_team_management() -> None:
-    st.markdown("## 👥 项目组管理")
+    apply_feishu_theme()
+    page_header('👥', '项目组管理', '5 级人员库 + AI 工作计划 + 会议评分 + 日报 + 卡点 + 进度看板 + AI 建议')
+
+    # [飞书化]     st.markdown("## 👥 项目组管理")  # 已被 page_header() 替代
+
     st.caption("人员 → 计划 → 日报/会议 → 进度看板 → AI 管理建议")
     tabs = st.tabs(
         [
@@ -697,3 +723,15 @@ def show_team_management() -> None:
         _tab_dashboard()
     with tabs[6]:
         _tab_recommendations()
+
+
+@st.cache_data
+def _fetch_team_members(project_id: int):
+    """round 32 P2 #8: 缓存的轻量拉取函数 (UI 性能)."""
+    return api_request("GET", f"/api/projects/{project_id}/placeholder") or {}
+
+
+@st.cache_data
+def _fetch_team_progress(project_id: int):
+    """round 32 P2 #8: 缓存的轻量拉取函数 (UI 性能)."""
+    return api_request("GET", f"/api/projects/{project_id}/placeholder") or {}

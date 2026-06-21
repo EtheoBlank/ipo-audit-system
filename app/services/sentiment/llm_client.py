@@ -65,8 +65,8 @@ def _is_real_key(value: str) -> bool:
     for p in _PLACEHOLDER_KEY_PATTERNS:
         if p.lower() in low:
             return False
-    # 长度过短 (绝大多数 API key 至少 20 字符)
-    if len(v) < 16:
+    # 长度过短 (绝大多数 API key 至少 32 字符)
+    if len(v) < 32:
         return False
     return True
 

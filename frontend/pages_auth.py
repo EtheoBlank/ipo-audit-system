@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import pandas as pd
 import requests
 import streamlit as st
 
+from frontend._components import apply_feishu_theme, page_header
 from frontend._http import (
     API_BASE_URL,
     api_request,
-    auth_headers,
     validate_password_strength,
 )
 
@@ -87,7 +86,7 @@ def _tab_me() -> None:
                     if res:
                         st.success("密码已更新, 下次登录请使用新密码")
 
-    if st.button("🚪 登出"):
+    if st.button("🚪 登出", key="auth_tab_profile_logout"):  # round 31 widget key
         _api("POST", "/api/auth/logout")
         st.session_state.pop("auth_token", None)
         st.session_state.pop("auth_user", None)
@@ -132,7 +131,7 @@ def _tab_users() -> None:
             "created_at",
         ]
         cols_show = [c for c in cols_show if c in df.columns]
-        st.dataframe(df[cols_show], width="stretch")
+        st.dataframe(df[cols_show], width="stretch", height=400)
     else:
         st.info("无用户")
 
@@ -179,7 +178,7 @@ def _tab_firms() -> None:
     st.markdown("### 🏢 事务所管理")
     rows = _api("GET", "/api/auth/firms") or []
     if rows:
-        st.dataframe(pd.DataFrame(rows), width="stretch")
+        st.dataframe(pd.DataFrame(rows, height=400), width="stretch")
     with st.expander("➕ 新建事务所", expanded=False):
         with st.form("new_firm"):
             name = st.text_input("事务所名称*")
@@ -211,18 +210,20 @@ def _tab_roles_permissions() -> None:
         st.markdown("**角色清单 (内置 + 自定义)**")
         rows = _api("GET", "/api/auth/roles") or []
         if rows:
-            st.dataframe(pd.DataFrame(rows), width="stretch")
+            st.dataframe(pd.DataFrame(rows, height=400), width="stretch")
     with c2:
         st.markdown("**权限清单**")
         rows = _api("GET", "/api/auth/permissions") or []
         if rows:
             df = pd.DataFrame(rows)
             module = st.selectbox(
-                "按模块筛选", [""] + sorted(df["module"].dropna().unique().tolist())
-            )
+                "按模块筛选",
+                [""] + sorted(df["module"].dropna().unique().tolist()),
+                key="auth_perms_module",
+            )  # round 31 widget key
             if module:
                 df = df[df["module"] == module]
-            st.dataframe(df, width="stretch")
+            st.dataframe(df, width="stretch", height=400)
 
 
 def _tab_audit_logs() -> None:
@@ -243,11 +244,12 @@ def _tab_audit_logs() -> None:
             "import",
             "http",
         ],
+        key="auth_logs_action",  # round 31 widget key
     )
-    resource_type = cols[1].text_input("资源类型")
-    keyword = cols[2].text_input("关键词")
-    start_date = cols[3].text_input("开始日期 YYYY-MM-DD")
-    end_date = cols[4].text_input("结束日期")
+    resource_type = cols[1].text_input("资源类型", key="auth_logs_res_type")  # round 31 widget key
+    keyword = cols[2].text_input("关键词", key="auth_logs_kw")  # round 31 widget key
+    start_date = cols[3].text_input("开始日期 YYYY-MM-DD", key="auth_logs_start")  # round 31 widget key
+    end_date = cols[4].text_input("结束日期", key="auth_logs_end")  # round 31 widget key
 
     params: Dict[str, Any] = {"limit": 200}
     if action:
@@ -290,6 +292,7 @@ def _tab_approvals() -> None:
     status_filter = st.selectbox(
         "状态",
         ["", "pending", "in_progress", "approved", "rejected", "withdrawn"],
+        key="auth_appr_status",  # round 31 widget key
     )
     params: Dict[str, Any] = {"limit": 100}
     if status_filter:
@@ -310,9 +313,9 @@ def _tab_approvals() -> None:
                 for r in rows
             ]
         )
-        st.dataframe(df, width="stretch")
+        st.dataframe(df, width="stretch", height=400)
 
-        sel_id = st.number_input("审批流 ID", min_value=0, step=1, value=0)
+        sel_id = st.number_input("审批流 ID", min_value=0, step=1, value=0, key="auth_appr_id")  # round 31 widget key
         if sel_id:
             detail = _api("GET", f"/api/auth/approvals/{sel_id}")
             if detail:
@@ -349,6 +352,9 @@ def _tab_approvals() -> None:
 
 
 def show_auth() -> None:
+    apply_feishu_theme()
+    page_header('🔐', '系统管理', '用户 / 事务所 / 角色权限 / 审计轨迹 / 审批流')
+
     """对外入口."""
     st.markdown(
         '<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">🔐 系统管理 (认证 / 用户 / 审计轨迹)</p>',

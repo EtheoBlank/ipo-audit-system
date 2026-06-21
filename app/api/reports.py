@@ -202,7 +202,13 @@ async def get_anomalies(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    """获取异常检测结果."""
+    """获取异常检测结果.
+
+    P0 修复 (2026-06-18 Bug 扫描): 之前没有 ensure_project_in_firm, 任何登录用户
+    传 project_id 都可读其他事务所的完整科目余额 + 风险检测结果. 现在加多租户校验.
+    """
+    # P0 多租户: 先校验 project 属于 current_user.firm
+    await ensure_project_in_firm(db, project_id, current_user)
     result = await db.execute(select(AccountBalance).where(AccountBalance.project_id == project_id))
     balances = result.scalars().all()
 

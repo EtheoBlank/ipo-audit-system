@@ -149,8 +149,96 @@ def project_default_firm_id(user: Optional[User]) -> Optional[int]:
     return getattr(user, "firm_id", None)
 
 
+async def ensure_team_member_in_firm(
+    db: AsyncSession,
+    member_id: int,
+    user: Optional[User],
+):
+    """加载 TeamMember, 同时校验 user 有权访问.
+
+    TeamMember 模型本身不带 firm_id (全局人员库), 但每个成员通过 ProjectAssignment
+    关联到 Project (Project 带 firm_id). 隔离规则:
+      - admin / AUTH_ENABLED=false / user.firm_id is None: 直接放过
+      - 否则: 成员必须有至少一个 ProjectAssignment, 且该 assignment 的 project.firm_id
+              与 user.firm_id 一致. 否则 403.
+
+    Note: 成员没有 assignment 时, 默认 403 (避免越权看到"游离"成员).
+    如有合法场景需要全局可见, 走 admin.
+    """
+    # 局部 import 防循环依赖 (auth/tenant → db_models → auth)
+    from app.models.db_models import ProjectAssignment, TeamMember
+
+    if _is_admin(user):
+        m = (await db.execute(select(TeamMember).where(TeamMember.id == member_id))).scalar_one_or_none()
+        if m is None:
+            raise HTTPException(status_code=404, detail="人员不存在")
+        return m
+    user_firm = _user_firm_id(user)
+    if user_firm is None:
+        # 软隔离: AUTH_ENABLED=false / 匿名 — 直接放过
+        m = (await db.execute(select(TeamMember).where(TeamMember.id == member_id))).scalar_one_or_none()
+        if m is None:
+            raise HTTPException(status_code=404, detail="人员不存在")
+        return m
+
+    # 硬隔离: 检查成员是否有任何 assignment 属于 user_firm 的项目
+    m = (await db.execute(select(TeamMember).where(TeamMember.id == member_id))).scalar_one_or_none()
+    if m is None:
+        raise HTTPException(status_code=404, detail="人员不存在")
+
+    has_access = (
+        await db.execute(
+            select(ProjectAssignment.id)
+            .join(Project, Project.id == ProjectAssignment.project_id)
+            .where(
+                ProjectAssignment.member_id == member_id,
+                Project.firm_id == user_firm,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none() is not None
+    if not has_access:
+        logger.warning(
+            "跨事务所访问被拒 (team_member): user=%s firm=%s member=%s",
+            getattr(user, "username", None),
+            user_firm,
+            member_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问其他事务所的人员数据",
+        )
+    return m
+
+
+async def ensure_team_member_visible_query(user: Optional[User]):
+    """构造 TeamMember SELECT 查询, 自动按 firm 隔离.
+
+    规则:
+      - admin / AUTH_ENABLED=false / user.firm_id is None: 不加过滤
+      - 否则: WHERE id IN (SELECT member_id FROM project_assignments
+                            JOIN projects ON ... WHERE projects.firm_id = user_firm)
+
+    Returns: 新的 Select 语句, 调用方继续 .where() / .order_by() 等.
+    """
+    from app.models.db_models import ProjectAssignment, TeamMember
+
+    if _is_admin(user) or _user_firm_id(user) is None:
+        return select(TeamMember)
+    user_firm = _user_firm_id(user)
+    visible_member_ids = (
+        select(ProjectAssignment.member_id)
+        .join(Project, Project.id == ProjectAssignment.project_id)
+        .where(Project.firm_id == user_firm)
+        .distinct()
+    )
+    return select(TeamMember).where(TeamMember.id.in_(visible_member_ids))
+
+
 __all__ = [
     "scope_projects_to_firm",
     "ensure_project_in_firm",
     "project_default_firm_id",
+    "ensure_team_member_in_firm",
+    "ensure_team_member_visible_query",
 ]

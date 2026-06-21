@@ -6,6 +6,7 @@ progress_tracker 串起来，暴露给 API 层使用。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -365,8 +366,13 @@ class TeamManagementService:
             if b.raised_at:
                 try:
                     age_hours = (now - b.raised_at).total_seconds() / 3600.0
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    # 卡点时间差计算失败 (tz-naive vs tz-aware) fallback 0
+                    # round 36 P1: debug 留不下 traceback, 改 exception
+                    logger.exception(
+                        "team_management: blocker age 计算失败 fallback=0: blocker_id=%s exc=%s",
+                        getattr(b, "id", None), exc,
+                    )
             recent_blockers_data.append(
                 {
                     "title": b.title,
@@ -418,9 +424,17 @@ class TeamManagementService:
         self,
         db: AsyncSession,
         rec_id: int,
-        confirmed_by: str,
+        confirmed_by_user,
         manager_notes: Optional[str] = None,
     ) -> ManagementRecommendation:
+        """P1 修复 (2026-06-19): 旧 confirmed_by: str 自由文本, 任何人可伪造.
+
+        现传 User 对象, 服务端取 full_name 写入 + user_id 入 confirmed_by_user_id 留审计追溯.
+
+        P0 修复 (2026-06-19, round25 #14): 持久化真实用户身份 + 内容 hash,
+        形成"何时 / 何人 / 内容摘要"完整审计追溯, 后续监管调查可验证
+        manager_notes 是否被篡改.
+        """
         rec = (
             await db.execute(
                 select(ManagementRecommendation).where(ManagementRecommendation.id == rec_id)
@@ -429,10 +443,17 @@ class TeamManagementService:
         if not rec:
             raise ValueError(f"管理建议不存在: {rec_id}")
         rec.is_confirmed = True
-        rec.confirmed_by = confirmed_by
+        rec.confirmed_by = confirmed_by_user.full_name or confirmed_by_user.username
+        # P1 (2026-06-19): ORM 加 confirmed_by_user_id 列, 强审计追溯
+        if hasattr(rec, "confirmed_by_user_id"):
+            rec.confirmed_by_user_id = confirmed_by_user.id
         rec.confirmed_at = datetime.now(timezone.utc)
         if manager_notes is not None:
             rec.manager_notes = manager_notes
+            # P0 (2026-06-19, round25 #14): 内容 hash, sha256 hex 前 8 位
+            # 不存完整 hash (16 hex 已足够避免碰撞, 且不暴露明文熵).
+            if hasattr(rec, "notes_hash"):
+                rec.notes_hash = hashlib.sha256(manager_notes.encode("utf-8")).hexdigest()[:16]
         await db.commit()
         await db.refresh(rec)
         return rec

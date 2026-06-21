@@ -11,8 +11,10 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -20,10 +22,9 @@ from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadF
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api._helpers import get_project_or_404
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.contracts import (
+from app.schemas.contracts import (
     ContractAnalysisRequest,
     ContractAnalysisResponse,
     ContractDocumentResponse,
@@ -31,8 +32,14 @@ from app.models.contracts import (
 from app.models.db_models import ContractDocument
 from app.models.db.auth import User
 from app.services.auth import get_current_user, get_current_user_optional
+from app.services.auth.tenant import ensure_project_in_firm
 from app.services.contract_analysis import ContractAnalyzer, ContractOCR, OCRError
 from app.services.sales_ledger import DeepSeekClient
+from app.utils.upload_safety import (
+    check_magic_bytes,
+    read_upload_capped,
+    sanitize_filename,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +47,15 @@ router = APIRouter(prefix="/api/contracts", tags=["收入合同"])
 
 
 # ---------- helpers ------------------------------------------------------
+
+
+def _safe_unlink(path: Path) -> None:
+    """安全删除临时文件, 供 asyncio.to_thread 调用. 失败静默 (missing_ok 语义)."""
+    try:
+        path.unlink(missing_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        # missing_ok 兜底, 但 silent 留痕 (orphan 文件不会被清理)
+        logger.debug("contracts: 临时文件 unlink 失败: path=%s exc=%s", path, exc)
 
 
 def _to_response(c: ContractDocument) -> ContractDocumentResponse:
@@ -86,28 +102,40 @@ async def upload_contract(
     current_user: User = Depends(get_current_user),
 ):
     """Upload a contract image / scanned PDF. OCR is run server-side."""
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
 
     save_dir: Path = settings.UPLOAD_DIR
     save_dir.mkdir(parents=True, exist_ok=True)
-    temp_path = save_dir / f"contract_{file.filename}"
-    content = await file.read()
-    temp_path.write_bytes(content)
+
+    # P0 安全 (round 32): 路径穿越 + magic bytes + 大小限制
+    # 1) 流式读到 bytes (上限 settings.MAX_UPLOAD_BYTES, 默认 50MB), 不一次性读全
+    # 2) sanitize_filename 防 '../../../etc/passwd'
+    # 3) check_magic_bytes 防 'evil.pdf.exe' 双扩展名绕过
+    # 4) 最终路径必须落 save_dir 内 + UUID 前缀防并发同名覆盖
+    content, safe_name, suffix = await read_upload_capped(file)
+    if suffix and not check_magic_bytes(content, suffix):
+        raise HTTPException(
+            status_code=400,
+            detail=f"文件内容与扩展名 {suffix} 不符 (疑似伪造)",
+        )
+    temp_path = save_dir / f"contract_{uuid.uuid4().hex}_{safe_name}"
+    # P0 性能 (2026-06-19): 50MB+ 合同同步 write_bytes 阻塞 event loop, 改 to_thread
+    await asyncio.to_thread(temp_path.write_bytes, content)
 
     try:
-        engine, ocr_text = ContractOCR.run(temp_path, file.filename or "")
+        # OCR 是 CPU 密集型, 包到 to_thread 释放事件循环
+        engine, ocr_text = await asyncio.to_thread(
+            ContractOCR.run, temp_path, safe_name or ""
+        )
     except OCRError as exc:
-        temp_path.unlink(missing_ok=True)
+        await asyncio.to_thread(_safe_unlink, temp_path)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
-        try:
-            temp_path.unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
-            pass
+        await asyncio.to_thread(_safe_unlink, temp_path)
 
     doc = ContractDocument(
         project_id=project_id,
-        filename=file.filename or "contract",
+        filename=safe_name or "contract",
         media_type=file.content_type or "application/octet-stream",
         ocr_engine=engine,
         ocr_text=ocr_text,
@@ -135,7 +163,7 @@ async def upload_contract_text(
     current_user: User = Depends(get_current_user),
 ):
     """Save user-pasted contract text directly (no OCR)."""
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="合同文本不能为空")
 
@@ -165,7 +193,7 @@ async def list_contracts(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = (
         (
             await db.execute(
@@ -191,6 +219,8 @@ async def get_contract(
     ).scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="合同不存在")
+    # IDOR fix (P0): 校验合同所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, c.project_id, current_user)
     return _to_response(c)
 
 
@@ -205,6 +235,8 @@ async def delete_contract(
     ).scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="合同不存在")
+    # IDOR fix (P0): 校验合同所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, c.project_id, current_user)
     await db.delete(c)
     await db.commit()
     return {"message": "已删除"}
@@ -229,6 +261,8 @@ async def analyze_contract(
     ).scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="合同不存在")
+    # IDOR fix (P0): 校验合同所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, c.project_id, current_user)
     if not c.ocr_text:
         raise HTTPException(status_code=400, detail="该合同没有可用的文本，请重新上传")
 

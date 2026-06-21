@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # App settings
     APP_NAME: str = "IPO审计系统"
-    APP_VERSION: str = "0.1.0"
+    APP_VERSION: str = "0.2.0"
     DEBUG: bool = True
 
     # Server settings
@@ -29,9 +29,6 @@ class Settings(BaseSettings):
     # Database settings
     DATABASE_URL: str = "sqlite+aiosqlite:///./ipo_audit.db"
 
-    # Redis settings
-    REDIS_URL: str = "redis://localhost:6379/0"
-
     # File settings
     UPLOAD_DIR: Path = Path("./uploads")
     OUTPUT_DIR: Path = Path("./outputs")
@@ -40,6 +37,8 @@ class Settings(BaseSettings):
     # Excel settings
     MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024  # 50MB
     ALLOWED_EXTENSIONS: set = {".xlsx", ".xls", ".csv"}
+    # P0 安全 (2026-06-19): .xlsx 解压炸弹防护 — 单文件读入最大行数
+    MAX_EXCEL_ROWS: int = 50000
 
     # AI settings (MiniMax API)
     MINIMAX_API_KEY: str = ""
@@ -51,15 +50,13 @@ class Settings(BaseSettings):
     DEEPSEEK_API_BASE: str = "https://api.deepseek.com/v1"
     DEEPSEEK_MODEL: str = "deepseek-chat"
 
-    # AI settings (Volcano Engine / 火山引擎) — used when MiniMax is stuck
-    VOLCANO_ENGINE_API_KEY: str = ""
-    VOLCANO_ENGINE_API_BASE: str = "https://ark.cn-beijing.volces.com/api/v3/"
-    VOLCANO_ENGINE_MODEL: str = "glm-5.1"
-
     # Regulatory case scraping — consistent UPPER_SNAKE naming
     CSRC_URL: str = "http://www.csrc.gov.cn"
     SSE_URL: str = "http://www.sse.com.cn"
     SZSE_URL: str = "http://www.szse.cn"
+    # 巨潮资讯 (cninfo) — 统一聚合 CSRC/SSE/SZSE 监管公告, 公开接口
+    CNINFO_URL: str = "http://www.cninfo.com.cn"
+    CNINFO_QUERY_PATH: str = "/new/hisAnnouncement/query"
 
     # 法律法规来源 URL — 自动抓取官方政策文件用
     # 这些站点结构经常变，URL 模板放在配置里方便后续微调
@@ -115,7 +112,9 @@ class Settings(BaseSettings):
     # 总开关: false 时跳过认证 (兼容现网无认证旧调用), true 时所有写端点必须 Bearer 令牌
     AUTH_ENABLED: bool = False
     # JWT 配置 — 生产部署必须把 JWT_SECRET 改成 >=32 字节随机串
-    JWT_SECRET: str = "ipo-audit-dev-only-change-in-prod-please-use-secrets-token-urlsafe-32"
+    # P0 (round 32, 2026-06-20): 默认值改为空串, 强制生产环境显式注入;
+    # lifespan 启动时检测到 AUTH_ENABLED=true 且 JWT_SECRET 为空 → 抛错拒启.
+    JWT_SECRET: str = ""
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_EXPIRE_MINUTES: int = 60
     JWT_REFRESH_EXPIRE_DAYS: int = 7

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.db.auth import AuditLog, AUDIT_ACTION_CREATE
+from app.utils.like_helpers import escape_like as _escape_like
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +25,41 @@ def _truncate(value: Optional[str], max_chars: int) -> Optional[str]:
     return value[:max_chars] + f"... [truncated, original {len(value)} chars]"
 
 
+# P0 安全: 这些字段必须自动脱敏 (即使调用方忘了 exclude= 也要保底)
+# 包含密码 / token / 凭据 / 私钥 等, 万一业务路由忘了脱敏就被记进 audit_logs
+# 后续 admin 查 audit_log 会拿到这些明文 (P0: 审计系统的审计日志反而泄露密码)
+_SENSITIVE_KEYS = frozenset({
+    "password", "passwd", "pwd",
+    "token", "access_token", "refresh_token", "authorization",
+    "secret", "api_key", "apikey",
+    "private_key", "client_secret",
+    "session", "session_id", "cookie",
+    "credit_card", "cvv", "ssn", "id_number",
+    "new_password", "old_password", "current_password",
+})
+
+
+def _redact_sensitive(value: Any) -> Any:
+    """递归遍历 dict/list, 把敏感 key 的 value 替换为 '***REDACTED***'."""
+    if isinstance(value, dict):
+        return {
+            k: ("***REDACTED***" if k.lower() in _SENSITIVE_KEYS else _redact_sensitive(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive(v) for v in value]
+    return value
+
+
 def _serialize(payload: Any) -> Optional[str]:
     if payload is None:
         return None
     if isinstance(payload, str):
         return payload
     try:
-        return json.dumps(payload, ensure_ascii=False, default=str)
+        # 先脱敏再序列化 (即使调用方忘了 exclude=, 我们的兜底也保护)
+        redacted = _redact_sensitive(payload)
+        return json.dumps(redacted, ensure_ascii=False, default=str)
     except Exception:  # noqa: BLE001
         return str(payload)
 
@@ -95,11 +124,19 @@ async def record_audit_log(
                 await db.commit()
                 await db.refresh(log)
             except Exception as commit_exc:  # noqa: BLE001
+                # 审计系统自身写日志失败时, 不能再 silently drop, 否则:
+                # 1) 业务路由以为日志已写 (commit=False 路径下还可能污染业务事务)
+                # 2) 故障排查时无任何痕迹
                 logger.exception("audit_log commit 失败 (已吞, 业务不受影响): %s", commit_exc)
                 try:
                     await db.rollback()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as rollback_exc:  # noqa: BLE001
+                    # 兜底: rollback 失败也至少留一行 warning, 否则 audit_log 失明
+                    logger.warning(
+                        "audit_log rollback 也失败 (commit_exc=%s, rollback_exc=%s)",
+                        commit_exc,
+                        rollback_exc,
+                    )
                 return None
         else:
             await db.flush()
@@ -107,16 +144,6 @@ async def record_audit_log(
     except Exception as exc:  # noqa: BLE001
         logger.exception("写审计轨迹失败 (action=%s, resource=%s): %s", action, resource_type, exc)
         return None
-
-
-def _escape_like(text: str) -> str:
-    """转义 SQL LIKE 通配符 — 防止用户输入 % / _ 触发全表扫描.
-
-    P0 修复 (Agent #5 W16). 配合 ilike(..., escape='\\\\') 使用.
-    """
-    if not text:
-        return ""
-    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 async def query_audit_logs(
@@ -127,6 +154,7 @@ async def query_audit_logs(
     resource_type: Optional[str] = None,
     resource_id: Optional[str] = None,
     project_id: Optional[int] = None,
+    firm_id: Optional[int] = None,
     method: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -134,8 +162,14 @@ async def query_audit_logs(
     skip: int = 0,
     limit: int = 100,
 ) -> Dict[str, Any]:
-    """分页查询审计轨迹."""
+    """分页查询审计轨迹.
+
+    :param firm_id: P0 多租户 (2026-06-19): 限定事务所, 非 admin 调用应传当前 user.firm_id
+        防 qc_partner 通过 user_id=? 读别所审计轨迹 (含凭证 payload)
+    """
     conds = []
+    if firm_id is not None:
+        conds.append(AuditLog.firm_id == firm_id)
     if user_id is not None:
         conds.append(AuditLog.user_id == user_id)
     if action:
@@ -152,14 +186,15 @@ async def query_audit_logs(
         try:
             sd = datetime.fromisoformat(start_date)
             conds.append(AuditLog.created_at >= sd)
-        except Exception:
-            pass
+        except (TypeError, ValueError) as date_exc:
+            # 2026-06-19 round23: 用户传错日期格式不应 500, 也不该 silently 吞 — debug 留痕
+            logger.warning("query_audit_logs: start_date=%r 解析失败, 忽略. err=%s", start_date, date_exc)
     if end_date:
         try:
             ed = datetime.fromisoformat(end_date)
             conds.append(AuditLog.created_at <= ed)
-        except Exception:
-            pass
+        except (TypeError, ValueError) as date_exc:
+            logger.warning("query_audit_logs: end_date=%r 解析失败, 忽略. err=%s", end_date, date_exc)
     if keyword:
         # 限长 + 转义防 LIKE 通配符 DoS
         kw = keyword[:200]

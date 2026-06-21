@@ -31,6 +31,7 @@ from app.models.db.auth import (
     AuditLog,
     ROLE_ADMIN,
     ROLE_ASSISTANT,
+    ROLE_SIGNING_PARTNER,
     User,
 )
 from app.models.db_models import Project
@@ -139,7 +140,8 @@ class TestLegacyApisImport:
         """projects 的写端点应至少 import 了鉴权依赖."""
         from app.api import projects
 
-        src = open(projects.__file__, encoding="utf-8").read()
+        with open(projects.__file__, encoding="utf-8") as fh:
+            src = fh.read()
         assert "get_current_user" in src or "get_current_user_optional" in src
         assert "ensure_project_in_firm" in src
         assert "scope_projects_to_firm" in src
@@ -288,6 +290,77 @@ class TestTenantIsolation:
         u = _user(1, role=ROLE_ASSISTANT, firm_id=7)
         assert project_default_firm_id(u) == 7
 
+    @pytest.mark.asyncio
+    async def test_team_member_idor_blocked(self, session: AsyncSession, monkeypatch):
+        """TeamMember 不带 firm_id, 通过 ProjectAssignment→Project.firm_id 间接隔离.
+
+        场景: firm=1 有 member M1 (在 firm=1 的项目里), firm=2 用户不能访问 M1.
+        """
+        from fastapi import HTTPException
+
+        from app.core.config import settings
+        from app.models.db_models import ProjectAssignment, TeamMember
+        from app.services.auth.tenant import ensure_team_member_in_firm
+
+        monkeypatch.setattr(settings, "AUTH_ENABLED", True)
+
+        session.add_all([
+            _project(1, firm_id=1),
+            _project(2, firm_id=2),
+            TeamMember(id=10, full_name="甲", status="active"),
+            TeamMember(id=20, full_name="乙", status="active"),
+        ])
+        # M10 分配到 firm=1 的项目 P1; M20 分配到 firm=2 的项目 P2
+        session.add_all([
+            ProjectAssignment(id=100, project_id=1, member_id=10, role_in_project="auditor"),
+            ProjectAssignment(id=200, project_id=2, member_id=20, role_in_project="auditor"),
+        ])
+        await session.commit()
+
+        user_firm1 = _user(1, role=ROLE_ASSISTANT, firm_id=1)
+        user_firm2 = _user(2, role=ROLE_ASSISTANT, firm_id=2)
+
+        # 同所成员可访问
+        m = await ensure_team_member_in_firm(session, 10, user_firm1)
+        assert m.id == 10
+        # 跨所成员被 403
+        with pytest.raises(HTTPException) as exc_info:
+            await ensure_team_member_in_firm(session, 20, user_firm1)
+        assert exc_info.value.status_code == 403
+        # 跨所反向同样
+        with pytest.raises(HTTPException) as exc_info:
+            await ensure_team_member_in_firm(session, 10, user_firm2)
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_team_member_visible_query_scoped(self, session: AsyncSession, monkeypatch):
+        """ensure_team_member_visible_query 自动按 firm 过滤成员列表."""
+        from app.core.config import settings
+        from app.models.db_models import ProjectAssignment, TeamMember
+        from app.services.auth.tenant import ensure_team_member_visible_query
+
+        monkeypatch.setattr(settings, "AUTH_ENABLED", True)
+
+        session.add_all([
+            _project(1, firm_id=1),
+            _project(2, firm_id=2),
+            TeamMember(id=10, full_name="甲", status="active"),
+            TeamMember(id=20, full_name="乙", status="active"),
+            TeamMember(id=30, full_name="丙", status="active"),
+        ])
+        session.add_all([
+            ProjectAssignment(id=100, project_id=1, member_id=10, role_in_project="auditor"),
+            ProjectAssignment(id=200, project_id=2, member_id=20, role_in_project="auditor"),
+            # M30 没有任何 assignment — 应被隐藏 (避免"游离"成员泄露)
+        ])
+        await session.commit()
+
+        user_firm1 = _user(1, role=ROLE_ASSISTANT, firm_id=1)
+        q = await ensure_team_member_visible_query(user_firm1)
+        rows = (await session.execute(q)).scalars().all()
+        ids = sorted(r.id for r in rows)
+        assert ids == [10]  # 只看到 firm=1 的成员
+
 
 # ============================================================
 #  3) ApprovalEngine 乐观锁
@@ -396,6 +469,44 @@ class TestApprovalOptimisticLock:
         )
         assert wf2.status == APPROVAL_STATUS_WITHDRAWN
         assert wf2.version == 1
+
+    @pytest.mark.asyncio
+    async def test_self_approval_blocked_by_default(self, session: AsyncSession):
+        """发起人不能审批自己发起的请求 (除非显式 allow_self_approval=True)."""
+        from app.services.auth.approval import ApprovalEngine, InvalidApprovalAction
+
+        u = _user(1)
+        wf = await ApprovalEngine.create_workflow(
+            session, initiator=u, resource_type="x", resource_id=1, title="t"
+        )
+        with pytest.raises(InvalidApprovalAction):
+            await ApprovalEngine.decide(
+                session,
+                workflow_id=wf.id,
+                actor=u,
+                action="approve",
+                expected_version=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_self_approval_allowed_with_flag(self, session: AsyncSession):
+        """显式 allow_self_approval=True 时可放行 (极少场景: 5 级签字一个人顶 5 关)."""
+        from app.services.auth.approval import ApprovalEngine
+
+        u = _user(1, role=ROLE_SIGNING_PARTNER)
+        wf = await ApprovalEngine.create_workflow(
+            session, initiator=u, resource_type="x", resource_id=1, title="t"
+        )
+        # 显式放行后不抛异常
+        wf2 = await ApprovalEngine.decide(
+            session,
+            workflow_id=wf.id,
+            actor=u,
+            action="approve",
+            expected_version=0,
+            allow_self_approval=True,
+        )
+        assert wf2.status in {"in_progress", "approved"}
 
 
 # ============================================================
@@ -506,15 +617,6 @@ class TestAuditLogArchive:
         # 原表只剩 1 条 (新那条)
         cnt_main = (await session.execute(select(func.count(AuditLog.id)))).scalar_one()
         assert cnt_main == 1
-
-        # 归档表有 3 条
-        cnt_arch = (
-            await session.execute(
-                select(func.count()).select_from(
-                    __import__("sqlalchemy").text("audit_logs_archive")
-                )
-            )
-        ).scalar_one() if False else None  # 走另一条路径
 
         # 直接 raw SQL 验证
         from sqlalchemy import text

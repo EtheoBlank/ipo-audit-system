@@ -46,11 +46,58 @@ class ERPParserResult:
 
 
 class BaseERPAdapter(ABC):
-    """ERP适配器基类."""
+    """ERP适配器基类.
+
+    提供 parse_account_balance / parse_chronological_account / parse_bank_statement
+    的默认实现 (map_columns → _normalize_direction → to_numeric + fillna(0)).
+    子类只需覆盖 get_name / get_column_mappings / (可选) _normalize_direction.
+    """
+
+    # 3 类数据分别强转的数值字段 (子类可扩展)
+    NUMERIC_FIELDS_BY_TYPE: Dict[str, List[str]] = {
+        "account_balance": [
+            "beginning_balance",
+            "debit_amount",
+            "credit_amount",
+            "ending_balance",
+        ],
+        "chronological_account": ["debit_amount", "credit_amount"],
+        "bank_statement": ["debit_amount", "credit_amount", "balance"],
+    }
+    # 默认方向列名 (与 map_columns 输出对齐); 子类通常无需改
+    DIRECTION_FIELD: str = "balance_direction"
 
     def __init__(self):
         self.column_mappings: List[ERPColumnMapping] = []
         self.required_fields: List[str] = []
+
+    @staticmethod
+    def infer_balance_direction(account_code: Optional[str], ending_balance: float = 0.0) -> str:
+        """P0 修复: 按 account_code 前缀推导借贷方向.
+
+        旧版用 ending_balance >= 0 判断 → 负债 ending_balance 经常 > 0 被错判为"借".
+        中国会计准则科目编码:
+          - 1xxx 资产 (默认借方余额)
+          - 2xxx 负债 (默认贷方余额)
+          - 3xxx 所有者权益 (默认贷方余额)
+          - 4xxx 权益类调整 (实收资本/资本公积, 贷方余额)
+          - 5xxx 成本费用 (借方)
+          - 6xxx 收入 (贷方)
+          - 7xxx 损益类 (借方)
+        ending_balance 反号时 (备抵/反向), 方向反转.
+        """
+        if not account_code:
+            return "借"
+        code = str(account_code).strip()
+        if code.startswith("1"):  # 资产
+            return "借" if ending_balance >= 0 else "贷"
+        if code.startswith(("2", "3", "4")):  # 负债 / 权益
+            return "贷" if ending_balance >= 0 else "借"
+        if code.startswith("5"):  # 成本费用
+            return "借" if ending_balance >= 0 else "贷"
+        if code.startswith(("6", "7")):  # 收入 / 损益
+            return "贷" if ending_balance >= 0 else "借"
+        return "借"
 
     @abstractmethod
     def get_name(self) -> str:
@@ -62,20 +109,40 @@ class BaseERPAdapter(ABC):
         """返回字段映射配置."""
         pass
 
-    @abstractmethod
+    # ---- 三个 parse_* 的默认实现 ----
+
     def parse_account_balance(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        """解析科目余额表数据."""
-        pass
+        """解析科目余额表数据 (默认实现: map → direction → numeric)."""
+        df = self._coerce_numeric(
+            self._normalize_direction(self.map_columns(raw_data)),
+            "account_balance",
+        )
+        return df
 
-    @abstractmethod
     def parse_chronological_account(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        """解析序时账数据."""
-        pass
+        """解析序时账数据 (默认实现: map → numeric, 不处理方向)."""
+        return self._coerce_numeric(self.map_columns(raw_data), "chronological_account")
 
-    @abstractmethod
     def parse_bank_statement(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        """解析银行对账单数据."""
-        pass
+        """解析银行对账单数据 (默认实现: map → numeric)."""
+        return self._coerce_numeric(self.map_columns(raw_data), "bank_statement")
+
+    # ---- 子类覆盖点 ----
+
+    def _normalize_direction(self, df: pd.DataFrame) -> pd.DataFrame:
+        """子类按 ERP 习惯转换 balance_direction.
+
+        默认: 若列存在则保持原样 (Manual 已是"借/贷"中文).
+        子类: 按 ERP 原生编码 (1/2、S/H、j/d 等) 转"借/贷".
+        """
+        return df
+
+    def _coerce_numeric(self, df: pd.DataFrame, data_type: str) -> pd.DataFrame:
+        """按 data_type 强转数值为 float + fillna(0)."""
+        for field in self.NUMERIC_FIELDS_BY_TYPE.get(data_type, []):
+            if field in df.columns:
+                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
+        return df
 
     def validate_data(self, df: pd.DataFrame, data_type: str) -> ERPParserResult:
         """验证数据完整性."""
@@ -147,41 +214,12 @@ class KingdeeK3Adapter(BaseERPAdapter):
             ERPColumnMapping("FBankAccount", "bank_account", "string", "银行账号"),
         ]
 
-    def parse_account_balance(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        # 金蝶科目属性转换:1=借, 2=贷
-        if "balance_direction" in df.columns:
-            df["balance_direction"] = df["balance_direction"].apply(
+    def _normalize_direction(self, df: pd.DataFrame) -> pd.DataFrame:
+        # 金蝶科目属性: 1=借, 2=贷 (字符串"借"也按借处理)
+        if self.DIRECTION_FIELD in df.columns:
+            df[self.DIRECTION_FIELD] = df[self.DIRECTION_FIELD].apply(
                 lambda x: "借" if str(x) in ["1", "借"] else "贷"
             )
-
-        # 确保数值字段
-        numeric_fields = ["beginning_balance", "debit_amount", "credit_amount", "ending_balance"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
-        return df
-
-    def parse_chronological_account(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        numeric_fields = ["debit_amount", "credit_amount"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
-        return df
-
-    def parse_bank_statement(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        numeric_fields = ["debit_amount", "credit_amount", "balance"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
         return df
 
 
@@ -214,7 +252,7 @@ class KingdeeCloudAdapter(BaseERPAdapter):
             ERPColumnMapping("FEndBalanceCr", "ending_balance_cr", "number", "期末贷方"),
             # 序时账
             ERPColumnMapping("FDate", "voucher_date", "date", "日期"),
-            ERPColumnMapping("F billno", "voucher_no", "string", "单据编号"),
+            ERPColumnMapping("FBillNo", "voucher_no", "string", "单据编号"),
             ERPColumnMapping("FExp", "summary", "string", "摘要"),
             ERPColumnMapping("FAccountID", "account_code", "string", "科目"),
             ERPColumnMapping("FAmountDr", "debit_amount", "number", "借方金额"),
@@ -227,43 +265,18 @@ class KingdeeCloudAdapter(BaseERPAdapter):
             ERPColumnMapping("FBalance", "balance", "number", "余额"),
         ]
 
-    def parse_account_balance(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        # 处理借贷方向 - 云星空用FAccountProperty或根据余额方向判断
-        if "ending_balance" in df.columns and "beginning_balance_cr" in df.columns:
-            # 根据余额方向判断借贷
-            df["balance_direction"] = df.apply(
-                lambda row: "借" if row.get("ending_balance", 0) >= 0 else "贷", axis=1
+    def _normalize_direction(self, df: pd.DataFrame) -> pd.DataFrame:
+        # P0 修复: 借贷方向按 account_code 前缀推导 (BaseERPAdapter.infer_balance_direction)
+        # 旧版 ending_balance >= 0 → 负债 ending>0 误判为"借"
+        if "account_code" in df.columns:
+            df[self.DIRECTION_FIELD] = df.apply(
+                lambda row: self.infer_balance_direction(
+                    row.get("account_code"), row.get("ending_balance", 0) or 0
+                ),
+                axis=1,
             )
         else:
-            df["balance_direction"] = "借"
-
-        numeric_fields = ["beginning_balance", "debit_amount", "credit_amount", "ending_balance"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
-        return df
-
-    def parse_chronological_account(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        numeric_fields = ["debit_amount", "credit_amount"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
-        return df
-
-    def parse_bank_statement(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        numeric_fields = ["debit_amount", "credit_amount", "balance"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
+            df[self.DIRECTION_FIELD] = "借"
         return df
 
 
@@ -310,40 +323,12 @@ class YongyouNCAdapter(BaseERPAdapter):
             ERPColumnMapping("bankaccount", "bank_account", "string", "银行账号"),
         ]
 
-    def parse_account_balance(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        # 用友NC方向: 1=借, -1=贷
-        if "balance_direction" in df.columns:
-            df["balance_direction"] = df["balance_direction"].apply(
+    def _normalize_direction(self, df: pd.DataFrame) -> pd.DataFrame:
+        # 用友NC方向: 1=借, -1/其他=贷
+        if self.DIRECTION_FIELD in df.columns:
+            df[self.DIRECTION_FIELD] = df[self.DIRECTION_FIELD].apply(
                 lambda x: "借" if str(x) == "1" else "贷"
             )
-
-        numeric_fields = ["beginning_balance", "debit_amount", "credit_amount", "ending_balance"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
-        return df
-
-    def parse_chronological_account(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        numeric_fields = ["debit_amount", "credit_amount"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
-        return df
-
-    def parse_bank_statement(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        numeric_fields = ["debit_amount", "credit_amount", "balance"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
         return df
 
 
@@ -390,40 +375,12 @@ class YongyouU8Adapter(BaseERPAdapter):
             ERPColumnMapping("balance", "balance", "number", "余额"),
         ]
 
-    def parse_account_balance(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        # 用友U8方向: j=借, d=贷
-        if "balance_direction" in df.columns:
-            df["balance_direction"] = df["balance_direction"].apply(
+    def _normalize_direction(self, df: pd.DataFrame) -> pd.DataFrame:
+        # 用友U8方向: j=借, d=贷 (兼容 1/借)
+        if self.DIRECTION_FIELD in df.columns:
+            df[self.DIRECTION_FIELD] = df[self.DIRECTION_FIELD].apply(
                 lambda x: "借" if str(x).lower() in ["j", "借", "1"] else "贷"
             )
-
-        numeric_fields = ["beginning_balance", "debit_amount", "credit_amount", "ending_balance"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
-        return df
-
-    def parse_chronological_account(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        numeric_fields = ["debit_amount", "credit_amount"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
-        return df
-
-    def parse_bank_statement(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        numeric_fields = ["debit_amount", "credit_amount", "balance"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
         return df
 
 
@@ -480,46 +437,12 @@ class SAPAdapter(BaseERPAdapter):
             ERPColumnMapping("BANKA", "bank_name", "string", "银行名称"),
         ]
 
-    def parse_account_balance(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
+    def _normalize_direction(self, df: pd.DataFrame) -> pd.DataFrame:
         # SAP方向: S=借方(德语Soll), H=贷方(德语Haben)
-        if "balance_direction" in df.columns:
-            df["balance_direction"] = df["balance_direction"].apply(
+        if self.DIRECTION_FIELD in df.columns:
+            df[self.DIRECTION_FIELD] = df[self.DIRECTION_FIELD].apply(
                 lambda x: "借" if str(x).upper() == "S" else "贷"
             )
-
-        numeric_fields = ["beginning_balance", "debit_amount", "credit_amount", "ending_balance"]
-        for field in numeric_fields:
-            if field in df.columns:
-                # SAP金额可能为负数，需要处理
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
-        return df
-
-    def parse_chronological_account(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        # 处理SAP凭证类型
-        if "debit_amount" in df.columns and "credit_amount" in df.columns:
-            # SAP ACDOCA中，金额在同一字段，根据DRCRK判断借贷
-            pass
-
-        numeric_fields = ["debit_amount", "credit_amount"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
-        return df
-
-    def parse_bank_statement(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        numeric_fields = ["debit_amount", "credit_amount", "balance"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
         return df
 
 
@@ -561,36 +484,6 @@ class ManualAdapter(BaseERPAdapter):
             ERPColumnMapping("余额", "balance", "number", "余额"),
             ERPColumnMapping("银行账号", "bank_account", "string", "银行账号"),
         ]
-
-    def parse_account_balance(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        numeric_fields = ["beginning_balance", "debit_amount", "credit_amount", "ending_balance"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
-        return df
-
-    def parse_chronological_account(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        numeric_fields = ["debit_amount", "credit_amount"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
-        return df
-
-    def parse_bank_statement(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        df = self.map_columns(raw_data)
-
-        numeric_fields = ["debit_amount", "credit_amount", "balance"]
-        for field in numeric_fields:
-            if field in df.columns:
-                df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0)
-
-        return df
 
 
 # ============ ERP适配器工厂 ============

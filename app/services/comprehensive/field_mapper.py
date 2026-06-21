@@ -237,6 +237,36 @@ def _resolve_project(path: DataPath, ctx: WorkpaperDataContext) -> Any:
     # 派生字段优先
     if leaf == "audit_period" and ctx.project.fiscal_year:
         fy = ctx.project.fiscal_year
+        # ALG-02 (round32, 2026-06-20): 优先使用 ORM 显式 fiscal_year_start/end 字段
+        # (覆盖非自然年项目, 如 FY2024 = 2023-07-01~2024-06-30);
+        # 字段缺失时才 fallback 到自然年 (01-01~12-31).
+        fy_start = getattr(ctx.project, "fiscal_year_start", None)
+        fy_end = getattr(ctx.project, "fiscal_year_end", None)
+        if fy_start and fy_end:
+            return f"{fy_start}~{fy_end}"
+        if fy_start and not fy_end:
+            # 仅给 start 时, end 按 start + 365 天推算
+            try:
+                end_dt = pd.to_datetime(fy_start) + pd.Timedelta(days=365)
+                return f"{fy_start}~{end_dt.strftime('%Y-%m-%d')}"
+            except Exception:
+                logger.warning(
+                    "audit_period: fiscal_year_start=%s 无法解析, fallback 自然年", fy_start,
+                )
+        elif fy_end and not fy_start:
+            try:
+                start_dt = pd.to_datetime(fy_end) - pd.Timedelta(days=365)
+                return f"{start_dt.strftime('%Y-%m-%d')}~{fy_end}"
+            except Exception:
+                logger.warning(
+                    "audit_period: fiscal_year_end=%s 无法解析, fallback 自然年", fy_end,
+                )
+        # 自然年兜底 (旧逻辑) + is_assumption 警告
+        logger.warning(
+            "audit_period: project.fiscal_year_start/end 未设置, 假设自然年 %d-01-01~%d-12-31 "
+            "(is_assumption=True). 非自然年项目请显式设置 fiscal_year_start/end.",
+            fy, fy,
+        )
         return f"{fy}-01-01~{fy}-12-31"
 
     # 优先用 ORM 字段名（小写），其次用一些常用别名
@@ -336,16 +366,23 @@ def _resolve_ledger(path: DataPath, ctx: WorkpaperDataContext, account_prefix: s
     if fn == "count":
         return int(len(sub))
     if fn == "turnover_days":
-        # 周转天数 = 365 × 平均应收余额 / 赊销收入净额
+        # 周转天数 = period_days × 平均应收余额 / 赊销收入净额
         # 优先使用 credit_sales（赊销收入），缺省时回退到 revenue（营业收入），
         # 两种口径都通过 ctx.extra 注入，使用方需在 hint 中说明
+        # ALG-03 (round32, 2026-06-20): 不再硬编码 365, 改用 ctx.extra.period_days
+        # (或顶层 ctx.period_days), 兼容季报/中期/非自然年; 缺省时 fallback 365.
         revenue = ctx.extra.get("credit_sales") or ctx.extra.get("revenue")
         if not revenue or revenue == 0:
             return None
         avg = (sub["ending_balance"].sum() + sub["beginning_balance"].sum()) / 2
         if avg == 0:
             return None
-        return round(365.0 * avg / float(revenue), 2)
+        period_days = ctx.extra.get("period_days") or getattr(ctx, "period_days", None) or 365
+        try:
+            period_days = float(period_days)
+        except (TypeError, ValueError):
+            period_days = 365.0
+        return round(period_days * avg / float(revenue), 2)
     return None
 
 

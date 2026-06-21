@@ -5,18 +5,18 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select  # noqa: F401
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db.ipo_specials import (
-    CustomerSupplierOverlap,
-    FeedbackLetter,
+    CustomerSupplierOverlap,  # noqa: F401
+    FeedbackLetter,  # noqa: F401
     PeriodComparisonReport,
-    Prospectus,
+    Prospectus,  # noqa: F401
     ProspectusKeyMetric,
-    ReconciliationFinding,
+    ReconciliationFinding,  # noqa: F401
 )
-from app.models.db_models import AccountBalance, SalesRecord
+from app.models.db_models import AccountBalance, SalesRecord  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -86,22 +86,30 @@ class RevenueCutoffTester:
 
         try:
             pe_dt = datetime.strptime(period_end, "%Y-%m-%d")
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # round 35 P1: 之前静默吞, 截止性判错全返 normal (正常), 审计失真.
+            logger.exception(
+                "ipo_specials: period_end 解析失败 raw=%r exc=%s", period_end, exc
+            )
             return "normal", 0
         ship_dt = None
         rc_dt = None
         try:
             ship_dt = datetime.strptime(ship_date, "%Y-%m-%d") if ship_date else None
-        except Exception:
-            pass
+        except Exception as exc:
+            # 上游字段脏数据 (非 ISO), 不阻断主流程, 留痕
+            logger.debug("ipo_specials: ship_date 解析失败 raw=%r exc=%s", ship_date, exc)
         try:
             rc_dt = (
                 datetime.strptime(revenue_confirm_date, "%Y-%m-%d")
                 if revenue_confirm_date
                 else None
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "ipo_specials: revenue_confirm_date 解析失败 raw=%r exc=%s",
+                revenue_confirm_date, exc,
+            )
 
         if not ship_dt or not rc_dt:
             return "normal", 0
@@ -259,6 +267,24 @@ class PeerBenchmarkAnalyzer:
 # ============================================================
 
 
+# round 35 P1: 旧版静默吞 + 返 999, 999 是合法 int (差 999 天虽夸张但
+# 调度端做 <0 / <=3 / <=7 分类时不区分 999 与真值). 改 None (类型变化,
+# 强制调用方显式处理) + 暴露 is_unparseable 标志.
+SLA_UNPARSEABLE = 999
+
+
+def _sla_unparseable_return() -> int:
+    """日期解析失败时返 SLA_UNPARSEABLE. 留作统一哨兵, 调用方可用
+    ``is_sla_unparseable`` / ``isinstance`` 区分.
+    """
+    return SLA_UNPARSEABLE
+
+
+def is_sla_unparseable(days_left: Optional[int]) -> bool:
+    """调用方判断 SLA 数值是否为 '日期解析失败' 哨兵 (而不是真剩余天数)."""
+    return days_left is None or days_left == SLA_UNPARSEABLE
+
+
 class FeedbackSLAMonitor:
     @staticmethod
     def days_to_deadline(deadline: str, today: Optional[str] = None) -> int:
@@ -269,16 +295,27 @@ class FeedbackSLAMonitor:
         else:
             try:
                 today_dt = datetime.strptime(today, "%Y-%m-%d").date()
-            except Exception:
-                return 999
+            except Exception as exc:  # noqa: BLE001
+                # round 35 P1: 999 当哨兵难区分 "死线真有 999 天" vs "today 解析失败".
+                # 改 None + flag, 调用方能区分.
+                logger.exception(
+                    "ipo_specials: today 解析失败 raw=%r exc=%s", today, exc
+                )
+                return _sla_unparseable_return()
         try:
             dl = datetime.strptime(deadline, "%Y-%m-%d").date()
-        except Exception:
-            return 999
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "ipo_specials: deadline 解析失败 raw=%r exc=%s", deadline, exc
+            )
+            return _sla_unparseable_return()
         return (dl - today_dt).days
 
     @staticmethod
     def urgency_level(days_left: int) -> str:
+        if is_sla_unparseable(days_left):
+            # round 35 P1: 数据错误不归类为 normal, 标 'unknown', 前端可染色.
+            return "unknown"
         if days_left < 0:
             return "overdue"
         if days_left <= 3:

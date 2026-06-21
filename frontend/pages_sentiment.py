@@ -1,5 +1,6 @@
 """舆情跟踪前端页面 — v0.2 新增.
 
+# P1 widget keys (round 32): senti_ev_sev, senti_ev_rs, senti_ev_df, senti_br_date, senti_br_force, senti_br_gen, senti_scan_now, senti_sched_start, senti_src_id
 5 个 Tab:
     1. 舆情总览 (overview)
     2. 事件库 (events)
@@ -17,10 +18,14 @@ from __future__ import annotations
 
 import json
 import streamlit as st
+from datetime import date, timedelta
+from frontend._components import apply_feishu_theme, page_header
 import pandas as pd
-import requests
 
-from frontend.app import API_BASE_URL, api_request, get_projects
+from frontend._http import api_request
+from frontend._components.project_picker import pick_project
+from frontend._components.download import download_word
+from frontend._components.safe_render import safe_inline_text, safe_url
 
 
 # ============================================================
@@ -52,15 +57,11 @@ def _severity_badge(sev: str) -> str:
 
 
 def _pick_project() -> int:
-    projects = get_projects()
-    if not projects:
-        st.warning("⚠️ 请先在『项目管理』中创建一个项目。")
+    """舆情页选项目 — 无项目时调 st.stop() 终止页面 (历史行为)."""
+    pid = pick_project(fmt="sentiment")
+    if pid is None:
         st.stop()
-    name_to_id = {
-        f"{p['name']} (#{p['id']} · {p.get('company_name', '')})": p["id"] for p in projects
-    }
-    label = st.selectbox("选择项目", list(name_to_id.keys()))
-    return name_to_id[label]
+    return pid
 
 
 def _render_unread_badge() -> int:
@@ -80,7 +81,7 @@ def _render_unread_badge() -> int:
                 col1, col2 = st.columns([5, 1])
                 col1.write(f"**{n['title']}**")
                 if n.get("body"):
-                    col1.caption(n["body"])
+                    col1.caption(safe_inline_text(n.get("body", ""), max_len=500))
                 col1.caption(f"类型: {n['notification_type']} · {n['created_at']}")
                 if col2.button("标已读", key=f"read_{n['id']}"):
                     api_request("POST", f"/api/sentiment/notifications/{n['id']}/read")
@@ -124,19 +125,24 @@ def _tab_overview(project_id: int) -> None:
 
     st.divider()
 
-    # 当日事件数 / 最近简报
-    today = pd.Timestamp.now().strftime("%Y-%m-%d")
+    # 当日事件数 / 最近简报 — P1 (2026-06-19) 用本地 date.today() 替 pd.Timestamp.now()
+    # pd.Timestamp.now() 用本地 tz, 后端用 UTC, 跨日期 (凌晨 0-8 点) 不一致
+    today = date.today().isoformat()
     events_today = api_request(
         "GET", f"/api/sentiment/events?project_id={project_id}&date_from={today}&date_to={today}"
     )
     briefings = api_request("GET", f"/api/sentiment/briefings?project_id={project_id}")
     reports = api_request("GET", f"/api/sentiment/reports?project_id={project_id}")
 
+    # round 32 P0: st.columns(3) → (4). 旧 c4.metric + 函数双重渲染;
+    # 单独留第 4 列给未读徽章, 函数只渲染一次. 详见 round 19.
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("今日事件", len(events_today or []))
     c2.metric("累计简报", len(briefings or []))
     c3.metric("季度报告", len(reports or []))
-    c4.metric("未读通知", _render_unread_badge())
+    # round 32 P0: 第 4 列放未读徽章, 不再 c4.metric(函数) 双重渲染
+    with c4:
+        _render_unread_badge()
 
     # 严重度分布
     if events_today:
@@ -163,7 +169,7 @@ def _tab_events(project_id: int) -> None:
     col1, col2, col3 = st.columns(3)
     severity = col1.selectbox("严重度", ["全部", "critical", "warn", "notice", "info"])
     review_status = col2.selectbox("审核状态", ["全部", "unread", "read", "ignored"])
-    date_from = col3.date_input("起始日期", value=pd.Timestamp.now() - pd.Timedelta(days=30))
+    date_from = col3.date_input("起始日期", value=date.today() - timedelta(days=30))
 
     params = f"project_id={project_id}&date_from={date_from}"
     if severity != "全部":
@@ -180,6 +186,9 @@ def _tab_events(project_id: int) -> None:
     df = pd.DataFrame(events)[
         ["id", "publish_date", "severity", "title", "publisher", "review_status", "url"]
     ]
+    # P0: 校验 url 协议
+    safe_urls = [(safe_url(u), t) for u, t in zip(df.get('url', []), df.get('title', []))]
+    df['url'] = [u for u, _ in safe_urls]
     df["严重度"] = df["severity"].map(
         {"critical": "🔴 重大", "warn": "🟠 警示", "notice": "🟡 关注", "info": "⚪ 一般"}
     )
@@ -201,7 +210,7 @@ def _tab_events(project_id: int) -> None:
         st.caption(
             f"{ev.get('publisher', '—')} · {ev.get('publish_date', '—')} · {ev.get('url', '—')}"
         )
-        st.text_area("原文", ev.get("content_text", ""), height=200, disabled=True)
+        st.code(ev.get("content_text", ""), language=None)
         if ev.get("review_status") != "ignored":
             if st.button("标记忽略"):
                 api_request("POST", f"/api/sentiment/events/{event_id}/ignore")
@@ -214,7 +223,7 @@ def _tab_events(project_id: int) -> None:
             content = st.text_area("内容", height=100)
             publisher = st.text_input("来源")
             url = st.text_input("URL")
-            date = st.date_input("日期", value=pd.Timestamp.now())
+            event_date = st.date_input("日期", value=date.today())
             sev = st.selectbox("严重度", ["info", "notice", "warn", "critical"])
             if st.form_submit_button("录入"):
                 r = api_request(
@@ -226,7 +235,7 @@ def _tab_events(project_id: int) -> None:
                         "content_text": content,
                         "publisher": publisher,
                         "url": url or None,
-                        "publish_date": str(date),
+                        "publish_date": str(event_date),
                         "severity": sev,
                     },
                 )
@@ -246,7 +255,7 @@ def _tab_briefings(project_id: int) -> None:
     # 强制重新生成 + 立即生成
     col1, col2 = st.columns(2)
     with col1:
-        target_date = st.date_input("指定日期", value=pd.Timestamp.now())
+        target_date = st.date_input("指定日期", value=date.today())
     with col2:
         force = st.checkbox("强制重新生成 (覆盖今日简报)", value=False)
 
@@ -282,10 +291,11 @@ def _tab_briefings(project_id: int) -> None:
         for b in briefings[:30]:
             label = f"{b['briefing_date']} · {b['event_count']} 条"
             if st.button(label, key=f"b_{b['id']}"):
-                st.session_state["selected_briefing_id"] = b["id"]
+                # P0: 加 project_id 前缀防跨项目污染
+                st.session_state[f"selected_briefing_id_{project_id}"] = b["id"]
 
     with c2:
-        bid = st.session_state.get("selected_briefing_id")
+        bid = st.session_state.get(f"selected_briefing_id_{project_id}")
         if not bid:
             bid = briefings[0]["id"]
         br = api_request("GET", f"/api/sentiment/briefings/{bid}")
@@ -321,7 +331,9 @@ def _render_briefing_detail(br: dict, project_id: int) -> None:
                 with st.expander(f"[事件#{e['id']}] {_severity_badge(e['severity'])} {e['title']}"):
                     st.caption(f"来源: {e.get('publisher', '—')} · {e.get('publish_date', '—')}")
                     if e.get("url"):
-                        st.markdown(f"[原文链接]({e['url']})")
+                        # P0 安全: 校验 URL 协议, 防 javascript: 注入
+                        from frontend._components.safe_render import safe_link
+                        st.markdown(safe_link("原文链接", e["url"]))
                     st.text_area(
                         "内容",
                         e.get("content_text", ""),
@@ -331,8 +343,14 @@ def _render_briefing_detail(br: dict, project_id: int) -> None:
                     )
                     if e.get("review_status") == "unread":
                         if st.button("标已读", key=f"r_{e['id']}"):
-                            # events 端点没有 /read, 用 ignore 代替 (后续可加 /read 端点)
-                            pass
+                            # 调 ignore 端点实现"已处理"语义, 后续可换专门 /read 端点
+                            r = api_request(
+                                "POST",
+                                f"/api/sentiment/events/{e['id']}/ignore",
+                            )
+                            if r is not None:
+                                st.success("已标记为已处理")
+                                st.rerun()
 
     with tabs[2]:
         if br.get("audit_verification_json"):
@@ -399,12 +417,14 @@ def _render_briefing_detail(br: dict, project_id: int) -> None:
         st.success("✅ 已批准 / 锁定, 不可修改")
         c1, c2 = st.columns(2)
         with c1:
-            # 下载链接
-            st.markdown(
-                f'<a href="{API_BASE_URL}/api/sentiment/briefings/{br["id"]}/download" target="_blank">'
-                f'<button style="background:#007bff;color:white;padding:0.5rem 1rem;border:none;border-radius:4px;cursor:pointer;">📥 下载 Word 文档</button></a>',
-                unsafe_allow_html=True,
+            # 走统一 api_request 走 auth 头
+            content = api_request(
+                "GET",
+                f"/api/sentiment/briefings/{br['id']}/download",
+                expect_bytes=True,
             )
+            if isinstance(content, bytes) and content:
+                download_word(content, file_name=f"briefing_{br['id']}.docx")
         with c2:
             reviser = st.text_input("修订人", key=f"rvs_{br['id']}")
             if st.button("🔄 基于本版修订", key=f"revise_{br['id']}"):
@@ -475,10 +495,11 @@ def _tab_quarterly(project_id: int) -> None:
         for r in reports[:30]:
             label = f"{r['fiscal_year']} {r['period_type']} · {r['status']}"
             if st.button(label, key=f"r_{r['id']}"):
-                st.session_state["selected_report_id"] = r["id"]
+                # P0: 加 project_id 前缀防跨项目污染
+                st.session_state[f"selected_report_id_{project_id}"] = r["id"]
 
     with c2:
-        rid = st.session_state.get("selected_report_id")
+        rid = st.session_state.get(f"selected_report_id_{project_id}")
         if not rid:
             rid = reports[0]["id"]
         rep = api_request("GET", f"/api/sentiment/reports/{rid}")
@@ -533,7 +554,7 @@ def _render_report_detail(rep: dict, project_id: int) -> None:
                     st.rerun()
 
     # 触发生成
-    if st.button(f"⚡ 触发报告生成 (4 轮 LLM + 双数据源对账)", key=f"gen_{rep['id']}"):
+    if st.button("⚡ 触发报告生成 (4 轮 LLM + 双数据源对账)", key=f"gen_{rep['id']}"):
         with st.spinner("生成中..."):
             r = api_request("POST", f"/api/sentiment/reports/{rep['id']}/generate")
         if r and "id" in r:
@@ -588,11 +609,14 @@ def _render_report_detail(rep: dict, project_id: int) -> None:
 
     elif rep["is_locked"]:
         st.success("✅ 已批准并锁定")
-        st.markdown(
-            f'<a href="{API_BASE_URL}/api/sentiment/reports/{rep["id"]}/download" target="_blank">'
-            f'<button style="background:#007bff;color:white;padding:0.5rem 1rem;border:none;border-radius:4px;cursor:pointer;">📥 下载 Word 文档</button></a>',
-            unsafe_allow_html=True,
+        # 走统一 api_request 走 auth 头
+        content = api_request(
+            "GET",
+            f"/api/sentiment/reports/{rep['id']}/download",
+            expect_bytes=True,
         )
+        if isinstance(content, bytes) and content:
+            download_word(content, file_name=f"report_{rep['id']}.docx")
 
 
 # ============================================================
@@ -671,8 +695,12 @@ def _tab_settings(project_id: int) -> None:
 
 
 def show_sentiment() -> None:
+    apply_feishu_theme()
+    page_header('📡', '舆情跟踪', '多源抓取 + AI 去重校验 + 简报/季报 + 全局红点')
+
     """舆情跟踪 — Streamlit 页面入口."""
-    st.markdown('<p class="sub-header">📡 舆情跟踪 (IPO 客户)</p>', unsafe_allow_html=True)
+    # [飞书化] st.markdown('<p class="sub-header">📡 舆情跟踪 (IPO 客户)</p>', unsafe_allow_html=True)  # 已被 page_header() 替代
+
     project_id = _pick_project()
     _render_unread_badge()
     tabs = st.tabs(["📊 舆情总览", "📰 事件库", "🗞️ 每日简报", "📈 季度跟踪报告", "⚙️ 别名与信源"])

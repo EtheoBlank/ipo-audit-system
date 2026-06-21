@@ -1,5 +1,6 @@
 """Streamlit 页面 — 法律法规库.
 
+# P1 widget keys (round 32): reg_scrape_selected, reg_scrape_max_pages, reg_scrape_async, reg_scrape_go, reg_search_q, reg_search_mode, reg_search_src, reg_search_limit, reg_search_go
 - 抓取触发 (按来源 / 全部)
 - 来源统计
 - 列表查询 + 全文搜索
@@ -8,11 +9,12 @@
 
 from __future__ import annotations
 
-import requests
 import pandas as pd
 import streamlit as st
 
-API_BASE_URL = "http://localhost:8000"
+# P0 安全修复: 使用共享 api_request (带 Authorization header + 401 处理)
+from frontend._components import apply_feishu_theme, page_header
+from frontend._http import api_request as _api
 
 SOURCE_CODES = ["CSRC", "MOF", "STA", "SAFE", "PBOC"]
 SOURCE_LABELS = {
@@ -26,18 +28,12 @@ SOURCE_LABELS = {
 }
 
 
-def _api(method: str, path: str, **kw):
-    try:
-        r = requests.request(method, f"{API_BASE_URL}{path}", timeout=60, **kw)
-        r.raise_for_status()
-        return r.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"调用 {path} 失败: {e}")
-        return None
-
-
 def show_regulations():
-    st.markdown('<p class="sub-header">⚖️ 法律法规库</p>', unsafe_allow_html=True)
+    apply_feishu_theme()
+    page_header('⚖️', '法律法规库', '证监会 / 财政部 / 税务总局 / 外管局 / 人民银行 政策与准则')
+
+    # [飞书化] st.markdown('<p class="sub-header">⚖️ 法律法规库</p>', unsafe_allow_html=True)  # 已被 page_header() 替代
+
     st.caption(
         "自动抓取证监会 / 财政部 / 国家税务总局 / 外管局 / 人民银行的政策文件、准则、规章、问答口径，"
         "支持来源/日期/关键词多维过滤、全文搜索、按项目收藏。"
@@ -99,7 +95,7 @@ def show_regulations():
     # —————————————————————————————
     with tab_search:
         st.markdown("#### 全文 / 关键词搜索")
-        q = st.text_input("关键词 (空格分隔多个词)", placeholder="例如：收入确认 时点 风险报酬")
+        q = st.text_input("关键词 (空格分隔多个词)", placeholder="例如：收入确认 时点 风险报酬", key="search_q")
         col1, col2, col3 = st.columns(3)
         with col1:
             mode = st.radio("匹配方式", ["and", "or"], horizontal=True)
@@ -184,12 +180,16 @@ def _render_regulation(item: dict, key_prefix: str = ""):
     with st.expander(f"📄 {title[:120]}"):
         st.caption(meta)
         if item.get("summary"):
-            st.markdown(f"**摘要**：{item['summary'][:300]}")
+            # P0 安全: 抓取内容转义后再渲染, 防 javascript: 链接注入
+            from frontend._components.safe_render import safe_inline_text, validate_date_input
+            st.markdown(f"**摘要**：{safe_inline_text(item.get('summary', ''), max_len=300)}")
         if item.get("full_text"):
             st.markdown("**正文摘录**")
             st.write(item["full_text"][:1500])
         if item.get("source_url"):
-            st.markdown(f"[在官方网站打开 ↗]({item['source_url']})")
+            # P0 安全: 校验 URL 协议, 防 javascript: 注入
+            from frontend._components.safe_render import safe_link
+            st.markdown(safe_link("在官方网站打开 ↗", item["source_url"]))
         with st.form(
             f"fav_form_{key_prefix or item.get('id')}_{item.get('id')}", clear_on_submit=True
         ):

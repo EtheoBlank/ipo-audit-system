@@ -58,7 +58,8 @@ class TfidfEmbedder:
 
     使用方法：
       embedder = TfidfEmbedder()
-      embedder.fit(corpus)
+      embedder.fit(corpus)        # 首次拟合
+      embedder.fit(more_corpus)   # 累加拟合: 词表/IDF 跨书共享
       vecs = embedder.transform(["xxx"])
     """
 
@@ -68,13 +69,19 @@ class TfidfEmbedder:
         self.vocab: dict[str, int] = {}
         self.idf: List[float] = []
         self.dim: int = 0
+        self._corpus: List[str] = []  # 累积语料, 保证跨书词表一致
 
     # — fit/transform —
 
     def fit(self, corpus: Sequence[str]) -> None:
+        """增量拟合: 将 corpus 追加到已积累语料后重新计算词表 + IDF。
+
+        多次调用 fit() (如逐书索引) 时, 词表跨书共享, 不会因重算而为 0。
+        """
+        self._corpus.extend(corpus)
         df: Counter[str] = Counter()
-        n_doc = len(corpus) or 1
-        for doc in corpus:
+        n_doc = len(self._corpus) or 1
+        for doc in self._corpus:
             terms = set(_tokenize(doc))
             for t in terms:
                 df[t] += 1
@@ -83,7 +90,18 @@ class TfidfEmbedder:
         self.vocab = {t: i for i, t in enumerate(top)}
         self.idf = [math.log((1 + n_doc) / (1 + df[t])) + 1.0 for t in top]
         self.dim = len(self.vocab)
-        logger.info("TF-IDF 拟合完成：词表 %d，文档 %d", self.dim, n_doc)
+        logger.info(
+            "TF-IDF 拟合完成: 词表 %d, 累计文档 %d (本次新增 %d)",
+            self.dim, n_doc, len(corpus),
+        )
+
+    def reset(self) -> None:
+        """清空词表和累计语料, 用于重新开始索引。"""
+        self.vocab = {}
+        self.idf = []
+        self.dim = 0
+        self._corpus = []
+        logger.info("TF-IDF 词表已重置")
 
     def transform(self, texts: Iterable[str]) -> List[List[float]]:
         if not self.vocab:
@@ -114,6 +132,7 @@ class TfidfEmbedder:
         emb.vocab = state.get("vocab", {})
         emb.idf = state.get("idf", [])
         emb.dim = len(emb.vocab)
+        # 从持久化状态恢复后 _corpus 为空, 新 fit() 会从当前语料重新累积
         return emb
 
 

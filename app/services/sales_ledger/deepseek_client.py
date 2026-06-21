@@ -115,4 +115,10 @@ class DeepSeekClient:
                 cleaned = cleaned.strip("`")
                 if "\n" in cleaned:
                     cleaned = cleaned.split("\n", 1)[1]
-            return json.loads(cleaned)
+            # P0-3: 第二次解析仍失败要结构化抛错, 不让 500 透传.
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError as exc:
+                raise DeepSeekError(
+                    f"DeepSeek 返回的 JSON 仍解析失败: {content[:200]}"
+                ) from exc

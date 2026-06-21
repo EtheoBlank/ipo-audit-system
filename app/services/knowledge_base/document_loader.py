@@ -98,7 +98,8 @@ def _load_pdf(path: Path) -> List[ParsedSegment]:
             try:
                 page_text = page.extract_text() or ""
             except Exception:  # noqa: BLE001
-                logger.debug("PDF page %d 抽取失败，跳过", idx)
+                # round 36 P1: debug 留不下 traceback, 改 exception (INFO 级以免漏)
+                logger.exception("PDF page %d 抽取失败，跳过", idx)
                 continue
             for paragraph in re.split(r"\n\s*\n", page_text):
                 p = paragraph.strip()

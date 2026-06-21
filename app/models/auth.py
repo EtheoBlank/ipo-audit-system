@@ -244,19 +244,22 @@ class ApprovalDecision(BaseModel):
     action: str = Field(..., pattern=r"^(approve|reject|delegate|comment)$")
     comment: Optional[str] = Field(None, max_length=2000)
     delegate_to_user_id: Optional[int] = None
-    expected_version: Optional[int] = Field(
-        None,
+    # P0 修复 (2026-06-18): 必填乐观锁, 不传时让 ApprovalEngine.decide 抛 InvalidApprovalAction
+    # 之前 Optional=None 时 commit-time rowcount=0 兜底, 并发审批 UX 差; 必填后强制
+    # 前端先 GET 拿 version 才能 decide, 真正 409 Conflict 在请求阶段就拦住
+    expected_version: int = Field(
+        ...,
         description="乐观锁版本快照 (来自上次 GET /approvals/{id} 返回的 version). "
-        "若实际 version 不一致, 返 409 Conflict; 不传则跳过版本校验.",
+        "若实际 version 不一致, 返 409 Conflict. **必填**, 不传则 400.",
     )
 
 
 class ApprovalWithdrawRequest(BaseModel):
-    """撤回审批 — 可选乐观锁."""
+    """撤回审批 — 同样必填乐观锁 (P0 修复)."""
 
-    expected_version: Optional[int] = Field(
-        None,
-        description="乐观锁版本快照. 详见 ApprovalDecision.expected_version.",
+    expected_version: int = Field(
+        ...,
+        description="乐观锁版本快照. 详见 ApprovalDecision.expected_version. **必填**.",
     )
 
 

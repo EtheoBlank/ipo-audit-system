@@ -5,13 +5,13 @@ import sys
 import json
 from datetime import datetime, timezone
 
-# Setup path
+# Setup path (conftest.py 已经把 ROOT 加进 sys.path; 这里只补 site-packages)
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, ".venv/Lib/site-packages"))
-for mod in list(sys.modules):
-    if mod.startswith("app"):
-        del sys.modules[mod]
+# 注意: 之前这里有 `for mod in list(sys.modules): if mod.startswith("app"): del sys.modules[mod]`
+# 那一段会把 SQLAlchemy mapper registry 搞坏, 导致 test_auth.py 等后续测试的
+# `from app.models.db.auth import User` 报 "expression 'Firm' failed to locate a name" — CI 全炸.
+# 已删除, 改成依靠 conftest.py / pytest-asyncio 的 fixture.
 
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 

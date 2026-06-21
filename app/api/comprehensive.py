@@ -18,13 +18,14 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.db.auth import User
 from app.services.auth import get_current_user, get_current_user_optional
+from app.services.auth.tenant import ensure_project_in_firm
 from app.services.comprehensive.fill_engine import ComprehensiveFillEngine
 from app.services.comprehensive.firm_template_service import (
     FirmTemplateService,
@@ -83,12 +84,10 @@ class TemplateOut(BaseModel):
     is_active: bool
     published_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class FillRequest(BaseModel):
-    firm_id: str = Field(..., description="事务所 ID")
     template_id: str = Field(..., description="模板 ID（可省略 version 取最新）")
     template_version: Optional[str] = None
     project_id: int = Field(..., description="关联项目 ID")
@@ -110,7 +109,6 @@ class HistoricalSearchResponse(BaseModel):
 
 @router.post("/templates", response_model=TemplateOut)
 async def upload_template(
-    firm_id: str = Form(...),
     template_id: str = Form(...),
     version: str = Form("1.0.0"),
     template_name: str = Form(...),
@@ -123,6 +121,7 @@ async def upload_template(
     current_user: User = Depends(get_current_user),
 ):
     """上传一份 .xlsx 模板，自动解析后入库。"""
+    firm_id = str(current_user.firm_id)
     _safe_id(firm_id, "firm_id")
     _safe_id(template_id, "template_id")
     _safe_id(version, "version")
@@ -146,11 +145,11 @@ async def upload_template(
 
 @router.get("/templates", response_model=list[TemplateOut])
 async def list_templates(
-    firm_id: str,
     session: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    """列出某事务所的所有激活模板。"""
+    """列出当前事务所的所有激活模板。"""
+    firm_id = str(current_user.firm_id) if current_user else ""
     _safe_id(firm_id, "firm_id")
     items = await FirmTemplateService(session).list_for_firm(firm_id)
     return [TemplateOut.model_validate(t) for t in items]
@@ -159,14 +158,18 @@ async def list_templates(
 @router.get("/templates/{template_id}/download")
 async def download_template(
     template_id: str,
-    firm_id: str,
     version: Optional[str] = None,
     session: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
     """下载模板 .xlsx 字节流。"""
     from fastapi.responses import Response
 
+    # 多租户硬隔离: 强制登录 + 必须有 firm_id, 杜绝 AUTH_ENABLED=false 时
+    # 匿名用户构造 firm_id="" 直接下载任意事务所模板的 IDOR
+    if not current_user.firm_id:
+        raise HTTPException(status_code=403, detail="用户未关联事务所, 无权下载模板")
+    firm_id = str(current_user.firm_id)
     firm_id = _safe_id(firm_id, "firm_id")
     template_id = _safe_id(template_id, "template_id")
     if version is not None:
@@ -197,24 +200,29 @@ async def fill_template(
     current_user: User = Depends(get_current_user),
 ):
     """触发一次完整填充流程。"""
-    _safe_id(req.firm_id, "firm_id")
+    firm_id = str(current_user.firm_id)
+    _safe_id(firm_id, "firm_id")
     _safe_id(req.template_id, "template_id")
-    schema = await FirmTemplateService(session).parse_to_schema(req.firm_id, req.template_id)
+    schema = await FirmTemplateService(session).parse_to_schema(firm_id, req.template_id)
     if schema is None:
         raise HTTPException(status_code=404, detail="模板未找到")
 
     # 接入项目数据：根据 project_id 加载 ORM 中的项目 / 科目余额表 / 函证
-    ctx = await _build_context_for_project(session, req.project_id)
+    ctx = await _build_context_for_project(session, req.project_id, current_user)
     if ctx is None:
         raise HTTPException(status_code=404, detail="项目不存在")
     engine = ComprehensiveFillEngine()
     return await engine.fill(schema, ctx)
 
 
-async def _build_context_for_project(session: AsyncSession, project_id: int) -> Optional[Any]:
+async def _build_context_for_project(
+    session: AsyncSession,
+    project_id: int,
+    current_user: Optional[User] = None,
+) -> Optional[Any]:
     """从项目 ID 构造 WorkpaperDataContext。
 
-    返回 None 表示项目不存在。
+    返回 None 表示项目不存在或跨事务所无权访问。
     """
     from sqlalchemy import select
     from app.models.db_models import (
@@ -225,11 +233,17 @@ async def _build_context_for_project(session: AsyncSession, project_id: int) -> 
     from app.services.comprehensive.field_mapper import WorkpaperDataContext
     from app.utils.db_helpers import account_balances_to_df
 
-    proj = (
-        (await session.execute(select(Project).where(Project.id == project_id))).scalars().first()
-    )
-    if proj is None:
-        return None
+    if current_user is not None:
+        try:
+            project = await ensure_project_in_firm(session, project_id, current_user)
+        except HTTPException:
+            return None
+    else:
+        project = await session.get(Project, project_id)
+        if project is None:
+            return None
+
+    proj = project  # ensure_project_in_firm 已返回 Project 实例
 
     balances = (
         (
@@ -276,7 +290,6 @@ async def apply_qa(
 
 @router.post("/historical")
 async def ingest_historical(
-    firm_id: str = Form(...),
     template_id: str = Form(...),
     industry: Optional[str] = Form(None),
     fiscal_year: Optional[int] = Form(None),
@@ -286,6 +299,7 @@ async def ingest_historical(
     current_user: User = Depends(get_current_user),
 ):
     """把一份历史综合底稿脱敏后入库。"""
+    firm_id = str(current_user.firm_id)
     _safe_id(firm_id, "firm_id")
     _safe_id(template_id, "template_id")
     data = await _read_capped_xlsx(file)
@@ -302,7 +316,6 @@ async def ingest_historical(
 
 @router.get("/historical/search", response_model=HistoricalSearchResponse)
 async def search_historical(
-    firm_id: str,
     template_id: str,
     q: str = Query(..., max_length=200, description="查询字符串"),
     top_k: int = Query(5, ge=1, le=50),
@@ -310,6 +323,7 @@ async def search_historical(
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """在历史底稿库中按关键词检索（供 WebSearchEngine 注入）。"""
+    firm_id = str(current_user.firm_id) if current_user else ""
     _safe_id(firm_id, "firm_id")
     _safe_id(template_id, "template_id")
     hits = await HistoricalLibraryService(session).search(

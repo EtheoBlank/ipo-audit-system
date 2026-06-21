@@ -50,6 +50,7 @@ from app.models.db.auth import (
     ROLE_QC_PARTNER,
     RolePermission,
     ROLE_ADMIN,
+    ROLE_PARTNER,
     User,
 )
 from app.services.auth import (
@@ -78,6 +79,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["认证与权限"])
 
 
+async def _audit(
+    db: AsyncSession,
+    user: Optional[User],
+    action: str,
+    **kwargs,
+):
+    """``record_audit_log`` 的薄封装 — 从 User 对象预填 4 个 user 字段.
+
+    复用 auth.py 13 处调用点的样板 (user_id/display/role/firm_id),
+    调用方只需写 action + 业务相关字段 (resource_type/summary/payload/...).
+    rotate 路径 user 可能为 None, 用 getattr 兜底 — 与原代码语义一致.
+    """
+    await record_audit_log(
+        db,
+        user_id=getattr(user, "id", None),
+        user_display=getattr(user, "full_name", None),
+        user_role=getattr(user, "role", None),
+        firm_id=getattr(user, "firm_id", None),
+        action=action,
+        **kwargs,
+    )
+
+
 # ============================================================
 #  Login / Token
 # ============================================================
@@ -98,12 +122,9 @@ async def login(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
     user: User = result["user"]
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=user.id,
-        user_display=user.full_name,
-        user_role=user.role,
-        firm_id=user.firm_id,
+        user,
         action=AUDIT_ACTION_LOGIN,
         resource_type="auth.user",
         resource_id=user.id,
@@ -130,12 +151,9 @@ async def logout(
     db: AsyncSession = Depends(get_db),
 ):
     """前端调用以记录登出. JWT 是无状态的, 真正失效靠 token 自然过期."""
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
-        firm_id=current_user.firm_id,
+        current_user,
         action=AUDIT_ACTION_LOGOUT,
         method="POST",
         path="/api/auth/logout",
@@ -175,11 +193,9 @@ async def change_my_password(
         await svc_change_password(db, current_user, payload.old_password, payload.new_password)
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_UPDATE,
         resource_type="auth.user",
         resource_id=current_user.id,
@@ -203,11 +219,9 @@ async def create_firm(
     db.add(firm)
     await db.commit()
     await db.refresh(firm)
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_CREATE,
         resource_type="auth.firm",
         resource_id=firm.id,
@@ -219,9 +233,16 @@ async def create_firm(
 @router.get("/firms", response_model=List[FirmResponse])
 async def list_firms(
     is_active: Optional[bool] = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(ROLE_ADMIN)),
     db: AsyncSession = Depends(get_db),
 ):
+    # P1 IDOR 修复 (2026-06-19): 旧任何登录用户可拉全所 (SaaS 客户名单泄露)
+    # 现在 admin 全可见, 非 admin 仅自己 firm
+    if current_user.role != ROLE_ADMIN:
+        firm = (
+            await db.execute(select(Firm).where(Firm.id == current_user.firm_id))
+        ).scalar_one_or_none()
+        return [FirmResponse.model_validate(firm)] if firm else []
     stmt = select(Firm)
     if is_active is not None:
         stmt = stmt.where(Firm.is_active == is_active)
@@ -236,6 +257,9 @@ async def get_firm(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # P1 IDOR 修复 (2026-06-19): 非 admin 不能读别所 metadata
+    if current_user.role != ROLE_ADMIN and firm_id != current_user.firm_id:
+        raise HTTPException(status_code=403, detail="无权访问其他事务所")
     firm = (await db.execute(select(Firm).where(Firm.id == firm_id))).scalar_one_or_none()
     if firm is None:
         raise HTTPException(status_code=404, detail="事务所不存在")
@@ -257,11 +281,9 @@ async def update_firm(
         setattr(firm, k, v)
     await db.commit()
     await db.refresh(firm)
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_UPDATE,
         resource_type="auth.firm",
         resource_id=firm_id,
@@ -289,8 +311,12 @@ async def create_user(
     ).scalar_one_or_none()
     if existing is not None:
         raise HTTPException(status_code=400, detail=f"用户名 {payload.username} 已存在")
+    # P0 IDOR 修复 (2026-06-19): 非 admin 强制 firm_id = 创建者的事务所, 防止跨所建账号
+    target_firm_id = payload.firm_id
+    if current_user.role != ROLE_ADMIN:
+        target_firm_id = current_user.firm_id
     user = User(
-        firm_id=payload.firm_id,
+        firm_id=target_firm_id,
         username=payload.username,
         password_hash=hash_password(payload.password),
         full_name=payload.full_name,
@@ -305,11 +331,9 @@ async def create_user(
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_CREATE,
         resource_type="auth.user",
         resource_id=user.id,
@@ -332,6 +356,9 @@ async def list_users(
     db: AsyncSession = Depends(get_db),
 ):
     stmt = select(User)
+    # P0 IDOR 修复 (2026-06-19): 非 admin 强制 firm_id = 自己, 防止跨所枚举用户
+    if current_user.role != ROLE_ADMIN:
+        firm_id = current_user.firm_id
     if firm_id is not None:
         stmt = stmt.where(User.firm_id == firm_id)
     if role:
@@ -360,9 +387,23 @@ async def get_user(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """按 ID 查单个用户 — Pack B P0 IDOR 修复 (2026-06-20):
+       - 跨 firm 一律 404 (admin 除外)
+       - 普通用户不能读同 firm 但他人 (返回 403) — 防止 IDOR 枚举
+       - qc_partner 可读同 firm 任意用户
+    """
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # 跨 firm: 一律 404 (信息隐藏, admin 除外)
+    if current_user.role != ROLE_ADMIN and user.firm_id != current_user.firm_id:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    # 同 firm 但本人不可读他人 — 防 IDOR 枚举
+    if (
+        current_user.role not in (ROLE_ADMIN, ROLE_QC_PARTNER, ROLE_PARTNER)
+        and user.id != current_user.id
+    ):
+        raise HTTPException(status_code=403, detail="无权查看其他用户信息")
     return UserResponse.model_validate(user)
 
 
@@ -405,11 +446,9 @@ async def update_user(
         setattr(user, k, v)
     await db.commit()
     await db.refresh(user)
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_UPDATE,
         resource_type="auth.user",
         resource_id=user_id,
@@ -430,15 +469,16 @@ async def deactivate_user(
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # P0 IDOR 修复 (2026-06-19): 非 admin 不能跨所停用用户
+    if current_user.role != ROLE_ADMIN and user.firm_id != current_user.firm_id:
+        raise HTTPException(status_code=403, detail="无权操作其他事务所的用户")
     if user.id == current_user.id:
         raise HTTPException(status_code=400, detail="不能停用自己")
     user.is_active = False
     await db.commit()
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_DELETE,
         resource_type="auth.user",
         resource_id=user_id,
@@ -457,15 +497,16 @@ async def reset_user_password(
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # P0 IDOR 修复 (2026-06-19): 非 admin 不能跨所重置密码 (可能间接登录)
+    if current_user.role != ROLE_ADMIN and user.firm_id != current_user.firm_id:
+        raise HTTPException(status_code=403, detail="无权操作其他事务所的用户")
     try:
         await svc_reset_password(db, user, payload.new_password)
     except AuthenticationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_UPDATE,
         resource_type="auth.user",
         resource_id=user_id,
@@ -586,6 +627,8 @@ async def list_audit_logs(
     current_user: User = Depends(require_role(ROLE_QC_PARTNER)),
     db: AsyncSession = Depends(get_db),
 ):
+    # P0 IDOR 修复 (2026-06-19): 非 admin 强制 firm_id, 防跨所读审计轨迹
+    scope_firm_id = None if current_user.role == ROLE_ADMIN else current_user.firm_id
     result = await query_audit_logs(
         db,
         user_id=user_id,
@@ -593,6 +636,7 @@ async def list_audit_logs(
         resource_type=resource_type,
         resource_id=resource_id,
         project_id=project_id,
+        firm_id=scope_firm_id,
         method=method,
         start_date=start_date,
         end_date=end_date,
@@ -646,12 +690,9 @@ async def rotate_audit_log_archive(
     )
     # 记录归档动作本身 (rotate 完成才记, 避免 rotate 失败也产生噪音)
     if confirm and result.get("archived", 0) > 0:
-        await record_audit_log(
+        await _audit(
             db,
-            user_id=getattr(current_user, "id", None),
-            user_display=getattr(current_user, "full_name", None),
-            user_role=getattr(current_user, "role", None),
-            firm_id=getattr(current_user, "firm_id", None),
+            current_user,
             action="audit_log_rotate",
             resource_type="audit_log",
             summary=(
@@ -721,6 +762,7 @@ async def create_approval(
             db,
             initiator=current_user,
             project_id=payload.project_id,
+            firm_id=current_user.firm_id,  # round 32 P0 IDOR: firm_id 落库
             resource_type=payload.resource_type,
             resource_id=payload.resource_id,
             title=payload.title,
@@ -729,11 +771,9 @@ async def create_approval(
         )
     except InvalidApprovalAction as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_CREATE,
         resource_type="auth.approval_workflow",
         resource_id=wf.id,
@@ -755,7 +795,18 @@ async def list_approvals(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(ApprovalWorkflow)
+    from app.models.db_models import Project
+    from app.services.auth.tenant import _is_admin, _user_firm_id
+    from sqlalchemy import or_
+
+    stmt = select(ApprovalWorkflow).join(
+        Project, ApprovalWorkflow.project_id == Project.id, isouter=True
+    )
+    # 多租户: admin 看全部, 其他人只看自己事务所的项目 (含 firm_id=NULL 的旧数据)
+    if not _is_admin(current_user):
+        firm_id = _user_firm_id(current_user)
+        if firm_id is not None:
+            stmt = stmt.where(or_(Project.firm_id == firm_id, Project.firm_id.is_(None)))
     if status_filter:
         stmt = stmt.where(ApprovalWorkflow.status == status_filter)
     if project_id is not None:
@@ -783,20 +834,49 @@ async def get_approval(
     wf = await ApprovalEngine.get_workflow(db, workflow_id)
     if wf is None:
         raise HTTPException(status_code=404, detail="审批流不存在")
+    # P0 IDOR 修复 (round 32, 2026-06-20): 非 admin 不能跨所读审批流
+    # 防枚举: 一律返回 404, 不告诉调用方"存在但无权"
+    if current_user.role != ROLE_ADMIN and wf.firm_id and wf.firm_id != current_user.firm_id:
+        raise HTTPException(status_code=404, detail="审批流不存在")
     return ApprovalWorkflowResponse.model_validate(wf)
+
+
+async def ensure_approval_in_firm(
+    workflow_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApprovalWorkflow:
+    """加载 ApprovalWorkflow, 同时校验 current_user 有权访问 (round 32 P0 IDOR).
+
+    规则 (与原 decide_approval / withdraw_approval 内嵌校验 100% 等价):
+      - workflow 不存在 → 404 "审批流不存在" (防枚举)
+      - 非 admin 且 wf.firm_id 存在且 != current_user.firm_id → 404 (防枚举)
+      - admin / wf.firm_id is None → 放过 (历史 NULL 数据全可见)
+
+    返回: 预加载的 ApprovalWorkflow (含 steps), handler 不必再次查询.
+    """
+    wf = await ApprovalEngine.get_workflow(db, workflow_id)
+    if wf is None:
+        raise HTTPException(status_code=404, detail="审批流不存在")
+    # P0 IDOR 修复 (round 32): 防跨所代签 / 撤回
+    # 防枚举: 跨 firm 一律 404, 不告诉调用方"存在但无权"
+    if current_user.role != ROLE_ADMIN and wf.firm_id and wf.firm_id != current_user.firm_id:
+        raise HTTPException(status_code=404, detail="审批流不存在")
+    return wf
 
 
 @router.post("/approvals/{workflow_id}/decide", response_model=ApprovalWorkflowResponse)
 async def decide_approval(
-    workflow_id: int,
     payload: ApprovalDecision,
-    current_user: User = Depends(get_current_user),
+    pre_wf: ApprovalWorkflow = Depends(ensure_approval_in_firm),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    # P0 IDOR 校验已抽到 ensure_approval_in_firm (round 32 规则保留: 跨 firm 一律 404)
     try:
         wf = await ApprovalEngine.decide(
             db,
-            workflow_id=workflow_id,
+            workflow_id=pre_wf.id,
             actor=current_user,
             action=payload.action,
             comment=payload.comment,
@@ -809,14 +889,12 @@ async def decide_approval(
     except InvalidApprovalAction as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     action_map = {"approve": AUDIT_ACTION_APPROVE, "reject": AUDIT_ACTION_REJECT}
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=action_map.get(payload.action, AUDIT_ACTION_UPDATE),
         resource_type="auth.approval_workflow",
-        resource_id=workflow_id,
+        resource_id=pre_wf.id,
         summary=f"审批 {payload.action} (step={wf.current_step}, status={wf.status}, version={wf.version})",
         payload=payload.model_dump(),
     )
@@ -825,16 +903,17 @@ async def decide_approval(
 
 @router.post("/approvals/{workflow_id}/withdraw", response_model=ApprovalWorkflowResponse)
 async def withdraw_approval(
-    workflow_id: int,
     payload: Optional[ApprovalWithdrawRequest] = None,
-    current_user: User = Depends(get_current_user),
+    pre_wf: ApprovalWorkflow = Depends(ensure_approval_in_firm),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    # P0 IDOR 校验已抽到 ensure_approval_in_firm (round 32 规则保留: 跨 firm 一律 404)
     expected_version = payload.expected_version if payload else None
     try:
         wf = await ApprovalEngine.withdraw(
             db,
-            workflow_id=workflow_id,
+            workflow_id=pre_wf.id,
             actor=current_user,
             expected_version=expected_version,
         )
@@ -842,14 +921,12 @@ async def withdraw_approval(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except InvalidApprovalAction as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await record_audit_log(
+    await _audit(
         db,
-        user_id=current_user.id,
-        user_display=current_user.full_name,
-        user_role=current_user.role,
+        current_user,
         action=AUDIT_ACTION_UPDATE,
         resource_type="auth.approval_workflow",
-        resource_id=workflow_id,
+        resource_id=pre_wf.id,
         summary=f"撤回审批 (version={wf.version})",
     )
     return ApprovalWorkflowResponse.model_validate(wf)

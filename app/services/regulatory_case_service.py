@@ -1,15 +1,24 @@
 """监管案例库服务 - 第三阶段."""
 
 import httpx
+import logging
 from bs4 import BeautifulSoup
 from typing import List, Dict
 import hashlib
 import asyncio
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 class RegulatoryCaseScraper:
-    """抓取证监会、交易所监管案例."""
+    """抓取证监会、交易所监管案例.
+
+    用作 async context manager:
+        async with RegulatoryCaseScraper() as s:
+            ...
+    自动确保 httpx 连接池关闭,避免连接泄露.
+    """
 
     def __init__(self):
         self.session = httpx.AsyncClient(timeout=30.0)
@@ -18,6 +27,12 @@ class RegulatoryCaseScraper:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
+
+    async def __aenter__(self) -> "RegulatoryCaseScraper":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.session.aclose()
 
     async def close(self):
         await self.session.aclose()
@@ -45,12 +60,12 @@ class RegulatoryCaseScraper:
                         }
                     )
         except Exception as e:
-            print(f"CSRC scrape error: {e}")
+            logger.exception("CSRC scrape error")
         return cases
 
     async def scrape_sse_inquiry(self, page: int = 1) -> List[Dict]:
         """抓取上交所问询函."""
-        url = f"{settings.SseUrl}/markets/stock/list/ inquiry"
+        url = f"{settings.SseUrl}/markets/stock/list/inquiry"
         params = {"page": page}
         cases = []
         try:
@@ -77,7 +92,7 @@ class RegulatoryCaseScraper:
                     }
                 )
         except Exception as e:
-            print(f"SSE scrape error: {e}")
+            logger.exception("SSE scrape error")
         return cases
 
     async def scrape_szse_inquiry(self, page: int = 1) -> List[Dict]:
@@ -109,7 +124,7 @@ class RegulatoryCaseScraper:
                     }
                 )
         except Exception as e:
-            print(f"SZSE scrape error: {e}")
+            logger.exception("SZSE scrape error")
         return cases
 
     async def scrape_csrc_penalty(self, page: int = 1) -> List[Dict]:
@@ -135,7 +150,7 @@ class RegulatoryCaseScraper:
                         }
                     )
         except Exception as e:
-            print(f"CSRC penalty scrape error: {e}")
+            logger.exception("CSRC penalty scrape error")
         return cases
 
     async def scrape_all(self, max_pages: int = 5) -> List[Dict]:

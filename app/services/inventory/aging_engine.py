@@ -164,6 +164,16 @@ def _parse_dt(v: Any) -> Optional[datetime]:
         return None
 
 
+def _to_naive(dt: Optional[datetime]) -> Optional[datetime]:
+    """P1-8 (2026-06-19 round 28): 统一 datetime tzinfo — 业务侧统一存 naive UTC,
+    比较时若发现 tz-aware, 仅去 tzinfo 不改值."""
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
+
 def _aging_bucket(days: float, qty: float) -> dict[str, float]:
     if days <= 90:
         return {"le_90": qty}
@@ -187,9 +197,12 @@ class InventoryAgingEngine:
         industry: str = "默认",
         sell_cost_rate: float = 0.05,
         completion_cost_rate: float = 0.0,
+        manual_completion_cost: Optional[dict[str, float]] = None,
     ):
         # ``sell_cost_rate`` = 估计销售费用 + 税费 占含税收入的比例（默认 5%）
         # ``completion_cost_rate`` = 至完工成本占产成品售价的比例（原材料/在产品 NRV 用）
+        # P0-B (2026-06-19): 完工成本是绝对值, 与 NRV 单价线性相关不合理.
+        # 增加 ``manual_completion_cost`` {material_code: 至完工单价} 优先于 rate 模型.
         self.industry = industry
         self.rates = DEFAULT_AGING_RATES.get(industry) or DEFAULT_AGING_RATES["默认"]
         # 包含匹配
@@ -200,6 +213,7 @@ class InventoryAgingEngine:
                     break
         self.sell_cost_rate = sell_cost_rate
         self.completion_cost_rate = completion_cost_rate
+        self.manual_completion_cost = dict(manual_completion_cost or {})
 
     @classmethod
     def is_completion_category(cls, category: Optional[str]) -> bool:
@@ -214,37 +228,85 @@ class InventoryAgingEngine:
     def fifo_aging(
         movements: list[dict[str, Any]],
         period_end: datetime,
+        prior_period_end: Optional[datetime] = None,
     ) -> AgingBucket:
         """Recompute aging from per-batch movements of ONE material.
 
         Each movement dict needs: opening_qty, opening_amount, inbound_qty,
         inbound_date, outbound_qty, ending_qty.
+
+        :param prior_period_end: 上年期末日（如 2023-12-31），用于精确计算
+            期初库龄。为 None 时退回 period_end - 365 天保守兜底。
+
+        P0-3 (2026-06-19): 重复计入防御. 若用户在 movements 同时提供 prior_period_end
+        又在每行填了 inbound_date (典型场景: 整体迁移 ERP 历史但明细不全),
+        opening_qty 会被当作"prior 期末的单一聚合批" + 每行 inbound_qty 独立批,
+        双重计入. ERP 通常无逐批明细, opening 是 prior 期末聚合, 不能再拆.
+        同一物料: prior_period_end 给定 → opening 仅作 1 批, 不再叠加 inbound 批;
+        compute() 层负责校验并拒绝错误组合.
         """
         # 构造合成批次列表 [(入库日期, 剩余数量)]
-        # - 上一期期末 = 零日批次（入库日期取得不知道时用 period_end - 365 当兜底）
         batches: list[tuple[datetime, float]] = []
         opening_qty_total = sum(float(m.get("opening_qty") or 0) for m in movements)
         if opening_qty_total > 0:
-            # 期初统一当 "已经 365 天" 处理（保守）
-            batches.append((period_end - pd.Timedelta(days=365), opening_qty_total))
+            if prior_period_end is not None:
+                # 精确使用上年期末日, 期初库龄 = period_end - prior_period_end
+                # P0-3 (2026-06-19): 当 prior_period_end 提供时, opening_qty 视为
+                # "prior 期末的单一聚合批" — 不再叠加每行 inbound_qty (否则双重计入).
+                batches.append((prior_period_end, opening_qty_total))
+                # 提前返回聚合路径: 跳过 inbound 批次解析
+                batches.sort(key=lambda x: x[0])
+                # 直接走 FIFO 扣减 (后续逻辑复用)
+                return InventoryAgingEngine._fifo_aging_from_batches(
+                    batches, period_end, movements, opening_qty_total
+                )
+            else:
+                # 兜底: 期初统一当 "已经 365 天" 处理（保守）
+                batches.append((period_end - pd.Timedelta(days=365), opening_qty_total))
 
         for m in movements:
             qty = float(m.get("inbound_qty") or 0)
             if qty <= 0:
                 continue
-            dt = _parse_dt(m.get("inbound_date")) or period_end
+            # ALG-01 (round32, 2026-06-20): inbound_date 缺失时不再 fallback 到
+            # period_end (库龄会被低估为 0 天), 而是 fallback 到 (period_end - 365d),
+            # 与 opening_qty 兜底一致, 避免行级库龄失真.
+            dt = _parse_dt(m.get("inbound_date")) or (period_end - pd.Timedelta(days=365))
             batches.append((dt, qty))
 
         batches.sort(key=lambda x: x[0])  # FIFO: 最早入库的先出
 
+        return InventoryAgingEngine._fifo_aging_from_batches(
+            batches, period_end, movements, opening_qty_total
+        )
+
+    @staticmethod
+    def _fifo_aging_from_batches(
+        batches: list[tuple[datetime, float]],
+        period_end: datetime,
+        movements: list[dict[str, Any]],
+        opening_qty_total: float,
+    ) -> AgingBucket:
+        """从已构造的批次列表 [(dt, qty)] 走完 FIFO 扣减 + 库龄分桶.
+
+        P0-3 (2026-06-19): 抽出 fifo_aging 的剩余逻辑, 让"仅含 prior 期末的单一聚合批"
+        路径也能复用扣减 + 分桶逻辑, 不再走 inbound 重复.
+        """
         total_outbound = sum(float(m.get("outbound_qty") or 0) for m in movements)
         remaining_out = total_outbound
         # 从头扣减
+        # P0-5 修复 (2026-06-19): 浮点精度防负 — 多次扣减后 qty 可能变为极小负值,
+        # 仍走 _aging_bucket 把负数归类到某天, 库龄错误. 用 max(0, qty-take) 兜底
+        # 保留 (dt, max(0, qty - take)) 而非 (dt, qty - take), 避免下游污染
+        zero = 0.0
         for i, (dt, qty) in enumerate(batches):
             if remaining_out <= 0:
                 break
             take = min(qty, remaining_out)
-            batches[i] = (dt, qty - take)
+            new_qty = qty - take
+            if new_qty < zero:
+                new_qty = zero
+            batches[i] = (dt, new_qty)
             remaining_out -= take
 
         # 剩下的就是期末
@@ -269,7 +331,10 @@ class InventoryAgingEngine:
             if qty <= 0:
                 continue
             adj_qty = qty * scale
-            days = max(0.0, (period_end - dt).days)
+            # round 28 P1-8: 统一 naive, 避免 aware/naive 混算 TypeError
+            dt_naive = _to_naive(dt) or dt
+            pe_naive = _to_naive(period_end) or period_end
+            days = max(0.0, (pe_naive - dt_naive).days)
             b = _aging_bucket(days, adj_qty)
             bucket.le_90 += b.get("le_90", 0.0)
             bucket.age_91_180 += b.get("age_91_180", 0.0)
@@ -295,6 +360,13 @@ class InventoryAgingEngine:
         period_end: datetime,
     ) -> Optional[tuple[float, int]]:
         """Return (weighted avg unit price, sample count) of post-period sales
+        for the given material. None if no qualifying sales found.
+
+        性能 (2026-06-19): P1 — 旧版 O(N×M), N 物料 × M 销售行;
+        上层 compute() 已按 product_code 预分桶, 此函数只扫自己桶里少量记录,
+        单次 compute_impairments 从 2.5M iter 降到 ~M iter.
+        """
+        """Return (weighted avg unit price, sample count) of post-period sales
         for the given material. None if no qualifying sales found."""
         total_amount = 0.0
         total_qty = 0.0
@@ -312,7 +384,10 @@ class InventoryAgingEngine:
                 r.get("ship_date") if isinstance(r, dict) else None
             )
             ref_dt = _parse_dt(confirm) or _parse_dt(ship)
-            if ref_dt is None or ref_dt <= period_end:
+            # round 28 P1-8: 统一 naive, 避免 aware/naive 混算 TypeError
+            ref_dt = _to_naive(ref_dt) if ref_dt is not None else None
+            pe_naive = _to_naive(period_end) or period_end
+            if ref_dt is None or ref_dt <= pe_naive:
                 continue
             qty = float(
                 getattr(r, "quantity", 0) or (r.get("quantity", 0) if isinstance(r, dict) else 0)
@@ -357,6 +432,8 @@ class InventoryAgingEngine:
         prior_impairments: Optional[dict[str, float]] = None,
         prior_qty: Optional[dict[str, float]] = None,
         manual_nrv: Optional[dict[str, float]] = None,
+        prior_period_end: Optional[dict[str, datetime]] = None,
+        manual_completion_cost: Optional[dict[str, float]] = None,
     ) -> ImpairmentResult:
         """
         :param movements: 收发存行（ORM 对象或 dict）。
@@ -366,11 +443,31 @@ class InventoryAgingEngine:
         :param prior_qty: {material_code: 上年期末数量}（可选）— 用于把转回拆成
             "已售出转销营业成本"和"仍在库转回资产减值损失"两部分。
         :param manual_nrv: {material_code: 手工 NRV 单价}（覆盖销售清单结果）。
+        :param prior_period_end: {material_code: 上年期末日 datetime}（可选）—
+            用于精确计算期初库龄。为 None 时退回 period_end - 365 天保守兜底。
+        :param manual_completion_cost: {material_code: 至完工成本单价}（可选）—
+            P0-B (2026-06-19): 完工成本是绝对值, 优先于 completion_cost_rate
+            (nrv_unit * rate) 的简化模型. 缺失物料沿用 rate 模型.
         """
         prior_impairments = prior_impairments or {}
         prior_qty = prior_qty or {}
         manual_nrv = manual_nrv or {}
         sales_records = sales_records or []
+        # P0-B: 合并 __init__ 传参与 compute 传参, 后者覆盖前者
+        if manual_completion_cost is not None:
+            self.manual_completion_cost = {**self.manual_completion_cost, **manual_completion_cost}
+
+        # P1 性能 (2026-06-19): O(N×M) → O(N+M) — 一次性按 product_code 分桶
+        # 旧版每物料调用 nrv_unit_price_from_sales 全表扫 sales_records,
+        # 500 物料 × 5K 销售 = 2.5M iter. 分桶后每桶 O(本桶大小)
+        _sales_bucket: dict[str, list[Any]] = {}
+        for _sr in sales_records:
+            _code = (
+                getattr(_sr, "product_code", "")
+                if not isinstance(_sr, dict)
+                else _sr.get("product_code", "")
+            )
+            _sales_bucket.setdefault(str(_code) if _code else "", []).append(_sr)
 
         # 仅取本期（is_prior_year=False）数据
         def _is_current(m: Any) -> bool:
@@ -447,7 +544,23 @@ class InventoryAgingEngine:
                     )
                 continue
 
-            aging = self.fifo_aging(ms, period_end)
+            code_prior_end = prior_period_end.get(code) if prior_period_end else None
+            # P0-3 (2026-06-19): 错误组合校验. 若同时提供 prior_period_end
+            # 又在 movements 填了 inbound_date (典型场景: ERP 历史迁移明细不全),
+            # opening_qty 会被双重计入 (单批 + 每行 inbound). 此时应拒绝,
+            # 强制二选一: 要么用 prior_period_end (整体聚合), 要么走逐批 inbound.
+            if code_prior_end is not None:
+                has_inbound_with_date = any(
+                    (m.get("inbound_qty") or 0) > 0 and m.get("inbound_date") is not None
+                    for m in ms
+                )
+                if has_inbound_with_date:
+                    raise ValueError(
+                        f"物料 {code}: prior_period_end 与 inbound_date/inbound_qty "
+                        f"不可同时提供 (opening_qty 会被双重计入). "
+                        f"请二选一: 要么删除 inbound_date 走聚合路径, 要么不传 prior_period_end."
+                    )
+            aging = self.fifo_aging(ms, period_end, prior_period_end=code_prior_end)
 
             # 账实差异检测：FIFO 推算后剩余数量与账面期末数偏离 > 5% → 在 note 标注
             opening_qty_total = sum(float(m.get("opening_qty") or 0) for m in ms)
@@ -470,7 +583,10 @@ class InventoryAgingEngine:
                 nrv_unit = float(manual_nrv[code])
                 nrv_src = "手工/外部询价"
             else:
-                result = self.nrv_unit_price_from_sales(sales_records, code, period_end)
+                # 传入本物料预分桶, 避免每次全表扫
+                result = self.nrv_unit_price_from_sales(
+                    _sales_bucket.get(code, []), code, period_end
+                )
                 if result:
                     nrv_unit, sample_n = result
                     nrv_src = f"销售清单({sample_n}笔)"
@@ -478,9 +594,20 @@ class InventoryAgingEngine:
             if nrv_unit is not None:
                 est_sell_cost_unit = nrv_unit * self.sell_cost_rate
                 # 完工口径：原材料/在产品 NRV 还要扣"至完工的加工成本"
-                if self.is_completion_category(category) and self.completion_cost_rate > 0:
-                    completion_cost_unit = nrv_unit * self.completion_cost_rate
-                    method_label = "nrv-完工口径"
+                # P0-B (2026-06-19): 完工成本是绝对值, 优先 manual_completion_cost[code],
+                # 否则回退到行业默认 (nrv * completion_cost_rate, 简化模型).
+                if self.is_completion_category(category):
+                    manual_cost = self.manual_completion_cost.get(code)
+                    if manual_cost is not None:
+                        completion_cost_unit = float(manual_cost)
+                        method_label = "nrv-完工口径(手工)"
+                    elif self.completion_cost_rate > 0:
+                        # 简化模型: 完工成本 = NRV * rate, 已知与 NRV 线性相关的局限
+                        completion_cost_unit = nrv_unit * self.completion_cost_rate
+                        method_label = "nrv-完工口径"
+                    else:
+                        completion_cost_unit = 0.0
+                        method_label = "nrv-出售口径"
                 else:
                     completion_cost_unit = 0.0
                     method_label = "nrv-出售口径"
@@ -553,6 +680,23 @@ class InventoryAgingEngine:
             )
 
         # 汇总
+        # P0-5 修复 (2026-06-19): summary 金额一致性 — 旧版按
+        #   bucket.le_90 * r.book_unit_cost
+        # 算金额, 但 bucket.le_90 是已 scale 校准后的数量; 当 scale != 1 时,
+        #   total_weight > ending_qty_total, 金额就会和 row.ending_amount 对不上.
+        # 现改为按各 row 的 bucket 占比分摊 ending_amount:
+        #   aging_xxx_amount = ending_amount * (bucket.xxx / total_in_row_buckets)
+        # 这样各分段金额之和 = ending_amount (= book_amount), 与 row 一致.
+        # 注: scale 仅用于库龄加权平均的小幅容差 (5% 内), summary 金额以账面 ending_qty 为准.
+        def _row_bucket_amount(row, attr):
+            total = (
+                row.aging.le_90 + row.aging.age_91_180 + row.aging.age_181_365
+                + row.aging.age_366_730 + row.aging.gt_730
+            )
+            if total <= 0 or row.book_amount <= 0:
+                return 0.0
+            return row.book_amount * (getattr(row.aging, attr) / total)
+
         summary = {
             "items": len(rows),
             "book_amount": round(sum(r.book_amount for r in rows), 2),
@@ -561,11 +705,11 @@ class InventoryAgingEngine:
             "current_provision": round(sum(r.impairment_provision for r in rows), 2),
             "current_reversal": round(sum(r.impairment_reversal for r in rows), 2),
             "net_change": round(sum(r.net_impairment_change for r in rows), 2),
-            "aging_le_90": round(sum(r.aging.le_90 * r.book_unit_cost for r in rows), 2),
-            "aging_91_180": round(sum(r.aging.age_91_180 * r.book_unit_cost for r in rows), 2),
-            "aging_181_365": round(sum(r.aging.age_181_365 * r.book_unit_cost for r in rows), 2),
-            "aging_366_730": round(sum(r.aging.age_366_730 * r.book_unit_cost for r in rows), 2),
-            "aging_gt_730": round(sum(r.aging.gt_730 * r.book_unit_cost for r in rows), 2),
+            "aging_le_90": round(sum(_row_bucket_amount(r, "le_90") for r in rows), 2),
+            "aging_91_180": round(sum(_row_bucket_amount(r, "age_91_180") for r in rows), 2),
+            "aging_181_365": round(sum(_row_bucket_amount(r, "age_181_365") for r in rows), 2),
+            "aging_366_730": round(sum(_row_bucket_amount(r, "age_366_730") for r in rows), 2),
+            "aging_gt_730": round(sum(_row_bucket_amount(r, "gt_730") for r in rows), 2),
         }
 
         return ImpairmentResult(rows=rows, summary=summary)

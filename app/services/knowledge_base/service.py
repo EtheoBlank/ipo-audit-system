@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -75,16 +76,22 @@ class KnowledgeBaseService:
             await db.commit()
 
         try:
-            segs = load_document(Path(book.file_path))
-            text_chunks = chunk_segments(
+            # load_document / chunk_segments 是同步 CPU+I/O (pdfplumber + re.split),
+            # 大文件会阻塞事件循环 → 用 to_thread 推到线程池
+            segs = await asyncio.to_thread(load_document, Path(book.file_path))
+            text_chunks = await asyncio.to_thread(
+                chunk_segments,
                 segs,
-                chunk_size=settings.KB_CHUNK_SIZE,
-                overlap=settings.KB_CHUNK_OVERLAP,
+                settings.KB_CHUNK_SIZE,
+                settings.KB_CHUNK_OVERLAP,
             )
             if not text_chunks:
                 raise ValueError("文档解析后无可用文本")
 
             embedder = self._build_embedder()
+            # 跨书共享 TF-IDF 词表: 从最近一次索引恢复词表状态
+            if isinstance(embedder, TfidfEmbedder):
+                await self._restore_shared_tfidf(db_session=None, embedder=embedder)
             vectors = await self._compute_vectors(embedder, text_chunks)
             model_name = embedder.model_name if hasattr(embedder, "model_name") else "tfidf"
             dim = len(vectors[0]) if vectors else 0
@@ -100,6 +107,9 @@ class KnowledgeBaseService:
                 book.total_chars = sum(c.char_count for c in text_chunks)
                 book.embedding_model = model_name
                 book.embedding_dim = dim
+                # 保存 TF-IDF 词表状态供下一本书共享
+                if isinstance(embedder, TfidfEmbedder):
+                    book.tfidf_state = json.dumps(embedder.to_state(), ensure_ascii=False)
                 book.indexed_at = datetime.now(timezone.utc)
                 await db.commit()
 
@@ -120,6 +130,39 @@ class KnowledgeBaseService:
                     book.error_msg = str(e)[:1000]
                     await db.commit()
             raise
+
+    async def _restore_shared_tfidf(
+        self,
+        db_session: Optional[AsyncSession],
+        embedder: "TfidfEmbedder",
+    ) -> None:
+        """从最近一次成功索引的书籍恢复 TF-IDF 词表状态。"""
+        close_after = db_session is None
+        try:
+            async with AsyncSessionLocal() as session:
+                last = (
+                    await session.execute(
+                        select(KnowledgeBook)
+                        .where(
+                            KnowledgeBook.tfidf_state.is_not(None),
+                            KnowledgeBook.status == "ready",
+                        )
+                        .order_by(KnowledgeBook.indexed_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if last and last.tfidf_state:
+                    try:
+                        embedder.from_state(json.loads(last.tfidf_state))
+                        logger.info(
+                            "TF-IDF 词表已从 book_id=%d 恢复 (词表大小 %d)",
+                            last.id, embedder.dim,
+                        )
+                    except (json.JSONDecodeError, KeyError) as exc:
+                        logger.warning("恢复 TF-IDF 词表失败: %s", exc)
+        finally:
+            if close_after:
+                pass  # async with handles cleanup
 
     async def reindex_book(self, book_id: int) -> dict:
         """重新索引 — 先清掉旧 chunk 再重建。"""
@@ -147,9 +190,15 @@ class KnowledgeBaseService:
         try:
             p = Path(file_path).resolve()
             kb_dir = settings.KNOWLEDGE_BASE_DIR.resolve()
-            if str(p).startswith(str(kb_dir)) and p.exists():
+            # P0 安全修复: 用 is_relative_to (pathlib 3.9+) 防前缀穿透
+            try:
+                if not Path(p).is_relative_to(Path(kb_dir)):
+                    raise ValueError(f"路径越界：{p} 不在 {kb_dir} 下")
+            except (OSError, ValueError):
+                raise
+            if p.exists():
                 os.remove(p)
-        except OSError:
+        except (OSError, ValueError):
             logger.debug("书籍文件删除失败：%s", file_path, exc_info=True)
 
     # —————————————————————————————————————————————————————————
@@ -166,8 +215,13 @@ class KnowledgeBaseService:
         category: Optional[str] = None,
         project_id: Optional[int] = None,
         context: Optional[str] = None,
+        firm_id: Optional[int] = None,
     ) -> List[RetrievedChunk]:
-        """检索 — 自动选择 embedder。"""
+        """检索 — 自动选择 embedder.
+
+        P0 (2026-06-19): 加 firm_id 过滤. 之前任意用户可检索全所书籍,
+        等同知识库内容跨所泄露. API 层传 current_user.firm_id.
+        """
         top_k = top_k or settings.KB_DEFAULT_TOP_K
 
         # 准备 query 向量
@@ -181,7 +235,8 @@ class KnowledgeBaseService:
                 vectors = await embedder.aembed([query])
                 query_vector = vectors[0] if vectors else None
         except Exception:  # noqa: BLE001
-            logger.warning("Query embedding 失败，退回关键词检索", exc_info=True)
+            # round 36 P1: warning+exc_info 与 logger.exception 等价, 统一
+            logger.exception("Query embedding 失败，退回关键词检索")
             query_vector = None
 
         results = await retrieve(
@@ -191,6 +246,7 @@ class KnowledgeBaseService:
             top_k=top_k,
             book_ids=book_ids,
             category=category,
+            firm_id=firm_id,  # P0 多租户隔离
             keyword_weight=0.4 if query_vector is None else 0.3,
         )
 
@@ -208,7 +264,8 @@ class KnowledgeBaseService:
             )
             await db.commit()
         except Exception:  # noqa: BLE001
-            logger.debug("检索日志写入失败", exc_info=True)
+            # round 36 P1: debug+exc_info 与 logger.exception 等价, 统一
+            logger.exception("检索日志写入失败")
 
         return results
 
@@ -238,6 +295,8 @@ class KnowledgeBaseService:
         """根据 embedder 类型决定 fit/transform 还是远端 aembed。"""
         texts = [c.content for c in chunks]
         if isinstance(embedder, TfidfEmbedder):
+            # TfidfEmbedder.fit() 已实现跨书词表累加 (通过 _corpus 累积 + tfidf_state 持久化),
+            # 此处 fit 会将新书文本合并到已有词表中, 保证跨书 cosine 有效.
             embedder.fit(texts)
             return embedder.transform(texts)
         # 远端 API

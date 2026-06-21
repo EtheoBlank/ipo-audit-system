@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api._helpers import get_project_or_404
 from app.core.database import get_db
 from app.models.db.auth import ROLE_ASSISTANT, User
 from app.models.db.ipo_specials import (
@@ -24,6 +25,7 @@ from app.models.db.ipo_specials import (
     SubmissionChecklistItem,
 )
 from app.services.auth import get_current_user, record_audit_log, require_role
+from app.services.auth.tenant import ensure_project_in_firm
 from app.services.ipo_specials import (
     DEFAULT_SUBMISSION_CHECKLIST,
     FeedbackSLAMonitor,
@@ -59,8 +61,27 @@ async def gen_flowchart(
 
 class SampleRequest(BaseModel):
     cycle_code: str
-    items: List[Dict[str, Any]]
+    # round 28 P1-13: items 限长 200, 单条凭证 max_length 5000 — 防 100k 凭证 OOM
+    items: List[Dict[str, Any]] = Field(..., max_length=200)
     n: int = Field(default=3, ge=1, le=20)
+
+    @field_validator("items")
+    @classmethod
+    def _cap_item_size(cls, v: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # 单条凭证 (dict) 序列化后不超过 5000 字符 — 防单条膨胀 OOM
+        for idx, it in enumerate(v):
+            if not isinstance(it, dict):
+                continue
+            try:
+                if len(json.dumps(it, ensure_ascii=False)) > 5000:
+                    raise ValueError(
+                        f"items[{idx}] 序列化超过 5000 字符上限 (单条凭证过大)"
+                    )
+            except (TypeError, ValueError) as e:
+                if "items[" in str(e):
+                    raise
+                raise ValueError(f"items[{idx}] 不可 JSON 序列化: {e}") from e
+        return v
 
 
 @router.post("/walkthrough/sample")
@@ -116,7 +137,7 @@ async def upload_prospectus(
     db: AsyncSession = Depends(get_db),
 ):
     """记录招股书 (实际文件可走 report_templates / file upload, 这里只登记 metadata)."""
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     from datetime import date
 
     # 先把旧版本置为非 current
@@ -157,6 +178,7 @@ async def list_prospectuses(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (await db.execute(select(Prospectus).where(Prospectus.project_id == project_id)))
         .scalars()
@@ -195,6 +217,8 @@ async def add_metric(
     ).scalar_one_or_none()
     if p is None:
         raise HTTPException(404, "招股书不存在")
+    # IDOR fix (P0): 校验招股书所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, p.project_id, current_user)
     m = ProspectusKeyMetric(prospectus_id=prospectus_id, **payload.model_dump())
     m = await ProspectusReconciler.reconcile_metric(db, prospectus_id=prospectus_id, metric=m)
     db.add(m)
@@ -231,7 +255,7 @@ async def add_period_metric(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     yoy = 0.0
     if payload.value_period_2 != 0:
         yoy = (payload.value_period_3 - payload.value_period_2) / abs(payload.value_period_2) * 100
@@ -257,6 +281,7 @@ async def list_period_metrics(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (
             await db.execute(
@@ -289,7 +314,7 @@ async def detect_overlap(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     overlaps = await OverlapDetector.find_overlaps(
         db,
         project_id=project_id,
@@ -320,6 +345,7 @@ async def list_overlaps(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (
             await db.execute(
@@ -355,7 +381,7 @@ async def add_peer(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     p = PeerCompany(project_id=project_id, **payload.model_dump())
     db.add(p)
     await db.commit()
@@ -369,6 +395,7 @@ async def list_peers(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (await db.execute(select(PeerCompany).where(PeerCompany.project_id == project_id)))
         .scalars()
@@ -412,7 +439,7 @@ async def add_letter(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     fl = FeedbackLetter(project_id=project_id, **payload.model_dump())
     db.add(fl)
     await db.commit()
@@ -426,6 +453,7 @@ async def list_letters(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     rows = list(
         (await db.execute(select(FeedbackLetter).where(FeedbackLetter.project_id == project_id)))
         .scalars()
@@ -455,6 +483,15 @@ async def add_question(
     current_user: User = Depends(require_role(ROLE_ASSISTANT)),
     db: AsyncSession = Depends(get_db),
 ):
+    # IDOR fix (P0): 校验问询函所属 project 在 user 事务所内 — 否则 403
+    letter = (
+        await db.execute(
+            select(FeedbackLetter).where(FeedbackLetter.id == payload.letter_id)
+        )
+    ).scalar_one_or_none()
+    if letter is None:
+        raise HTTPException(404, "反馈意见不存在")
+    await ensure_project_in_firm(db, letter.project_id, current_user)
     q = FeedbackQuestion(**payload.model_dump())
     db.add(q)
     await db.commit()
@@ -475,7 +512,7 @@ async def init_checklist(
     db: AsyncSession = Depends(get_db),
 ):
     """用内置模板初始化项目的申报材料清单."""
-    await get_project_or_404(db, project_id)
+    await ensure_project_in_firm(db, project_id, current_user)
     # 清旧
     existing = list(
         (
@@ -524,6 +561,7 @@ async def get_checklist(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     conds = [SubmissionChecklistItem.project_id == project_id]
     if board_type:
         conds.append(SubmissionChecklistItem.board_type == board_type)
@@ -541,6 +579,15 @@ class ChecklistItemUpdate(BaseModel):
     file_path: Optional[str] = None
     notes: Optional[str] = None
 
+    @field_validator("upload_date")
+    @classmethod
+    def _upload_date_iso(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return v
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+            raise ValueError("upload_date 必须是 YYYY-MM-DD 格式")
+        return v
+
 
 @router.put("/submission/checklist/{item_id}")
 async def update_checklist_item(
@@ -556,6 +603,8 @@ async def update_checklist_item(
     ).scalar_one_or_none()
     if item is None:
         raise HTTPException(404, "清单项不存在")
+    # IDOR fix (P0): 校验清单项所属 project 在 user 事务所内 — 否则 403
+    await ensure_project_in_firm(db, item.project_id, current_user)
     for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(item, k, v)
     if payload.is_uploaded:

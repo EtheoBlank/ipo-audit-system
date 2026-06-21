@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,15 +20,21 @@ from app.models.db_models import (
     DailyReport,
     ManagementRecommendation,
     Meeting,
-    Project,
     ProjectAssignment,
     TeamMember,
     WorkPlan,
+    WorkPlanItem,
     BLOCKER_STATUS_OPEN,
     MEMBER_STATUS_ACTIVE,
+    MEMBER_STATUS_INACTIVE,
 )
-from app.models.db.auth import User
+from app.models.db.auth import ROLE_ADMIN, User
 from app.services.auth import get_current_user, get_current_user_optional
+from app.services.auth.tenant import (
+    ensure_project_in_firm,
+    ensure_team_member_in_firm,
+    ensure_team_member_visible_query,
+)
 from app.models.team_management import (
     BlockerCreate,
     BlockerResponse,
@@ -53,6 +59,7 @@ from app.models.team_management import (
     TeamMemberResponse,
     TeamMemberUpdate,
     WorkPlanItemResponse,
+    WorkPlanItemUpdate,
     WorkPlanResponse,
     WorkPlanUpdate,
 )
@@ -64,6 +71,28 @@ from app.services.team_management.progress_tracker import ProgressTracker
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/team-management", tags=["项目组管理"])
+
+
+# ============================================================
+#  人员软删除 helper (P0 2026-06-19)
+#  ============================================================
+
+
+def _soft_delete_member(
+    member: TeamMember, current_user: User
+) -> None:
+    """软删除 TeamMember — 保留审计师/员工历史关联 (ProjectAssignment / DailyReport 等).
+
+    软删除: is_active=False + deactivated_at + deactivated_by. 后续 list_members 等
+    可按 is_active 过滤; 历史 ProjectAssignment/DailyReport 仍可查 (member_id 留有引用).
+
+    关联的 ProjectAssignment / WorkPlanItem / DailyReport / Blocker 维持原状 —
+    审计师报告需要显示"已离职 X 提交", 不应级联断链.
+    """
+    member.is_active = False
+    member.deactivated_at = datetime.now(timezone.utc)
+    member.deactivated_by = current_user.id
+    member.status = MEMBER_STATUS_INACTIVE  # 同步 status 字段供前端 status='inactive' 过滤
 
 
 # ============================================================
@@ -80,8 +109,8 @@ async def list_members(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    """列出所有人员。"""
-    q = select(TeamMember)
+    """列出所有人员 — 自动按 firm 隔离 (通过 ProjectAssignment→Project.firm_id 关联)."""
+    q = await ensure_team_member_visible_query(current_user)
     if level:
         q = q.where(TeamMember.level == level)
     if status:
@@ -111,12 +140,8 @@ async def get_member(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    m = (
-        await db.execute(select(TeamMember).where(TeamMember.id == member_id))
-    ).scalar_one_or_none()
-    if not m:
-        raise HTTPException(status_code=404, detail="人员不存在")
-    return m
+    # 多租户隔离: TeamMember 通过 ProjectAssignment→Project.firm_id 间接绑定 firm
+    return await ensure_team_member_in_firm(db, member_id, current_user)
 
 
 @router.put("/members/{member_id}", response_model=TeamMemberResponse)
@@ -126,11 +151,7 @@ async def update_member(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    m = (
-        await db.execute(select(TeamMember).where(TeamMember.id == member_id))
-    ).scalar_one_or_none()
-    if not m:
-        raise HTTPException(status_code=404, detail="人员不存在")
+    m = await ensure_team_member_in_firm(db, member_id, current_user)
     for k, v in payload.model_dump(exclude_unset=True).items():
         if v is not None:
             setattr(m, k, v)
@@ -144,15 +165,39 @@ async def delete_member(
     member_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    # P0 硬删除二次确认 (2026-06-19): 仅 admin + header X-Confirm-Hard-Delete=yes 才走硬删除,
+    # 否则走软删除 (推荐, 保留审计师历史关联)
+    x_confirm_hard_delete: Optional[str] = Header(None, alias="X-Confirm-Hard-Delete"),
 ):
-    m = (
-        await db.execute(select(TeamMember).where(TeamMember.id == member_id))
-    ).scalar_one_or_none()
-    if not m:
-        raise HTTPException(status_code=404, detail="人员不存在")
-    await db.delete(m)
+    """删除成员 — 默认软删除 (推荐, 保留历史 ProjectAssignment / DailyReport).
+
+    软删除: 仅置 is_active=False, 关联记录维持原状.
+    硬删除: 仅 admin 可触发, 需 header ``X-Confirm-Hard-Delete: yes``.
+            硬删除触发 ORM cascade, 若 TeamMember 没正确配 cascade 会留下幽灵 member_id.
+    """
+    m = await ensure_team_member_in_firm(db, member_id, current_user)
+    if x_confirm_hard_delete == "yes":
+        # 二次确认 + 角色守卫
+        if current_user.role != ROLE_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail=f"硬删除需 admin 角色, 当前 {current_user.role}",
+            )
+        logger.warning(
+            "硬删除 TeamMember id=%s by user_id=%s", m.id, current_user.id
+        )
+        await db.delete(m)
+        await db.commit()
+        return {"message": "人员已硬删除", "hard_deleted": True}
+    # 默认软删除
+    _soft_delete_member(m, current_user)
     await db.commit()
-    return {"message": "人员已删除"}
+    await db.refresh(m)
+    return {
+        "message": "人员已软删除 (保留历史关联)",
+        "soft_deleted": True,
+        "deactivated_at": m.deactivated_at.isoformat() if m.deactivated_at else None,
+    }
 
 
 # ============================================================
@@ -169,6 +214,8 @@ async def list_project_assignments(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    # 多租户隔离: 先确保 project 在 user firm 内, 再查 assignment
+    await ensure_project_in_firm(db, project_id, current_user)
     q = (
         select(ProjectAssignment, TeamMember)
         .join(TeamMember, TeamMember.id == ProjectAssignment.member_id)
@@ -205,9 +252,7 @@ async def add_project_assignment(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
-    if not proj:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    await ensure_project_in_firm(db, project_id, current_user)
     assign = ProjectAssignment(project_id=project_id, **payload.model_dump())
     db.add(assign)
     await db.commit()
@@ -241,6 +286,8 @@ async def remove_project_assignment(
     ).scalar_one_or_none()
     if not a:
         raise HTTPException(status_code=404, detail="分配记录不存在")
+    # 多租户隔离: 通过 assignment.project_id 校验 firm 归属
+    await ensure_project_in_firm(db, a.project_id, current_user)
     await db.delete(a)
     await db.commit()
     return {"message": "已移除该成员"}
@@ -261,9 +308,7 @@ async def generate_work_plan(
     current_user: User = Depends(get_current_user),
 ):
     """AI 自动生成（或重新生成）工作计划。"""
-    proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
-    if not proj:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    await ensure_project_in_firm(db, project_id, current_user)
     info = await team_management_service.generate_work_plan(db, project_id)
     plan = (await db.execute(select(WorkPlan).where(WorkPlan.id == info["plan_id"]))).scalar_one()
     return plan
@@ -280,6 +325,7 @@ async def list_work_plans(
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """列出项目的所有工作计划（按状态过滤）。"""
+    await ensure_project_in_firm(db, project_id, current_user)
     q = select(WorkPlan).where(WorkPlan.project_id == project_id)
     if status:
         q = q.where(WorkPlan.status == status)
@@ -297,6 +343,8 @@ async def get_work_plan(
     plan = (await db.execute(select(WorkPlan).where(WorkPlan.id == plan_id))).scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail="工作计划不存在")
+    # 多租户隔离
+    await ensure_project_in_firm(db, plan.project_id, current_user)
     return plan
 
 
@@ -307,6 +355,11 @@ async def update_work_plan(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # 多租户隔离: 先查 plan, 通过其 project_id 校验 firm
+    plan = (await db.execute(select(WorkPlan).where(WorkPlan.id == plan_id))).scalar_one_or_none()
+    if plan is None:
+        raise HTTPException(status_code=404, detail="工作计划不存在")
+    await ensure_project_in_firm(db, plan.project_id, current_user)
     try:
         return await team_management_service.update_work_plan(db, plan_id, payload)
     except ValueError as exc:
@@ -327,6 +380,18 @@ async def update_work_plan_item(
 
     禁止改 plan_id / id / created_at / completed_at 等系统字段。
     """
+    # 多租户隔离: 通过 WorkPlanItem → WorkPlan → project 校验 firm
+    item = (
+        await db.execute(select(WorkPlanItem).where(WorkPlanItem.id == item_id))
+    ).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(status_code=404, detail="计划任务不存在")
+    plan = (
+        await db.execute(select(WorkPlan).where(WorkPlan.id == item.plan_id))
+    ).scalar_one_or_none()
+    if plan is None:
+        raise HTTPException(status_code=404, detail="关联工作计划不存在")
+    await ensure_project_in_firm(db, plan.project_id, current_user)
     try:
         return await team_management_service.update_work_plan_item(
             db, item_id, payload.model_dump(exclude_unset=True)
@@ -351,6 +416,7 @@ async def list_meetings(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     q = select(Meeting).where(Meeting.project_id == project_id)
     if meeting_type:
         q = q.where(Meeting.meeting_type == meeting_type)
@@ -371,9 +437,7 @@ async def create_meeting(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
-    if not proj:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    await ensure_project_in_firm(db, project_id, current_user)
     m = Meeting(project_id=project_id, **payload.model_dump())
     db.add(m)
     await db.commit()
@@ -390,6 +454,7 @@ async def get_meeting(
     m = (await db.execute(select(Meeting).where(Meeting.id == meeting_id))).scalar_one_or_none()
     if not m:
         raise HTTPException(status_code=404, detail="会议不存在")
+    await ensure_project_in_firm(db, m.project_id, current_user)
     return m
 
 
@@ -403,6 +468,7 @@ async def update_meeting(
     m = (await db.execute(select(Meeting).where(Meeting.id == meeting_id))).scalar_one_or_none()
     if not m:
         raise HTTPException(status_code=404, detail="会议不存在")
+    await ensure_project_in_firm(db, m.project_id, current_user)
     for k, v in payload.model_dump(exclude_unset=True).items():
         if v is not None:
             setattr(m, k, v)
@@ -421,6 +487,11 @@ async def submit_meeting_record(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # 多租户隔离: 先查 meeting, 通过其 project_id 校验 firm
+    m = (await db.execute(select(Meeting).where(Meeting.id == meeting_id))).scalar_one_or_none()
+    if m is None:
+        raise HTTPException(status_code=404, detail="会议不存在")
+    await ensure_project_in_firm(db, m.project_id, current_user)
     try:
         return await team_management_service.submit_meeting_record(db, meeting_id, payload)
     except ValueError as exc:
@@ -445,6 +516,7 @@ async def list_daily_reports(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     q = select(DailyReport).where(DailyReport.project_id == project_id)
     if member_id:
         q = q.where(DailyReport.member_id == member_id)
@@ -468,9 +540,9 @@ async def create_daily_report(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
-    if not proj:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    await ensure_project_in_firm(db, project_id, current_user)
+    # 成员也要校验 firm (汇报人必须是同所成员)
+    await ensure_team_member_in_firm(db, member_id, current_user)
     r = DailyReport(project_id=project_id, member_id=member_id, **payload.model_dump())
     db.add(r)
     await db.commit()
@@ -495,6 +567,7 @@ async def list_blockers(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     q = select(Blocker).where(Blocker.project_id == project_id)
     if status:
         q = q.where(Blocker.status == status)
@@ -518,9 +591,8 @@ async def create_blocker(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
-    if not proj:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    await ensure_project_in_firm(db, project_id, current_user)
+    await ensure_team_member_in_firm(db, member_id, current_user)
     b = Blocker(
         project_id=project_id,
         member_id=member_id,
@@ -546,6 +618,7 @@ async def update_blocker(
     b = (await db.execute(select(Blocker).where(Blocker.id == blocker_id))).scalar_one_or_none()
     if not b:
         raise HTTPException(status_code=404, detail="卡点不存在")
+    await ensure_project_in_firm(db, b.project_id, current_user)
     for k, v in payload.model_dump(exclude_unset=True).items():
         if v is not None:
             setattr(b, k, v)
@@ -572,9 +645,7 @@ async def get_dashboard(
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """项目综合进度看板。"""
-    proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
-    if not proj:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    proj = await ensure_project_in_firm(db, project_id, current_user)
 
     proj_summary = await ProgressTracker.collect_project_summary(db, project_id)
     blocker_summary = await ProgressTracker.collect_blocker_summary(db, project_id)
@@ -631,6 +702,7 @@ async def list_recommendations(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     q = (
         select(ManagementRecommendation)
         .where(ManagementRecommendation.project_id == project_id)
@@ -652,6 +724,7 @@ async def generate_recommendation(
     current_user: User = Depends(get_current_user),
 ):
     """AI 周期性生成管理建议。"""
+    await ensure_project_in_firm(db, project_id, current_user)
     payload = payload or ManagementRecommendationRequest()
     try:
         rec = await team_management_service.generate_recommendations(
@@ -675,9 +748,19 @@ async def confirm_recommendation(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # 多租户隔离: 通过 rec.project_id 校验 firm
+    rec = (
+        await db.execute(
+            select(ManagementRecommendation).where(ManagementRecommendation.id == rec_id)
+        )
+    ).scalar_one_or_none()
+    if rec is None:
+        raise HTTPException(status_code=404, detail="建议记录不存在")
+    await ensure_project_in_firm(db, rec.project_id, current_user)
     try:
+        # P1 (2026-06-19): confirmed_by 改服务端从 token 取, 不再信任 client 文本
         return await team_management_service.confirm_recommendation(
-            db, rec_id, payload.confirmed_by, payload.manager_notes
+            db, rec_id, current_user, payload.manager_notes
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

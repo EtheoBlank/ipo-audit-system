@@ -1,5 +1,6 @@
 """API routes for workbook generation."""
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import List, Optional
@@ -10,9 +11,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from app.api._helpers import get_project_or_404
+
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.db_models import Project, AccountBalance
+from app.models.db_models import AccountBalance
 from app.models.db.auth import User
 from app.models.audit import (
     WorkbookGenerateRequest,
@@ -74,7 +77,10 @@ async def generate_workbook(
     if request.template_type not in template_generators:
         raise HTTPException(status_code=400, detail=f"不支持的模板类型: {request.template_type}")
 
-    output_path = template_generators[request.template_type](df_balances)
+    # P1 (2026-06-19): openpyxl wb.save() 同步 IO, to_thread 释放 event loop.
+    output_path = await asyncio.to_thread(
+        template_generators[request.template_type], df_balances
+    )
 
     return WorkbookGenerateResponse(
         file_path=str(output_path),
@@ -86,18 +92,28 @@ async def generate_workbook(
 @router.get("/download/{filename}")
 async def download_workbook(
     filename: str,
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Download generated workbook file.
 
-    Security: only allow alphanumeric + underscore/dash/dot filenames
-    and resolve against the output root to prevent path traversal.
+    Security:
+      - only allow alphanumeric + underscore/dash/dot filenames
+      - resolve against the output root to prevent path traversal
+      - 多租户硬隔离: 从 filename 抽出 project_id 后, 用 ensure_project_in_firm
+        校验 current_user.firm_id 是否能访问; 抽不到 project_id 直接 404 防绕过
     """
     import re
 
     # Reject obviously malicious filenames (path traversal, special chars)
     if not re.match(r"^[\w.\-]+$", filename):
         raise HTTPException(status_code=400, detail="非法文件名")
+
+    # 多租户硬隔离: 从 filename 抽 project_id, 校验 firm 归属
+    m = re.search(r"project_(\d+)", filename)
+    if not m:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    await ensure_project_in_firm(db, int(m.group(1)), current_user)
 
     # Search for file in any project directory
     file_path: Path | None = None
@@ -125,6 +141,11 @@ async def check_trial_balance(
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Check trial balance for a project."""
+    # round 31 修 round 29 xfail 捕到的 P0 IDOR + KeyError:
+    #   1) 缺 ensure_project_in_firm → 跨所可读别所科目余额
+    #   2) 用 balance_result["ending"] 但 TrialBalanceService.check_balance 返回
+    #      嵌套 "standalone.ending", KeyError → 500
+    await ensure_project_in_firm(db, request.project_id, current_user)
     result = await db.execute(
         select(AccountBalance).where(AccountBalance.project_id == request.project_id)
     )
@@ -138,11 +159,12 @@ async def check_trial_balance(
     balance_result = TrialBalanceService.check_balance(df_balances)
     account_summary = TrialBalanceService.get_account_summary(df_balances)
 
+    standalone_ending = balance_result["standalone"]["ending"]
     return TrialBalanceResponse(
         is_balanced=balance_result["is_balanced"],
-        total_debit=balance_result["ending"]["debit"],
-        total_credit=balance_result["ending"]["credit"],
-        difference=balance_result["ending"]["difference"],
+        total_debit=standalone_ending["debit"],
+        total_credit=standalone_ending["credit"],
+        difference=standalone_ending["difference"],
         account_details=account_summary,
     )
 
@@ -187,12 +209,8 @@ async def generate_audit_note(
     返回的 ``note`` 是 markdown，前端可直接渲染或复制到 Excel 备注。
     ``references_kb`` / ``references_regulations`` 列出引用依据，便于回溯。
     """
-    # 项目存在性校验 (避免拿到陈旧 project_id)
-    project = (
-        await db.execute(select(Project).where(Project.id == req.project_id))
-    ).scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    # 多租户硬隔离: 替换原来的 select(Project)+404, 跨事务所访问直接 403
+    project = await ensure_project_in_firm(db, req.project_id, current_user)
 
     industry = req.industry or project.industry
 
@@ -272,11 +290,8 @@ async def generate_audit_notes_batch(
     current_user: User = Depends(get_current_user),
 ):
     """为指定底稿批量生成审计说明，并写回 Excel 末尾的"审计说明"sheet。"""
-    project = (
-        await db.execute(select(Project).where(Project.id == req.project_id))
-    ).scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    # P0 IDOR + 多租户 (2026-06-19): 直查 Project 后无 firm 校验
+    project = await get_project_or_404(db, req.project_id, current_user=current_user)
 
     # 1) 找到底稿文件
     import re as _re
@@ -298,24 +313,48 @@ async def generate_audit_notes_batch(
     if not rows:
         raise HTTPException(status_code=404, detail="未找到可生成说明的科目")
 
-    # 3) 逐科目生成
+    # 3) 并发生成 — P0 性能修复 (2026-06-19)
+    # 旧逻辑: 串行 for 循环, 30+ 科目 60s+; 现 asyncio.Semaphore + gather
+    import asyncio as _asyncio
+    sem = _asyncio.Semaphore(5)
+
+    async def _gen_one(ab):
+        async with sem:
+            ctx = AuditNoteContext(
+                project_id=req.project_id,
+                account_code=ab.account_code,
+                account_name=ab.account_name,
+                balance_amount=ab.ending_balance,
+                industry=project.industry,
+                audit_objective=req.audit_objective,
+            )
+            return await audit_note_generator.generate(
+                db,
+                ctx,
+                kb_category=req.kb_category,
+                include_regulations=req.include_regulations,
+            )
+
+    results = await _asyncio.gather(
+        *[_gen_one(ab) for ab in rows],
+        return_exceptions=True,
+    )
+
     notes_payload: list[dict] = []
     ai_enabled = False
-    for ab in rows:
-        ctx = AuditNoteContext(
-            project_id=req.project_id,
-            account_code=ab.account_code,
-            account_name=ab.account_name,
-            balance_amount=ab.ending_balance,
-            industry=project.industry,
-            audit_objective=req.audit_objective,
-        )
-        result = await audit_note_generator.generate(
-            db,
-            ctx,
-            kb_category=req.kb_category,
-            include_regulations=req.include_regulations,
-        )
+    for ab, result in zip(rows, results):
+        if isinstance(result, Exception):
+            logger.warning("生成审计说明失败 %s: %s", ab.account_code, result)
+            notes_payload.append(
+                {
+                    "account_code": ab.account_code,
+                    "account_name": ab.account_name,
+                    "note": f"(AI 生成失败: {type(result).__name__})",
+                    "references_kb": [],
+                    "references_regulations": [],
+                }
+            )
+            continue
         ai_enabled = ai_enabled or result.ai_enabled
         notes_payload.append(
             {
@@ -333,7 +372,8 @@ async def generate_audit_notes_batch(
         company_name=project.company_name,
         fiscal_year=project.fiscal_year,
     )
-    gen.write_audit_notes_sheet(candidate, notes_payload)
+    # P1 (2026-06-19): openpyxl wb.save() 同步 IO, to_thread 释放 event loop.
+    await asyncio.to_thread(gen.write_audit_notes_sheet, candidate, notes_payload)
 
     return AuditNoteBatchResponse(
         workbook_file=candidate.name,

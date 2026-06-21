@@ -144,7 +144,8 @@ class QAEngine:
                     context,
                 )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("LLM 生成问题失败，回退到模板: %s", exc)
+                # round 36 P1: warning 留不下 traceback, 改 exception
+                logger.exception("LLM 生成问题失败，回退到模板: %s", exc)
 
         return PendingQuestion(
             question_id=f"q_{topic}_{abs(hash(tuple(f.field_id for f in fields))) % 10**8}",

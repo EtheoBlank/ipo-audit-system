@@ -1,5 +1,6 @@
 """通知中心页面 (Pack A)."""
 
+# P1 widget keys (round 32): notif_mod, notif_sev, notif_unread, notif_limit, notif_mark_page, notif_mark_all
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -7,7 +8,9 @@ from typing import Any, Dict
 import pandas as pd
 import streamlit as st
 
-from frontend._http import API_BASE_URL, api_request
+from frontend._components import apply_feishu_theme, page_header
+from frontend._http import api_request
+from frontend._components.safe_render import safe_link
 
 
 def _api(method: str, endpoint: str, **kwargs):
@@ -38,6 +41,9 @@ _SEVERITY_BADGE = {
 
 
 def show_notifications() -> None:
+    apply_feishu_theme()
+    page_header('🔔', '通知中心', '通用通知 / 按模块 / 按严重度聚合')
+
     st.markdown(
         '<p style="font-size:1.8rem;font-weight:bold;color:#4472C4;">🔔 通知中心</p>',
         unsafe_allow_html=True,
@@ -129,12 +135,12 @@ def show_notifications() -> None:
             if it.get("body"):
                 st.write(it["body"])
             if it.get("link"):
-                st.markdown(f"🔗 [打开]({it['link']})")
+                st.markdown(safe_link("🔗 打开", it.get('link')))
             if it.get("payload"):
                 with st.expander("详细载荷", expanded=False):
                     st.code(it["payload"])
             if not it.get("is_read"):
-                if st.button(f"标记已读", key=f"mr_{it['id']}"):
+                if st.button("标记已读", key=f"mr_{it['id']}"):
                     r = _api("POST", "/api/notifications/mark-read", json={"ids": [it["id"]]})
                     if r:
                         st.rerun()

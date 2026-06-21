@@ -7,35 +7,35 @@
 from __future__ import annotations
 
 import logging
-import math
-from dataclasses import dataclass
+import math  # noqa: F401
+from dataclasses import dataclass  # noqa: F401
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select  # noqa: F401
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db.audit_cycles import (
-    AssetImpairmentTest,
+    AssetImpairmentTest,  # noqa: F401
     ConstructionInProgress,
     DepreciationRecalc,
-    ECLAssessment,
+    ECLAssessment,  # noqa: F401
     ExpenseAnomalyFlag,
     ExpenseRecord,
     FixedAsset,
-    GoingConcernAssessment,
-    IncomeTaxReconciliation,
-    IntangibleAsset,
+    GoingConcernAssessment,  # noqa: F401
+    IncomeTaxReconciliation,  # noqa: F401
+    IntangibleAsset,  # noqa: F401
     LeaseAmortizationSchedule,
     LeaseContract,
-    LongTermInvestment,
+    LongTermInvestment,  # noqa: F401
     PayableAging,
     PayrollReconciliation,
     PayrollRecord,
-    ProvisionEstimate,
-    RDCapitalizationAssessment,
-    SubsequentEvent,
-    Supplier,
+    ProvisionEstimate,  # noqa: F401
+    RDCapitalizationAssessment,  # noqa: F401
+    SubsequentEvent,  # noqa: F401
+    Supplier,  # noqa: F401
 )
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,9 @@ class ExpensesAnomalyDetector:
         try:
             dt = datetime.strptime(voucher_date, "%Y-%m-%d")
             return dt.weekday() >= 5
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # round 35 P1: 之前静默返 False, 数据脏了都不知道 (e.g. Excel 日期格式错).
+            logger.exception("audit_cycles: is_holiday 解析失败 raw=%r exc=%s", voucher_date, exc)
             return False
 
     @staticmethod
@@ -160,6 +162,28 @@ class ExpensesAnomalyDetector:
 
 class PayrollReconciler:
     @staticmethod
+    def classify(
+        gross_total: float, ss_total: float, hf_total: float, tax_total: float
+    ) -> Dict[str, Any]:
+        """纯函数: 给定四项金额, 判定是否平衡.
+
+        P0 修复 (2026-06-17): 旧版用 abs(gross*0.5 - deductions) 永远接近 0,
+        导致 is_balanced 几乎恒 True. 正确口径: 扣款合计 (社保+公积金+个税)
+        不应超过工资, 否则不平. 5% 容差允许少量补缴等正常波动.
+
+        Returns:
+            {is_balanced, discrepancy_amount, notes}
+        """
+        deductions = ss_total + hf_total + tax_total
+        is_balanced = (gross_total == 0) or (deductions <= gross_total * 1.05)
+        discrepancy = max(0.0, deductions - gross_total)
+        return {
+            "is_balanced": is_balanced,
+            "discrepancy_amount": round(discrepancy, 2),
+            "notes": None if is_balanced else "扣款合计超过工资 5% 容差, 请复核",
+        }
+
+    @staticmethod
     async def reconcile(
         db: AsyncSession,
         *,
@@ -176,10 +200,7 @@ class PayrollReconciler:
         ss_total = sum(float(r.social_security or 0) for r in rows)
         hf_total = sum(float(r.housing_fund or 0) for r in rows)
         tax_total = sum(float(r.income_tax or 0) for r in rows)
-        # 简化: 社保 + 公积金 + 个税应当 < 工资; 不平定义为差 > 5%
-        deductions = ss_total + hf_total + tax_total
-        discrepancy = abs(gross_total * 0.50 - deductions)  # 经验值: 扣款约占 50%
-        is_balanced = (gross_total == 0) or (discrepancy / max(1, gross_total)) < 0.10
+        result = PayrollReconciler.classify(gross_total, ss_total, hf_total, tax_total)
         rec = PayrollReconciliation(
             project_id=project_id,
             period_yyyymm=period_yyyymm,
@@ -187,9 +208,9 @@ class PayrollReconciler:
             social_security_total=round(ss_total, 2),
             housing_fund_total=round(hf_total, 2),
             income_tax_total=round(tax_total, 2),
-            discrepancy_amount=round(discrepancy, 2),
-            is_balanced=is_balanced,
-            discrepancy_notes=None if is_balanced else "扣款合计偏离工资 50% 经验值, 请复核",
+            discrepancy_amount=result["discrepancy_amount"],
+            is_balanced=result["is_balanced"],
+            discrepancy_notes=result["notes"],
             created_at=_utcnow_naive(),
         )
         db.add(rec)
@@ -380,6 +401,34 @@ class LeaseAmortizer:
         return round(pv, 2)
 
     @staticmethod
+    def compute_periods(start_year_month: str, n: int) -> List[str]:
+        """纯函数: 给定起始年月 (YYYY-MM) 和期数, 返回 N 个 YYYY-MM 字符串.
+
+        P0 修复 (2026-06-17): 旧版用 ``start_dt.month + i - 2`` 在跨年边界 off-by-one
+        (如 start=2026-01, i=12 算出 2026-12 而非 2027-01). 改为绝对月数累加.
+
+        Args:
+            start_year_month: 起始年月, 格式 ``YYYY-MM``
+            n: 期数 (≥1)
+
+        Returns:
+            长度 n 的 ``YYYY-MM`` 列表, i=1 → start_year_month. 失败返 [].
+        """
+        if n <= 0 or not start_year_month:
+            return []
+        try:
+            start_dt = datetime.strptime(start_year_month, "%Y-%m")
+        except (ValueError, TypeError):
+            return []
+        out: List[str] = []
+        for i in range(1, n + 1):
+            total_months = start_dt.year * 12 + (start_dt.month - 1) + (i - 1)
+            yyyy = total_months // 12
+            mm = total_months % 12 + 1
+            out.append(f"{yyyy:04d}-{mm:02d}")
+        return out
+
+    @staticmethod
     async def build_schedule(
         db: AsyncSession,
         *,
@@ -421,22 +470,22 @@ class LeaseAmortizer:
         records: List[LeaseAmortizationSchedule] = []
         try:
             start_dt = datetime.strptime(contract.commencement_date, "%Y-%m-%d")
-        except Exception:
-            start_dt = datetime.utcnow()
+        except Exception as exc:  # noqa: BLE001
+            # round 35 P1: 之前静默吞 + 用 now() 假装, 租赁摊销全错位.
+            logger.exception(
+                "audit_cycles: 租赁合同 %s commencement_date 解析失败 raw=%r exc=%s",
+                contract_id, contract.commencement_date, exc,
+            )
+            start_dt = datetime.now(timezone.utc).replace(tzinfo=None)
 
+        # P0 修复: 月度递推用 compute_periods 静态方法, 跨年边界正确
+        periods = LeaseAmortizer.compute_periods(start_dt.strftime("%Y-%m"), n)
         for i in range(1, n + 1):
             interest = round(liability_balance * monthly_rate, 2)
             principal = round(payment - interest, 2)
             liability_balance = round(max(0.0, liability_balance - principal), 2)
             rou_balance = round(max(0.0, rou_balance - rou_monthly_depreciation), 2)
-            period = (start_dt.replace(day=1)).strftime("%Y-%m")  # 简化
-            try:
-                # 月度递推
-                yyyy = start_dt.year + (start_dt.month + i - 2) // 12
-                mm = (start_dt.month + i - 2) % 12 + 1
-                period = f"{yyyy:04d}-{mm:02d}"
-            except Exception:
-                pass
+            period = periods[i - 1] if i - 1 < len(periods) else (start_dt.replace(day=1)).strftime("%Y-%m")
             rec = LeaseAmortizationSchedule(
                 contract_id=contract_id,
                 period_yyyymm=period,

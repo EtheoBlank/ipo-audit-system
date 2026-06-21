@@ -47,7 +47,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import logging
@@ -63,6 +62,22 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api._helpers import get_or_404
+
+
+def _sha256_file(path: str) -> str:
+    """同步计算文件 SHA-256, 8K chunk, 供 asyncio.to_thread 调用."""
+    import hashlib as _hl
+    h = _hl.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _read_file_bytes(path: str) -> bytes:
+    """同步读文件字节, 供 asyncio.to_thread 调用."""
+    with open(path, "rb") as f:
+        return f.read()
 from app.core.database import get_db
 from app.models.db_models import (
     NoLlmConfigured,
@@ -114,7 +129,7 @@ from app.services.sentiment.briefing.generator import BriefingGenerator
 from app.services.sentiment.briefing.verifier import BriefingVerifier
 from app.services.sentiment.briefing.word_exporter import BriefingWordExporter
 from app.services.sentiment.dedup import compute_content_hash
-from app.services.sentiment.notifier import mark_all_read, mark_read
+from app.services.sentiment.notifier import mark_all_read, mark_read, mark_read_broadcast
 from app.services.sentiment.quarterly.aggregator import aggregate_window, lock_references
 from app.services.sentiment.quarterly.financial_input import (
     FinancialInput,
@@ -127,6 +142,7 @@ from app.services.sentiment.quarterly.trigger import (
 from app.services.sentiment.quarterly.verifier import QuarterlyVerifier
 from app.services.sentiment.quarterly.word_exporter import QuarterlyReportWordExporter
 from app.services.sentiment.scheduler import (
+    ScanRateLimitError,
     get_scheduler,
     scan_now,
     start_scheduler,
@@ -134,6 +150,10 @@ from app.services.sentiment.scheduler import (
 )
 from app.models.db.auth import User
 from app.services.auth import get_current_user, get_current_user_optional
+from app.services.auth.tenant import ensure_project_in_firm, _is_admin, _user_firm_id
+from app.services.auth.dependencies import require_role
+from app.models.db.auth import ROLE_ADMIN, ROLE_MANAGER
+from app.models.db.notification import ALL_NOTIF_SEVERITIES
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sentiment", tags=["舆情跟踪"])
@@ -162,8 +182,9 @@ def _validate_transition(current: str, target: str) -> None:
 async def list_subjects(
     project_id: int = Query(...),
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     res = await db.execute(
         select(SentimentSubject).where(SentimentSubject.project_id == project_id)
     )
@@ -176,8 +197,8 @@ async def create_subject(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # 校验 project 存在
-    await get_or_404(db, Project, body.project_id, "项目")
+    # 校验 project 存在 + 多租户
+    await ensure_project_in_firm(db, body.project_id, current_user)
     sub = SentimentSubject(**body.model_dump())
     db.add(sub)
     try:
@@ -197,6 +218,7 @@ async def update_subject(
     current_user: User = Depends(get_current_user),
 ):
     sub = await get_or_404(db, SentimentSubject, subject_id, "别名")
+    await ensure_project_in_firm(db, sub.project_id, current_user)
     for k, v in body.model_dump(exclude_none=True).items():
         setattr(sub, k, v)
     await db.commit()
@@ -211,6 +233,7 @@ async def delete_subject(
     current_user: User = Depends(get_current_user),
 ):
     sub = await get_or_404(db, SentimentSubject, subject_id, "别名")
+    await ensure_project_in_firm(db, sub.project_id, current_user)
     sub.is_active = False
     await db.commit()
 
@@ -234,9 +257,10 @@ async def toggle_source(
     source_id: int,
     body: SentimentSourceToggle,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    # P0 RBAC (2026-06-19): 信源启停影响全局抓取, 限制 manager+ (与 scheduler/approve 同级)
+    current_user: User = Depends(require_role(ROLE_MANAGER)),
 ):
-    src = await get_or_404(db, SentimentSource, source_id, "信源")
+    src = await get_or_404(db, SentimentSource, source_id, label="信源")
     src.is_enabled = body.is_enabled
     await db.commit()
     await db.refresh(src)
@@ -253,21 +277,35 @@ async def list_unread(
     project_id: Optional[int] = None,
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
     """返回未读通知 + 总数 (供前端红点)."""
     from sqlalchemy import func
+    from app.models.db_models import Project
+    from sqlalchemy import or_
 
-    q = select(SentimentNotification).where(SentimentNotification.is_read == False)  # noqa: E712
+    q = select(SentimentNotification).join(Project, SentimentNotification.project_id == Project.id)
+    # 多租户过滤
+    if not _is_admin(current_user):
+        firm_id = _user_firm_id(current_user)
+        if firm_id is not None:
+            q = q.where(or_(Project.firm_id == firm_id, Project.firm_id.is_(None)))
     if project_id is not None:
+        await ensure_project_in_firm(db, project_id, current_user)
         q = q.where(SentimentNotification.project_id == project_id)
+    q = q.where(SentimentNotification.is_read == False)  # noqa: E712
     q = q.order_by(SentimentNotification.created_at.desc()).limit(limit)
     res = await db.execute(q)
     items = res.scalars().all()
 
-    cnt_q = select(func.count(SentimentNotification.id)).where(
-        SentimentNotification.is_read == False,  # noqa: E712
+    cnt_q = select(func.count(SentimentNotification.id)).join(
+        Project, SentimentNotification.project_id == Project.id
     )
+    if not _is_admin(current_user):
+        firm_id = _user_firm_id(current_user)
+        if firm_id is not None:
+            cnt_q = cnt_q.where(or_(Project.firm_id == firm_id, Project.firm_id.is_(None)))
+    cnt_q = cnt_q.where(SentimentNotification.is_read == False)  # noqa: E712
     if project_id is not None:
         cnt_q = cnt_q.where(SentimentNotification.project_id == project_id)
     cnt_res = await db.execute(cnt_q)
@@ -285,8 +323,40 @@ async def read_one(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    ok = await mark_read(db, notification_id)
-    if not ok:
+    # P0 IDOR 修复 (2026-06-20 round 32): 必须传 user_id, 按 (id, user_id) 限定
+    # 广播通知 (user_id IS NULL) 走 mark_read_broadcast, 需校验 firm
+    from app.models.db_models import SentimentNotification as _SN
+
+    n = (
+        await db.execute(select(_SN).where(_SN.id == notification_id))
+    ).scalar_one_or_none()
+    if n is None:
+        raise HTTPException(status_code=404, detail="通知不存在")
+    # 1) firm 边界 (admin 跳过)
+    if current_user.role != ROLE_ADMIN:
+        if n.firm_id is not None and n.firm_id != current_user.firm_id:
+            raise HTTPException(status_code=404, detail="通知不存在")
+        if n.project_id is not None:
+            await ensure_project_in_firm(db, n.project_id, current_user)
+    # 2) 区分单发 / 广播
+    if n.user_id is None:
+        # 广播: 必须 firm 匹配
+        #  - 显式 firm_id: 直接比
+        #  - 隐式 (firm_id=None 但 project_id 关联): 用 project 的 firm
+        target_firm_id = n.firm_id
+        if target_firm_id is None and n.project_id is not None:
+            proj = (
+                await db.execute(select(Project).where(Project.id == n.project_id))
+            ).scalar_one_or_none()
+            if proj is not None:
+                target_firm_id = proj.firm_id
+        if target_firm_id is not None and target_firm_id != current_user.firm_id:
+            raise HTTPException(status_code=403, detail="无权访问此通知")
+        ok = await mark_read_broadcast(db, notification_id, current_user.firm_id)
+    else:
+        # 单发: 必须 user_id 匹配, 否则别人看不到/不能标
+        ok = await mark_read(db, notification_id, current_user.id)
+    if not ok and not n.is_read:
         raise HTTPException(status_code=404, detail="通知不存在或已读")
     await db.commit()
     return {"ok": True}
@@ -298,7 +368,29 @@ async def read_all(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    n = await mark_all_read(db, project_id=project_id)
+    # P0 IDOR 修复 (2026-06-19): project_id 必走 firm 校验; 不传则按 user 的项目范围
+    if project_id is not None:
+        await ensure_project_in_firm(db, project_id, current_user)
+        n = await mark_all_read(db, project_id=project_id)
+    else:
+        # 不传 project_id: scope 到当前 user 可访问的项目 (避免误标别所)
+        from app.models.db_models import SentimentNotification as _SN
+        from app.services.auth.tenant import scope_projects_to_firm
+
+        proj_q = select(Project.id)
+        proj_q = scope_projects_to_firm(proj_q, current_user)
+        scoped_ids = [pid for (pid,) in (await db.execute(proj_q)).all()]
+        if not scoped_ids:
+            return {"ok": True, "count": 0}
+        from sqlalchemy import update as _upd
+
+        stmt = (
+            _upd(_SN)
+            .where(_SN.is_read.is_(False), _SN.project_id.in_(scoped_ids))
+            .values(is_read=True, read_at=datetime.now(timezone.utc))
+        )
+        res = await db.execute(stmt)
+        n = res.rowcount or 0
     await db.commit()
     return {"ok": True, "count": n}
 
@@ -318,10 +410,19 @@ async def list_events(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
-    q = select(SentimentEvent)
+    from sqlalchemy import or_
+    from app.models.db_models import Project
+
+    q = select(SentimentEvent).join(Project, SentimentEvent.project_id == Project.id)
+    # 多租户: admin 看全部, 其他人只看自己事务所的项目
+    if not _is_admin(current_user):
+        firm_id = _user_firm_id(current_user)
+        if firm_id is not None:
+            q = q.where(or_(Project.firm_id == firm_id, Project.firm_id.is_(None)))
     if project_id is not None:
+        await ensure_project_in_firm(db, project_id, current_user)
         q = q.where(SentimentEvent.project_id == project_id)
     if severity:
         q = q.where(SentimentEvent.severity == severity)
@@ -343,7 +444,10 @@ async def get_event(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    return await get_or_404(db, SentimentEvent, event_id, "事件")
+    ev = await get_or_404(db, SentimentEvent, event_id, "事件")
+    if current_user and ev.project_id:
+        await ensure_project_in_firm(db, ev.project_id, current_user)
+    return ev
 
 
 @router.post("/events/{event_id}/ignore", response_model=SentimentEventResponse)
@@ -353,6 +457,7 @@ async def ignore_event(
     current_user: User = Depends(get_current_user),
 ):
     ev = await get_or_404(db, SentimentEvent, event_id, "事件")
+    await ensure_project_in_firm(db, ev.project_id, current_user)
     ev.review_status = SENTIMENT_EVENT_STATUS_IGNORED
     await db.commit()
     await db.refresh(ev)
@@ -363,9 +468,17 @@ async def ignore_event(
 async def import_event(
     body: SentimentEventImport,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    # P0 RBAC (2026-06-19): Assistant 不应能 import 绕过抓取流程;
+    # 手工录入舆情 = 录入关键事件, 至少 manager+ 才能确认, 否则任意 assistant 可注入 critical 事件.
+    current_user: User = Depends(require_role(ROLE_MANAGER)),
 ):
-    await get_or_404(db, Project, body.project_id, "项目")
+    await ensure_project_in_firm(db, body.project_id, current_user)
+    # P0 severity 白名单 (2026-06-19): 防止客户端伪造 critical 事件触发全局告警风暴
+    if body.severity not in ALL_NOTIF_SEVERITIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"severity 必须是 {ALL_NOTIF_SEVERITIES} 之一, 收到 {body.severity!r}",
+        )
     ch = compute_content_hash(
         source_code="manual",
         title=body.title,
@@ -407,16 +520,16 @@ async def import_event(
 
 @router.get("/briefings", response_model=list[SentimentBriefingResponse])
 async def list_briefings(
-    project_id: Optional[int] = None,
+    project_id: int = Query(..., description="项目 ID"),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     status: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     q = select(SentimentDailyBriefing)
-    if project_id is not None:
-        q = q.where(SentimentDailyBriefing.project_id == project_id)
+    q = q.where(SentimentDailyBriefing.project_id == project_id)
     if date_from:
         q = q.where(SentimentDailyBriefing.briefing_date >= date_from)
     if date_to:
@@ -432,9 +545,11 @@ async def list_briefings(
 async def get_briefing(
     briefing_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
-    return await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    await ensure_project_in_firm(db, brief.project_id, current_user)
+    return brief
 
 
 @router.post("/briefings/generate", response_model=SentimentBriefingResponse)
@@ -443,7 +558,7 @@ async def generate_briefing(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    project = await get_or_404(db, Project, body.project_id, "项目")
+    project = await ensure_project_in_firm(db, body.project_id, current_user)
     briefing_date = body.briefing_date or _utcnow().strftime("%Y-%m-%d")
 
     # 幂等检查 (除非 force=True)
@@ -603,6 +718,7 @@ async def submit_briefing(
     current_user: User = Depends(get_current_user),
 ):
     brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    await ensure_project_in_firm(db, brief.project_id, current_user)
     if brief.is_locked:
         raise HTTPException(status_code=400, detail="简报已锁定, 不可修改状态")
     if brief.verification_failed:
@@ -627,6 +743,7 @@ async def approve_briefing(
     current_user: User = Depends(get_current_user),
 ):
     brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    await ensure_project_in_firm(db, brief.project_id, current_user)
     if brief.is_locked:
         raise HTTPException(status_code=400, detail="简报已锁定, 不可修改状态")
     # 状态机: review -> approved (校验) -> frozen (立即)
@@ -654,6 +771,7 @@ async def reject_briefing(
     current_user: User = Depends(get_current_user),
 ):
     brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    await ensure_project_in_firm(db, brief.project_id, current_user)
     if brief.is_locked:
         raise HTTPException(status_code=400, detail="简报已锁定, 不可修改状态")
     _validate_transition(brief.status, SENTIMENT_DOC_STATUS_REJECTED)
@@ -686,6 +804,7 @@ async def recall_briefing(
 ):
     """审阅人撤回 (review -> draft). 与 /revise 不同: /revise 是基于 locked 创建新版本."""
     brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    await ensure_project_in_firm(db, brief.project_id, current_user)
     if brief.is_locked:
         raise HTTPException(status_code=400, detail="简报已锁定, 不可撤回")
     _validate_transition(brief.status, SENTIMENT_DOC_STATUS_DRAFT)
@@ -709,6 +828,7 @@ async def revise_briefing(
 ):
     """基于现有简报创建一份新版本 (draft). 老版本冻结在 revision 表."""
     brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    await ensure_project_in_firm(db, brief.project_id, current_user)
     if not brief.is_locked:
         raise HTTPException(status_code=400, detail="仅已锁定的简报可修订 (基于旧版新建)")
 
@@ -751,18 +871,17 @@ async def download_briefing(
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    await ensure_project_in_firm(db, brief.project_id, current_user)
     if not brief.word_report_path or not Path(brief.word_report_path).exists():
         raise HTTPException(status_code=404, detail="Word 文档不存在")
-    # SHA-256 校验
+    # P1 性能 (2026-06-19): 旧版同步 open 阻塞事件循环; 用 asyncio.to_thread 释放
+    import asyncio as _asyncio
     if brief.word_report_sha256:
-        h = hashlib.sha256()
-        with open(brief.word_report_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                h.update(chunk)
-        if h.hexdigest() != brief.word_report_sha256:
+        expected = brief.word_report_sha256
+        actual = await _asyncio.to_thread(_sha256_file, brief.word_report_path)
+        if actual != expected:
             raise HTTPException(status_code=409, detail="文件 SHA-256 与记录不一致, 拒绝下载")
-    with open(brief.word_report_path, "rb") as f:
-        data = f.read()
+    data = await _asyncio.to_thread(_read_file_bytes, brief.word_report_path)
     fname = Path(brief.word_report_path).name
     return StreamingResponse(
         io.BytesIO(data),
@@ -778,6 +897,7 @@ async def reverify_briefing(
     current_user: User = Depends(get_current_user),
 ):
     brief = await get_or_404(db, SentimentDailyBriefing, briefing_id, "简报")
+    await ensure_project_in_firm(db, brief.project_id, current_user)
     if not brief.ai_summary:
         raise HTTPException(status_code=400, detail="简报无 ai_summary, 无法核验")
     # 拉对应事件
@@ -816,13 +936,13 @@ async def reverify_briefing(
 
 @router.get("/reports", response_model=list[SentimentQuarterlyReportResponse])
 async def list_reports(
-    project_id: Optional[int] = None,
+    project_id: int = Query(..., description="项目 ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
+    await ensure_project_in_firm(db, project_id, current_user)
     q = select(SentimentQuarterlyReport)
-    if project_id is not None:
-        q = q.where(SentimentQuarterlyReport.project_id == project_id)
+    q = q.where(SentimentQuarterlyReport.project_id == project_id)
     q = q.order_by(
         SentimentQuarterlyReport.fiscal_year.desc(), SentimentQuarterlyReport.period_type
     )
@@ -834,9 +954,11 @@ async def list_reports(
 async def get_report(
     report_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
-    return await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+    rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+    await ensure_project_in_firm(db, rep.project_id, current_user)
+    return rep
 
 
 @router.post("/reports", response_model=SentimentQuarterlyReportResponse, status_code=201)
@@ -847,7 +969,7 @@ async def create_report(
 ):
     if body.period_type not in SENTIMENT_PERIOD_TYPE_LABELS:
         raise HTTPException(status_code=400, detail="period_type 必须是 Q1/H1/Q3/ANNUAL")
-    await get_or_404(db, Project, body.project_id, "项目")
+    await ensure_project_in_firm(db, body.project_id, current_user)
     rep = await create_or_get_report(
         db,
         body.project_id,
@@ -866,6 +988,7 @@ async def upload_financials(
     current_user: User = Depends(get_current_user),
 ):
     rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+    await ensure_project_in_firm(db, rep.project_id, current_user)
     if rep.is_locked:
         raise HTTPException(status_code=400, detail="报告已锁定, 不可修改")
 
@@ -897,12 +1020,13 @@ async def generate_report(
     current_user: User = Depends(get_current_user),
 ):
     rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+    await ensure_project_in_firm(db, rep.project_id, current_user)
     if rep.is_locked:
         raise HTTPException(status_code=400, detail="报告已锁定, 不可重新生成")
     if not rep.financial_input_json:
         raise HTTPException(status_code=400, detail="请先通过 /financials 上传季报数据")
 
-    project = await get_or_404(db, Project, rep.project_id, "项目")
+    project = await ensure_project_in_firm(db, rep.project_id, current_user)
     fin = FinancialInput.from_json(rep.financial_input_json)
 
     # 聚合窗口
@@ -1002,6 +1126,7 @@ async def submit_report(
     current_user: User = Depends(get_current_user),
 ):
     rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+    await ensure_project_in_firm(db, rep.project_id, current_user)
     if rep.is_locked:
         raise HTTPException(status_code=400, detail="报告已锁定")
     if rep.verification_failed:
@@ -1023,6 +1148,7 @@ async def approve_report(
     current_user: User = Depends(get_current_user),
 ):
     rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+    await ensure_project_in_firm(db, rep.project_id, current_user)
     if rep.is_locked:
         raise HTTPException(status_code=400, detail="报告已锁定")
     _validate_transition(rep.status, SENTIMENT_DOC_STATUS_APPROVED)
@@ -1058,6 +1184,7 @@ async def reject_report(
     current_user: User = Depends(get_current_user),
 ):
     rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+    await ensure_project_in_firm(db, rep.project_id, current_user)
     if rep.is_locked:
         raise HTTPException(status_code=400, detail="报告已锁定")
     _validate_transition(rep.status, SENTIMENT_DOC_STATUS_REJECTED)
@@ -1088,17 +1215,15 @@ async def download_report(
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+    await ensure_project_in_firm(db, rep.project_id, current_user)
     if not rep.word_report_path or not Path(rep.word_report_path).exists():
         raise HTTPException(status_code=404, detail="Word 文档不存在")
     if rep.word_report_sha256:
-        h = hashlib.sha256()
-        with open(rep.word_report_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                h.update(chunk)
-        if h.hexdigest() != rep.word_report_sha256:
+        expected = rep.word_report_sha256
+        actual = await _asyncio.to_thread(_sha256_file, rep.word_report_path)
+        if actual != expected:
             raise HTTPException(status_code=409, detail="文件 SHA-256 不一致")
-    with open(rep.word_report_path, "rb") as f:
-        data = f.read()
+    data = await _asyncio.to_thread(_read_file_bytes, rep.word_report_path)
     fname = Path(rep.word_report_path).name
     return StreamingResponse(
         io.BytesIO(data),
@@ -1114,6 +1239,7 @@ async def reverify_report(
     current_user: User = Depends(get_current_user),
 ):
     rep = await get_or_404(db, SentimentQuarterlyReport, report_id, "季度报告")
+    await ensure_project_in_firm(db, rep.project_id, current_user)
     if not rep.ai_report_md or not rep.financial_input_json:
         raise HTTPException(status_code=400, detail="报告无内容或无财务数据, 无法核验")
     fin = FinancialInput.from_json(rep.financial_input_json)
@@ -1165,8 +1291,9 @@ async def reverify_report(
 
 @router.get("/scheduler/status")
 async def scheduler_status(
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: User = Depends(require_role(ROLE_ADMIN)),
 ):
+    """调度器状态 — 仅 admin 可见（含 job 名/下次运行时间等内部信息）。"""
     s = get_scheduler()
     if s is None or not s.running:
         return {"running": False, "jobs": []}
@@ -1186,16 +1313,18 @@ async def scheduler_status(
 
 @router.post("/scheduler/start")
 async def sched_start(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(ROLE_ADMIN)),
 ):
+    """P0 修复: 限 admin 角色, 任何登录用户都能调会停服 (2026-06-18 Bug 扫描)."""
     await start_scheduler()
     return {"ok": True}
 
 
 @router.post("/scheduler/stop")
 async def sched_stop(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(ROLE_ADMIN)),
 ):
+    """P0 修复: 限 admin 角色."""
     await stop_scheduler()
     return {"ok": True}
 
@@ -1203,8 +1332,23 @@ async def sched_stop(
 @router.post("/scheduler/scan/now")
 async def sched_scan_now(
     body: Optional[SentimentScanRequest] = None,
-    current_user: User = Depends(get_current_user),
+    # round 28 P0-5: 限 manager+ (与 /scan/now 抓取影响范围一致)
+    current_user: User = Depends(require_role(ROLE_MANAGER)),
+    db: AsyncSession = Depends(get_db),
 ):
     pid = body.project_id if body else None
+    if pid is not None:
+        # round 28 P0-5: 多租户 IDOR 校验 — 必须先于速率限制/抓取
+        await ensure_project_in_firm(db, pid, current_user)
+        # round 28 P0-5: 速率限制 — 同 project 60s 内 1 次
+        from app.services.sentiment.scheduler import _check_and_record_scan
+
+        try:
+            _check_and_record_scan(pid)
+        except ScanRateLimitError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail=f"project {exc.project_id} 60s 内已扫描, last={exc.last_scan_at.isoformat()}",
+            ) from exc
     result = await scan_now(pid)
     return result

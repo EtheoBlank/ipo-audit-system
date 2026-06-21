@@ -97,27 +97,23 @@ class BriefingDetector:
         project_id: int,
         briefing_date: str,
     ) -> int:
-        """窗口: briefing_date 当天 (00:00 ~ 23:59) + 向前 lookback_hours 小时."""
-        window_start = self._parse_date(briefing_date) - timedelta(hours=self.lookback_hours)
-        window_end_str = briefing_date + " 23:59:59"
-        # 用 publish_date 字符串粗略比较 (YYYY-MM-DD 字典序 = 时间序)
-        window_start.strftime("%Y-%m-%d %H:%M:%S")
+        """窗口: briefing_date 当天 (00:00 ~ 23:59) + 向前 lookback_hours 小时.
+
+        实际用 ``lookback_days`` 倒推 — publish_date 字段是 ``Date`` 类型,
+        直接 ``publish_date >= cutoff_date`` 即可. 原实现把第一次查询结果丢掉了,
+        只用第二次(单日)查询, 导致 lookback_hours 形同虚设.
+        """
+        window_start_dt = self._parse_date(briefing_date) - timedelta(hours=self.lookback_hours)
+        window_start_str = window_start_dt.strftime("%Y-%m-%d")
+        window_end_str = briefing_date
 
         res = await db.execute(
             select(func.count(SentimentEvent.id)).where(
                 SentimentEvent.project_id == project_id,
                 SentimentEvent.review_status != SENTIMENT_EVENT_STATUS_IGNORED,
                 SentimentEvent.publish_date.is_not(None),
-                SentimentEvent.publish_date <= window_end_str[:10],
-                # 也包含当天的所有事件
-            )
-        )
-        # 简化: 全部当天的非 ignored 事件都算
-        res = await db.execute(
-            select(func.count(SentimentEvent.id)).where(
-                SentimentEvent.project_id == project_id,
-                SentimentEvent.review_status != SENTIMENT_EVENT_STATUS_IGNORED,
-                SentimentEvent.publish_date == briefing_date,
+                SentimentEvent.publish_date >= window_start_str,
+                SentimentEvent.publish_date <= window_end_str,
             )
         )
         return int(res.scalar() or 0)

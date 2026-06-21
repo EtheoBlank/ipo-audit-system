@@ -19,16 +19,17 @@ enableCORS = false
 enableXsrfProtection = false
 runOnSave = false
 fileWatcherType = "none"   # 容器内不需要热重载, 关掉省 CPU
+maxUploadSize = 50          # 单文件最大 50MB (P0 安全: 防上传大文件 OOM)
 
 [browser]
 gatherUsageStats = false
 
 [theme]
 base = "light"
-primaryColor = "#4472C4"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F0F2F6"
-textColor = "#262730"
+primaryColor = "#3370FF"             # 飞书主色 (蓝紫)
+backgroundColor = "#FFFFFF"           # 主背景 (白)
+secondaryBackgroundColor = "#F5F6F7"  # 次级背景 (飞书浅灰)
+textColor = "#1F2329"                 # 主文 (飞书深色)
 font = "sans serif"
 
 [client]

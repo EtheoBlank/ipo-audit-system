@@ -217,15 +217,17 @@ class MeetingQualityAssessor:
         )
 
     def _build_prompt(self, ctx: MeetingQualityContext) -> str:
-        decisions = json.dumps(ctx.decisions, ensure_ascii=False, indent=2)
-        actions = json.dumps(ctx.action_items, ensure_ascii=False, indent=2)
+        # P0 安全: 长度截断 + 防御注入
+        content = (ctx.content or "")[:5000]  # 防超大输入
+        decisions = json.dumps(ctx.decisions, ensure_ascii=False, indent=2)[:3000]
+        actions = json.dumps(ctx.action_items, ensure_ascii=False, indent=2)[:3000]
         attendees = ", ".join(ctx.attendees) or "(未提供)"
         return (
             f"### 会议基本信息\n"
             f"- 标题: {ctx.meeting_title}\n"
             f"- 类型: {ctx.meeting_type}\n"
             f"- 与会人: {attendees}\n\n"
-            f"### 纪要正文\n{ctx.content}\n\n"
+            f"### 纪要正文\n{content}\n\n"
             f"### 决策事项\n{decisions}\n\n"
             f"### 行动项\n{actions}\n\n"
             f"请按 system 中的要求评估并输出 JSON。"
