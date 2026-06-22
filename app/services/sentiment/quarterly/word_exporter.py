@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from pathlib import Path
 from typing import Optional
 
 from app.core.config import settings
-from app.services.sentiment.briefing.word_exporter import BriefingWordExporter
+from app.services.sentiment.briefing.word_exporter import (
+    BriefingWordExporter,
+    _stable_docx_sha256,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +53,9 @@ class QuarterlyReportWordExporter:
         fname = f"project_{project_id}_{period_type}_{fiscal_year}{suffix}.docx"
         path = self.output_dir / fname
         doc.save(str(path))
-        digest = self._sha256_file(path)
+        digest = _stable_docx_sha256(path)
         logger.info(
             "QuarterlyReportWordExporter: %s -> %s (sha256=%s)", company_name, path, digest[:12]
         )
         return path, digest
 
-    @staticmethod
-    def _sha256_file(path: Path) -> str:
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                h.update(chunk)
-        return h.hexdigest()
